@@ -16,5 +16,5 @@
 
 Установите скрипт на ваш сервер:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/index.sh
+curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/index.sh  | sudo bash
 ```
