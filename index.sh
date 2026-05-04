@@ -2,7 +2,6 @@
 # Автоматическая настройка VDS на Ubuntu 24.04 LTS
 
 # === БЛОК ЛОГИРОВАНИЯ ===
-# Записываем ВЕСЬ вывод скрипта (включая ошибки) в лог-файл
 exec > >(tee -i /root/vds_setup.log)
 exec 2>&1
 # ========================
@@ -13,8 +12,8 @@ echo "======================================================="
 echo "   🚀 Инициализация базовой настройки Ubuntu 24.04     "
 echo "======================================================="
 
-# Проверка запуска от имени root
-if[ "$EUID" -ne 0 ]; then
+# Проверка запуска от имени root (ИСПРАВЛЕН ПРОБЕЛ)
+if [ "$EUID" -ne 0 ]; then
   echo "❌ Ошибка: Запустите скрипт от имени root"
   exit 1
 fi
@@ -23,7 +22,7 @@ echo -e "\n[1/8] 📦 Обновление списка пакетов и сис
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get upgrade -y
-apt-get install -y git python3 python3-pip python3-venv nginx curl wget ca-certificates build-essential
+apt-get install -y git python3 python3-pip python3-venv nginx curl wget ca-certificates build-essential qrencode
 
 echo -e "\n[2/8] 🔐 Отключение входа по паролю (только SSH-ключи)..."
 mkdir -p /etc/ssh/sshd_config.d
@@ -63,7 +62,6 @@ if ! command -v node &> /dev/null; then
 fi
 
 echo -e "\n[7/8] 🤖 Установка AI CLI утилит (открыто для дебага)..."
-# Убрал скрытие логов, чтобы в случае ошибки мы видели, какой пакет "упал"
 npm install -g @google/gemini-cli opencode-ai @kilocode/cli cline
 
 echo -e "\n[8/8] 🌐 Установка WireGuard (через скрипт Angristan)..."
@@ -87,7 +85,5 @@ echo "✔️  Ваш конфиг клиента WireGuard сохранен в: 
 echo "======================================================="
 echo "📱 ОТСКАНУЙТЕ QR-КОД ДЛЯ ПОДКЛЮЧЕНИЯ VPN:"
 echo "======================================================="
-# Скрипт Angristan требует qrencode для вывода QR в терминал
-apt-get install -y qrencode >/dev/null 2>&1
 qrencode -t ansiutf8 < /root/wg-mobile.conf
 echo ""
