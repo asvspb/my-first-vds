@@ -8,6 +8,12 @@
 # ── Строгий режим ─────────────────────────────────────────────────────────────
 set -euo pipefail
 
+# ── Режим запуска: pipe (curl|bash) или файл ──────────────────────────────────
+# При curl|bash stdin занят трубой — перенаправляем интерактивный ввод на /dev/tty
+if [[ ! -t 0 ]]; then
+    exec < /dev/tty
+fi
+
 # ── Цвета и лог-файл ──────────────────────────────────────────────────────────
 LOG_FILE="/var/log/wireguard-install-debug.log"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -137,20 +143,28 @@ fi
 # ── Выбор IP адреса ────────────────────────────────────────────────────────────
 section "Выбор IP-адреса сервера"
 
-if [[ $(ip -4 addr | grep inet | grep -vEc '127(\.[0-9]{1,3}){3}') -eq 1 ]]; then
-    ip=$(ip -4 addr | grep inet | grep -vE '127(\.[0-9]{1,3}){3}' | cut -d '/' -f 1 | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}')
-    ok "Единственный IPv4: $ip — выбран автоматически"
+# Сначала пробуем найти публичный IP (не loopback, не приватный)
+public_candidate=$(ip -4 addr | grep inet | grep -vE '127(\.[0-9]{1,3}){3}' |     cut -d '/' -f 1 | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' |     grep -vE '^(10\.|172\.1[6789]\.|172\.2[0-9]\.|172\.3[01]\.|192\.168)' | head -1 || true)
+
+all_ips=$(ip -4 addr | grep inet | grep -vE '127(\.[0-9]{1,3}){3}' |     cut -d '/' -f 1 | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}')
+ip_count=$(echo "$all_ips" | wc -l)
+
+if [[ -n "$public_candidate" ]]; then
+    ip="$public_candidate"
+    ok "Автовыбран публичный IPv4: $ip"
+elif [[ "$ip_count" -eq 1 ]]; then
+    ip="$all_ips"
+    ok "Единственный IPv4: $ip"
 else
-    number_of_ip=$(ip -4 addr | grep inet | grep -vEc '127(\.[0-9]{1,3}){3}')
-    log "Найдено $number_of_ip IPv4-адресов:"
-    ip -4 addr | grep inet | grep -vE '127(\.[0-9]{1,3}){3}' | cut -d '/' -f 1 | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' | nl -s ') '
-    read -p "IPv4 адрес [1]: " ip_number
-    until [[ -z "$ip_number" || "$ip_number" =~ ^[0-9]+$ && "$ip_number" -le "$number_of_ip" ]]; do
+    log "Найдено $ip_count IPv4-адресов:"
+    echo "$all_ips" | nl -s ') '
+    read -p "IPv4 адрес [1]: " ip_number < /dev/tty
+    until [[ -z "$ip_number" || "$ip_number" =~ ^[0-9]+$ && "$ip_number" -le "$ip_count" ]]; do
         echo "$ip_number: неверный выбор."
-        read -p "IPv4 адрес [1]: " ip_number
+        read -p "IPv4 адрес [1]: " ip_number < /dev/tty
     done
     [[ -z "$ip_number" ]] && ip_number="1"
-    ip=$(ip -4 addr | grep inet | grep -vE '127(\.[0-9]{1,3}){3}' | cut -d '/' -f 1 | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' | sed -n "${ip_number}p")
+    ip=$(echo "$all_ips" | sed -n "${ip_number}p")
     ok "Выбран IPv4: $ip"
 fi
 
@@ -166,10 +180,10 @@ if echo "$ip" | grep -qE '^(10\.|172\.1[6789]\.|172\.2[0-9]\.|172\.3[01]\.|192\.
     else
         warn "Не удалось определить публичный IP автоматически"
     fi
-    read -p "Публичный IPv4 / hostname [$get_public_ip]: " public_ip
+    read -p "Публичный IPv4 / hostname [$get_public_ip]: " public_ip < /dev/tty
     until [[ -n "$get_public_ip" || -n "$public_ip" ]]; do
         echo "Обязательное поле."
-        read -p "Публичный IPv4 / hostname: " public_ip
+        read -p "Публичный IPv4 / hostname: " public_ip < /dev/tty
     done
     [[ -z "$public_ip" ]] && public_ip="$get_public_ip"
     ok "Публичный endpoint: $public_ip"
@@ -182,10 +196,10 @@ if [[ $(ip -6 addr | grep -c 'inet6 [23]') -eq 1 ]]; then
 elif [[ $(ip -6 addr | grep -c 'inet6 [23]') -gt 1 ]]; then
     number_of_ip6=$(ip -6 addr | grep -c 'inet6 [23]')
     ip -6 addr | grep 'inet6 [23]' | cut -d '/' -f 1 | grep -oE '([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}' | nl -s ') '
-    read -p "IPv6 адрес [1]: " ip6_number
+    read -p "IPv6 адрес [1]: " ip6_number < /dev/tty
     until [[ -z "$ip6_number" || "$ip6_number" =~ ^[0-9]+$ && "$ip6_number" -le "$number_of_ip6" ]]; do
         echo "$ip6_number: неверный выбор."
-        read -p "IPv6 адрес [1]: " ip6_number
+        read -p "IPv6 адрес [1]: " ip6_number < /dev/tty
     done
     [[ -z "$ip6_number" ]] && ip6_number="1"
     ip6=$(ip -6 addr | grep 'inet6 [23]' | cut -d '/' -f 1 | grep -oE '([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}' | sed -n "${ip6_number}p")
@@ -197,10 +211,10 @@ fi
 # ── Параметры WireGuard ────────────────────────────────────────────────────────
 section "Параметры WireGuard"
 
-read -p "Порт WireGuard [51820]: " port
+read -p "Порт WireGuard [51820]: " port < /dev/tty
 until [[ -z "$port" || "$port" =~ ^[0-9]+$ && "$port" -le 65535 ]]; do
     echo "$port: неверный порт."
-    read -p "Порт [51820]: " port
+    read -p "Порт [51820]: " port < /dev/tty
 done
 [[ -z "$port" ]] && port="51820"
 ok "Порт: $port"
@@ -211,7 +225,7 @@ if ss -ulnp | grep -q ":${port} "; then
     ss -ulnp | grep ":${port} " | while IFS= read -r line; do warn "  $line"; done
 fi
 
-read -p "Имя первого клиента [client]: " unsanitized_client
+read -p "Имя первого клиента [client]: " unsanitized_client < /dev/tty
 client=$(sed 's/[^0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-]/_/g' \
     <<< "$unsanitized_client" | cut -c-15)
 [[ -z "$client" ]] && client="client"
@@ -226,7 +240,7 @@ echo "  3) Cloudflare (1.1.1.1)"
 echo "  4) OpenDNS"
 echo "  5) Quad9"
 echo "  6) AdGuard"
-read -p "DNS [2]: " dns_choice
+read -p "DNS [2]: " dns_choice < /dev/tty
 case "$dns_choice" in
     1)
         if grep '^nameserver' /etc/resolv.conf | grep -qv '127.0.0.53'; then
