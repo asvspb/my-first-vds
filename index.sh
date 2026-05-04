@@ -52,7 +52,8 @@ fi
 echo -e "\n[6/8] 🟢 Установка Node.js (LTS)..."
 if ! command -v node &> /dev/null; then
     curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
-    apt-get install -y nodejs npm
+    # ИСПРАВЛЕНИЕ: Убрали npm, так как он уже встроен в nodejs
+    apt-get install -y nodejs
 fi
 
 echo -e "\n[7/8] 🤖 Установка AI CLI утилит..."
