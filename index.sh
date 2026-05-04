@@ -184,7 +184,7 @@ if [ -n "$WG_CLIENT_CONF" ]; then
     echo "======================================================="
     echo "📱 ОТСКАНИРУЙТЕ QR-КОД ДЛЯ ПОДКЛЮЧЕНИЯ VPN:"
     echo "======================================================="
-    qrencode -t ansiutf8 --size=1 < "$WG_CLIENT_CONF"
+    qrencode -t ansiutf8small < "$WG_CLIENT_CONF"
     echo ""
 else
     echo "✅ Все сервисы работают в штатном режиме."
