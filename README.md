@@ -14,7 +14,22 @@
 
 ## Использование
 
-Установите скрипт на ваш сервер:
+Установите скрипт настроек на ваш сервер:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/index.sh  | sudo bash
 ```
+
+Установите wireguard на ваш сервер:
+```bash
+curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/wg-install.sh  | sudo bash
+```
+
+## Требования
+
+- Ubuntu 24.04
+- Доступ к интернету
+- Права суперпользователя (sudo)
+
+## Лицензия
+
+Этот проект лицензирован под MIT License - см. файл LICENSE для подробностей.
