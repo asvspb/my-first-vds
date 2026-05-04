@@ -144,13 +144,26 @@ else
         -o /tmp/wireguard-install.sh
     chmod +x /tmp/wireguard-install.sh
 
-    export AUTO_INSTALL=y
-    export CLIENT_NAME="wg-mobile"
-    export WG_PORT=51820
-    export DNS_1=8.8.8.8
-    export DNS_2=77.88.8.8
+    # Скрипт Angristan НЕ читает переменные окружения — он всегда вызывает
+    # интерактивный read. Передаём ответы через stdin в нужном порядке:
+    #   1. IPv4 адрес сервера       → авто-определяется, просто Enter
+    #   2. Публичный интерфейс      → авто-определяется, просто Enter
+    #   3. Имя WG-интерфейса        → wg0
+    #   4. IPv4 подсеть WG          → 10.66.66.1
+    #   5. IPv6 подсеть WG          → fd42:42:42::1
+    #   6. Порт                     → 51820
+    #   7. DNS 1                    → 8.8.8.8
+    #   8. DNS 2                    → 8.8.4.4
+    #   9. AllowedIPs               → 0.0.0.0/0,::/0
+    #  10. "Press any key..."       → Enter
+    #  11. Имя первого клиента      → wg-mobile
+    SERVER_PUB_IP=$(ip -4 addr | sed -ne 's|^.* inet \([^/]*\)/.* scope global.*$|\1|p' | head -1)
+    SERVER_NIC=$(ip -4 route ls | grep default | awk '/dev/ {for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)
 
-    /tmp/wireguard-install.sh
+    printf '%s\n%s\nwg0\n10.66.66.1\nfd42:42:42::1\n51820\n8.8.8.8\n8.8.4.4\n0.0.0.0/0,::/0\n\nwg-mobile\n' \
+        "${SERVER_PUB_IP}" "${SERVER_NIC}" \
+        | /tmp/wireguard-install.sh
+
     rm -f /tmp/wireguard-install.sh
     ok "WireGuard установлен"
 fi
