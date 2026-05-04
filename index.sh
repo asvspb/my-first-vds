@@ -184,7 +184,17 @@ if [ -n "$WG_CLIENT_CONF" ]; then
     echo "======================================================="
     echo "📱 ОТСКАНИРУЙТЕ QR-КОД ДЛЯ ПОДКЛЮЧЕНИЯ VPN:"
     echo "======================================================="
-    qrencode -t ansiutf8small < "$WG_CLIENT_CONF"
+    # Подгоняем QR под высоту терминала
+    QR_RAW=$(qrencode -t ansiutf8 -m 1 < "$WG_CLIENT_CONF")
+    QR_LINES=$(echo "$QR_RAW" | wc -l)
+    TERM_LINES=$(tput lines 2>/dev/null || echo 40)
+    AVAIL=$((TERM_LINES - 10))
+    if [ "$QR_LINES" -gt "$AVAIL" ] && [ "$AVAIL" -gt 0 ]; then
+        STEP=$(( (QR_LINES + AVAIL - 1) / AVAIL ))
+        echo "$QR_RAW" | awk -v step="$STEP" 'NR % step == 1'
+    else
+        echo "$QR_RAW"
+    fi
     echo ""
 else
     echo "✅ Все сервисы работают в штатном режиме."
