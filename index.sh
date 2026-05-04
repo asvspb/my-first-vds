@@ -133,40 +133,6 @@ for pkg in "${NPM_PKGS[@]}"; do
     fi
 done
 
-# =======================================================================
-# [9] WIREGUARD
-# =======================================================================
-step "9" "🌐 Установка WireGuard..."
-if [ -f "/etc/wireguard/wg0.conf" ]; then
-    warn "WireGuard уже настроен — пропускаем базовую установку"
-else
-    curl -fsSL https://raw.githubusercontent.com/angristan/wireguard-install/master/wireguard-install.sh \
-        -o /tmp/wireguard-install.sh
-    chmod +x /tmp/wireguard-install.sh
-
-    # Скрипт Angristan НЕ читает переменные окружения — он всегда вызывает
-    # интерактивный read. Передаём ответы через stdin в нужном порядке:
-    #   1. IPv4 адрес сервера       → авто-определяется, просто Enter
-    #   2. Публичный интерфейс      → авто-определяется, просто Enter
-    #   3. Имя WG-интерфейса        → wg0
-    #   4. IPv4 подсеть WG          → 10.66.66.1
-    #   5. IPv6 подсеть WG          → fd42:42:42::1
-    #   6. Порт                     → 51820
-    #   7. DNS 1                    → 8.8.8.8
-    #   8. DNS 2                    → 8.8.4.4
-    #   9. AllowedIPs               → 0.0.0.0/0,::/0
-    #  10. "Press any key..."       → Enter
-    #  11. Имя первого клиента      → wg-mobile
-    SERVER_PUB_IP=$(ip -4 addr | sed -ne 's|^.* inet \([^/]*\)/.* scope global.*$|\1|p' | head -1)
-    SERVER_NIC=$(ip -4 route ls | grep default | awk '/dev/ {for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)
-
-    printf '%s\n%s\nwg0\n10.66.66.1\nfd42:42:42::1\n51820\n8.8.8.8\n8.8.4.4\n0.0.0.0/0,::/0\n\nwg-mobile\n' \
-        "${SERVER_PUB_IP}" "${SERVER_NIC}" \
-        | /tmp/wireguard-install.sh
-
-    rm -f /tmp/wireguard-install.sh
-    ok "WireGuard установлен"
-fi
 
 # =======================================================================
 # ФИНАЛЬНЫЙ ВЫВОД
@@ -175,28 +141,3 @@ echo ""
 echo "======================================================="
 echo " 🎉 Настройка VDS успешно завершена!                  "
 echo "======================================================="
-
-# Ищем конфиг клиента (имя файла может отличаться)
-WG_CLIENT_CONF=$(find /root -maxdepth 1 -name "*.conf" -not -name "wg0.conf" 2>/dev/null | head -n1)
-
-if [ -n "$WG_CLIENT_CONF" ]; then
-    ok "Конфиг клиента WireGuard: $WG_CLIENT_CONF"
-    echo "======================================================="
-    echo "📱 ОТСКАНИРУЙТЕ QR-КОД ДЛЯ ПОДКЛЮЧЕНИЯ VPN:"
-    echo "======================================================="
-    # Подгоняем QR под высоту терминала
-    QR_RAW=$(qrencode -t ansiutf8 -m 1 < "$WG_CLIENT_CONF")
-    QR_LINES=$(echo "$QR_RAW" | wc -l)
-    TERM_LINES=$(tput lines 2>/dev/null || echo 40)
-    AVAIL=$((TERM_LINES - 10))
-    if [ "$QR_LINES" -gt "$AVAIL" ] && [ "$AVAIL" -gt 0 ]; then
-        STEP=$(( (QR_LINES + AVAIL - 1) / AVAIL ))
-        echo "$QR_RAW" | awk -v step="$STEP" 'NR % step == 1'
-    else
-        echo "$QR_RAW"
-    fi
-    echo ""
-else
-    echo "✅ Все сервисы работают в штатном режиме."
-    warn "Конфиг клиента WireGuard не найден в /root — проверьте вручную."
-fi
