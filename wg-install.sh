@@ -348,6 +348,13 @@ EOF
     sysctl -p /etc/sysctl.d/99-wireguard-forward.conf >/dev/null 2>&1 || true
     ok "IP Forwarding включен"
 
+    if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
+        log "Обнаружен активный UFW — добавляем правило для порта $port/udp"
+        ufw allow "${port}/udp" >/dev/null 2>&1
+        ufw route allow in on wg0 out on "${PUB_NIC:-eth0}" >/dev/null 2>&1
+        ok "UFW: правила для WireGuard добавлены"
+    fi
+
     # Если мы нашли интерфейс — привязываем NAT жестко к нему для безопасности
     NIC_OPT=""
     [[ -n "$PUB_NIC" ]] && NIC_OPT="-o $PUB_NIC"
