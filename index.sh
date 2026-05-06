@@ -8,7 +8,7 @@ ok()   { echo -e "${GREEN}✔${NC}  $*"; }
 warn() { echo -e "${YELLOW}⚠${NC}  $*"; }
 die()  { echo -e "${RED}✘  Ошибка: $*${NC}" >&2; exit 1; }
 
-TOTAL=11
+TOTAL=12
 step() { echo -e "\n${CYAN}[$1/$TOTAL]${NC} $2"; }
 
 echo "======================================================="
@@ -196,33 +196,36 @@ for pkg in "${NPM_PKGS[@]}"; do
 done
 
 # =======================================================================
+# [11] СИСТЕМНЫЙ МОНИТОРИНГ (sysinfo.sh)
+# =======================================================================
+step "11" "📊 Установка системного монитора sysinfo..."
+
+SYSINFO_SRC="$(dirname "$(readlink -f "$0")")/sysinfo.sh"
+
+if [[ -f "$SYSINFO_SRC" ]]; then
+    cp "$SYSINFO_SRC" /etc/profile.d/sysinfo.sh
+    chmod +x /etc/profile.d/sysinfo.sh
+    ok "sysinfo.sh установлен в /etc/profile.d/ (вывод при каждом SSH-подключении)"
+else
+    warn "sysinfo.sh не найден рядом с index.sh — устанавливаем через curl..."
+    curl -fsSL --connect-timeout 5 \
+        "https://raw.githubusercontent.com/$(git -C "$(dirname "$(readlink -f "$0")")" remote get-url origin 2>/dev/null | sed 's/\.git$//' | sed 's|git@github.com:|https://github.com/|')/main/sysinfo.sh" \
+        -o /etc/profile.d/sysinfo.sh 2>/dev/null
+
+    if [[ -s /etc/profile.d/sysinfo.sh ]]; then
+        chmod +x /etc/profile.d/sysinfo.sh
+        ok "sysinfo.sh скачан и установлен в /etc/profile.d/"
+    else
+        warn "Не удалось скачать sysinfo.sh — пропускаем. Установите вручную:"
+        warn "  scp sysinfo.sh root@<server>:/etc/profile.d/sysinfo.sh"
+    fi
+fi
+
+# =======================================================================
 # ФИНАЛЬНЫЙ ВЫВОД
 # =======================================================================
 echo ""
 echo "======================================================="
 echo " 🎉 Настройка VDS успешно завершена!                  "
 echo "======================================================="
-echo ""
-echo "🔹 Установленные пакеты:"
-echo "  - Docker"
-echo "  - Node.js LTS"
-echo "  - AI CLI утилиты: @google/gemini-cli, opencode-ai, @kilocode/cli, cline"
-echo ""
-echo "🔹 Настроенные сервисы:"
-echo "  - Файрвол (UFW)"
-echo "  - WireGuard (порт 51820/udp)"
-echo ""
-echo "🔹 Пользователь:"
-echo "  - Обычный пользователь добавлен в группы sudo, docker"
-echo "  - SSH-ключи скопированы от root"
-echo ""
-echo "🔹 Рекомендуемые действия:"
-echo "  - Настройте WireGuard для доступа к VDS"
-echo "  - Установите необходимые приложения для работы"
-echo ""
-echo "🔹 Для проверки работы AI CLI утилит попробуйте:"
-echo "  gemini-cli --help"
-echo "  opencode-ai --help"
-echo "  kilo --help"
-echo "  cline --help"
 echo ""
