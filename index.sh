@@ -89,19 +89,8 @@ else
     echo ""
     if [[ -t 0 ]]; then
         read -rp "   Нажмите Enter когда ключ скопирован (или введите 's' чтобы пропустить): " WAIT_KEY
-        if [[ ! "$WAIT_KEY" =~ ^[SsСс]$ ]]; then
-            # Код для копирования ключей
-            true
-        fi
     else
         warn "Неинтерактивный режим — пропускаем ожидание копирования SSH-ключей"
-    fi
-    # Всегда выполняем chown и chmod
-        chown -R "$NEW_USER:$NEW_USER" /home/"$NEW_USER"/.ssh
-        chmod 700 /home/"$NEW_USER"/.ssh
-        chmod 600 /home/"$NEW_USER"/.ssh/authorized_keys
-        KEY_COUNT=$(wc -l < /home/"$NEW_USER"/.ssh/authorized_keys)
-        ok "Ключей в authorized_keys: $KEY_COUNT"
     fi
     chown -R "$NEW_USER:$NEW_USER" /home/"$NEW_USER"/.ssh
     chmod 700 /home/"$NEW_USER"/.ssh
