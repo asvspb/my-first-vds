@@ -1,30 +1,62 @@
 # Настройка Ubuntu 24.04 для разработки
 
-Этот скрипт автоматизирует настройку Ubuntu 24.04 для разработки, включая установку необходимых пакетов, настройку SSH, создание файла подкачки, установку Docker, Node.js и AI CLI утилит.
+Набор скриптов для быстрой инициализации и управления VDS на Ubuntu 24.04.
 
-## Особенности
+## Скрипты
 
-- Обновление системы
-- Настройка SSH (отключение входа по паролю)
-- Создание файла подкачки (Swap) на 2GB
-- Установка Nginx, Git, Python3, Docker
-- Установка Node.js (LTS)
-- Установка AI CLI утилит (Gemini, OpenCode, KiloCode, Cline)
-- Очистка системы
+### `index.sh` — Основная настройка сервера
 
-## Использование
+Полная автоматизация начальной настройки VDS (12 шагов):
 
-Установите общий скрипт настроек на ваш сервер:
+1. Очистка зависших пакетов
+2. Исправление tzdata
+3. Обновление системы
+4. Создание пользователя с SSH-ключами
+5. SSH — только ключи (пароли отключены)
+6. Swap 2GB
+7. Автообновления безопасности
+8. Файрвол (UFW)
+9. Docker
+10. Node.js LTS
+11. AI CLI утилиты (Gemini, OpenCode, KiloCode, Cline)
+12. Системный монитор sysinfo (вывод при SSH-подключении)
+
+### `sysinfo.sh` — Системный монитор
+
+Выводит сводку о состоянии сервера при каждом SSH-подключении:
+
+- OS, ядро, аптайм, модель CPU, load average
+- Публичный и локальный IP
+- CPU / RAM / Swap с цветовыми прогресс-барами
+- Использование дисков
+- Статус Docker-контейнеров
+- IP источника SSH, активные соединения
+- Неудачные попытки входа за 24ч
+- Топ процессов по памяти
+- Последние логины
+
+### `wg-install.sh` — WireGuard VPN
+
+### `zt-install.sh` — ZeroTier VPN
+
+## Установка
+
+Основная настройка сервера:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/index.sh  | sudo bash
+curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/index.sh | sudo bash
 ```
 
-Установите wireguard на ваш сервер:
+Только системный монитор (без полной настройки):
+```bash
+curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/sysinfo.sh | sudo tee /etc/profile.d/sysinfo.sh > /dev/null && sudo chmod +x /etc/profile.d/sysinfo.sh
+```
+
+WireGuard:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/wg-install.sh | sudo bash
 ```
 
-Установите zerotier на ваш сервер:
+ZeroTier:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/zt-install.sh | sudo bash
 ```
@@ -37,4 +69,4 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 
 ## Лицензия
 
-Этот проект лицензирован под MIT License - см. файл LICENSE для подробностей.
+MIT
