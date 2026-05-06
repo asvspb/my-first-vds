@@ -61,7 +61,15 @@ ok "Базовые пакеты установлены"
 # [3] СОЗДАНИЕ ОБЫЧНОГО ПОЛЬЗОВАТЕЛЯ
 # =======================================================================
 step "3" "👤 Создание обычного пользователя..."
-read -rp "Имя нового пользователя (без пробелов, латиница): " NEW_USER
+
+# Проверяем интерактивность и читаем имя пользователя
+if [[ -t 0 ]]; then
+    read -rp "Имя нового пользователя (без пробелов, латиница): " NEW_USER
+else
+    NEW_USER="${NEW_USER:-developer}"
+    warn "Неинтерактивный режим — используем имя пользователя: $NEW_USER"
+fi
+
 if id "$NEW_USER" &>/dev/null; then
     warn "Пользователь $NEW_USER уже существует — пропускаем"
 else
@@ -79,8 +87,16 @@ else
     echo -e "${CYAN}   Для добавления SSH-ключа выполните на локальной машине:${NC}"
     echo -e "${YELLOW}   ssh-copy-id -i ~/.ssh/id_rsa.pub ${NEW_USER}@${SERVER_IP}${NC}"
     echo ""
-    read -rp "   Нажмите Enter когда ключ скопирован (или введите 's' чтобы пропустить): " WAIT_KEY
-    if [[ ! "$WAIT_KEY" =~ ^[SsСс]$ ]]; then
+    if [[ -t 0 ]]; then
+        read -rp "   Нажмите Enter когда ключ скопирован (или введите 's' чтобы пропустить): " WAIT_KEY
+        if [[ ! "$WAIT_KEY" =~ ^[SsСс]$ ]]; then
+            # Код для копирования ключей
+            true
+        fi
+    else
+        warn "Неинтерактивный режим — пропускаем ожидание копирования SSH-ключей"
+    fi
+    # Всегда выполняем chown и chmod
         chown -R "$NEW_USER:$NEW_USER" /home/"$NEW_USER"/.ssh
         chmod 700 /home/"$NEW_USER"/.ssh
         chmod 600 /home/"$NEW_USER"/.ssh/authorized_keys
