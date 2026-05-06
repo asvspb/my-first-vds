@@ -68,7 +68,7 @@ else
     chmod 600 /swapfile
     mkswap /swapfile
     swapon /swapfile
-    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
     ok "Swap создан и активирован"
 fi
 
