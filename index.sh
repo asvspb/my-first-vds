@@ -156,6 +156,8 @@ ufw --force reset >/dev/null
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow ssh
+ufw allow 80/tcp      # Nginx HTTP
+ufw allow 443/tcp     # Nginx HTTPS
 ufw allow 51820/udp   # WireGuard
 ufw allow 9993/udp    # ZeroTier
 ufw --force enable >/dev/null 2>&1 || warn "UFW запущен с предупреждениями (нормально для контейнера)"
