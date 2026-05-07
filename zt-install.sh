@@ -208,7 +208,24 @@ mkdir -p "${INSTALL_DIR}"
 DOCKER_BRIDGE_SUBNET="172.31.255.0/29"
 DOCKER_BRIDGE_GW="172.31.255.1"
 
-cat > "${INSTALL_DIR}/docker-compose.yml" <<EOF
+# Проверка: если compose уже существует и контейнеры запущены — пропускаем перезапись
+SKIP_COMPOSE=false
+if [[ -f "${INSTALL_DIR}/docker-compose.yml" ]]; then
+    ALL_RUNNING=true
+    for svc in postgres zerotier ztnet; do
+        if ! docker compose -f "${INSTALL_DIR}/docker-compose.yml" ps --services --filter "status=running" 2>/dev/null | grep -q "^${svc}$"; then
+            ALL_RUNNING=false
+            break
+        fi
+    done
+    if $ALL_RUNNING; then
+        warn "Контейнеры уже работают — docker-compose.yml не будет перезаписан"
+        SKIP_COMPOSE=true
+    fi
+fi
+
+if ! $SKIP_COMPOSE; then
+    log "Создаём docker-compose.yml..."
 services:
   postgres:
     image: postgres:15.2-alpine
@@ -331,7 +348,8 @@ networks:
         - subnet: ${DOCKER_BRIDGE_SUBNET}
 EOF
 
-log "docker-compose.yml создан в ${INSTALL_DIR}"
+    log "docker-compose.yml создан в ${INSTALL_DIR}"
+fi
 
 # ── Настройка UFW ────────────────────────────────────────────────────────────
 if command -v ufw &>/dev/null; then
@@ -434,34 +452,47 @@ log "Секреты сохранены в ${INSTALL_DIR}/.env.info"
 sep; info "Шаг 6/7 - Запуск ZTNET (docker compose pull + up)"
 
 cd "${INSTALL_DIR}"
-docker compose pull
 
-set +e
-docker compose up -d --wait 2>/dev/null
-COMPOSE_EXIT=$?
-set -e
+ALL_RUNNING=true
+for svc in postgres zerotier ztnet; do
+    if ! docker compose ps --services --filter "status=running" 2>/dev/null | grep -q "^${svc}$"; then
+        ALL_RUNNING=false
+        break
+    fi
+done
 
-if [ $COMPOSE_EXIT -ne 0 ]; then
-    warn "docker compose up --wait завершился с кодом $COMPOSE_EXIT, пробуем retry-цикл..."
-    FAILED=1
-    for i in $(seq 1 6); do
-        info "Ожидание запуска контейнеров (попытка $i/6)..."
-        sleep 10
-        ALL_UP=true
-        for svc in postgres zerotier ztnet; do
-            if ! docker compose ps --services --filter "status=running" 2>/dev/null | grep -q "^${svc}$"; then
-                ALL_UP=false
-                warn "  $svc - ещё не запущен"
+if $ALL_RUNNING; then
+    log "Контейнеры уже запущены — пропускаем docker compose up"
+else
+    docker compose pull
+
+    set +e
+    docker compose up -d --wait 2>/dev/null
+    COMPOSE_EXIT=$?
+    set -e
+
+    if [ $COMPOSE_EXIT -ne 0 ]; then
+        warn "docker compose up --wait завершился с кодом $COMPOSE_EXIT, пробуем retry-цикл..."
+        FAILED=1
+        for i in $(seq 1 6); do
+            info "Ожидание запуска контейнеров (попытка $i/6)..."
+            sleep 10
+            ALL_UP=true
+            for svc in postgres zerotier ztnet; do
+                if ! docker compose ps --services --filter "status=running" 2>/dev/null | grep -q "^${svc}$"; then
+                    ALL_UP=false
+                    warn "  $svc - ещё не запущен"
+                fi
+            done
+            if $ALL_UP; then
+                FAILED=0
+                break
             fi
         done
-        if $ALL_UP; then
-            FAILED=0
-            break
+        if [ $FAILED -ne 0 ]; then
+            docker compose ps
+            err "Не все контейнеры запустились. Логи: docker compose -f ${INSTALL_DIR}/docker-compose.yml logs"
         fi
-    done
-    if [ $FAILED -ne 0 ]; then
-        docker compose ps
-        err "Не все контейнеры запустились. Логи: docker compose -f ${INSTALL_DIR}/docker-compose.yml logs"
     fi
 fi
 
