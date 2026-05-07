@@ -639,37 +639,20 @@ echo ""
 echo -e "  1. Откройте в браузере: ${CYAN}${NEXTAUTH_URL}${NC}"
 echo -e "  2. Зарегистрируйтесь (первый пользователь = администратор)"
 echo -e "  3. Создайте сеть в ZTNET Panel"
-echo -e "  4. ${GREEN}Дождитесь появления ZT-IP сервера ниже${NC}"
 echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-NETWORK_TIMEOUT=120
-ELAPSED=0
-POLL_INTERVAL=10
-SERVER_ZT_IP=""
+SERVER_ZT_IP=$(docker exec ztnet_zerotier zerotier-cli listnetworks 2>/dev/null \
+    | grep -oP '\d+\.\d+\.\d+\.\d+/\d+$' | head -1 || true)
 
-while [[ ${ELAPSED} -lt ${NETWORK_TIMEOUT} ]]; do
-    SERVER_ZT_IP=$(docker exec ztnet_zerotier zerotier-cli listnetworks 2>/dev/null \
-        | grep -oP '\d+\.\d+\.\d+\.\d+/\d+$' | head -1 || true)
-
-    if [[ -n "${SERVER_ZT_IP}" ]]; then
-        printf "\r${GREEN}  [OK]${NC} ZT-IP сервера: ${CYAN}%s${NC}   \n" "${SERVER_ZT_IP}"
-        break
-    fi
-
-    printf "\r  Ожидание сети: %3dс / %3dс   " "${ELAPSED}" "${NETWORK_TIMEOUT}"
-    sleep "${POLL_INTERVAL}"
-    ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
-done
-
-if [[ -z "${SERVER_ZT_IP}" ]]; then
-    echo ""
-    warn "Таймаут ${NETWORK_TIMEOUT}с — сеть не создана"
-    warn "Создайте сеть в панели ${NEXTAUTH_URL} и выполните:"
+if [[ -n "${SERVER_ZT_IP}" ]]; then
+    log "ZT-IP сервера: ${SERVER_ZT_IP}"
+else
+    warn "ZT-IP сервера не определён"
+    warn "Создайте сеть в панели ${NEXTAUTH_URL} и проверьте:"
     warn "  docker exec ztnet_zerotier zerotier-cli listnetworks"
     SERVER_ZT_IP="<ZT-IP сервера>"
 fi
-echo ""
 
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║  ИТОГ
