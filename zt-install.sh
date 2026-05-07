@@ -9,6 +9,7 @@
 #    3. Настройка IP forwarding + NAT для раздачи интернета всем ZT-клиентам
 # =============================================================================
 
+export DEBIAN_FRONTEND=noninteractive
 set -euo pipefail
 
 exec > >(tee /var/log/zt-install.log) 2>&1
@@ -35,13 +36,14 @@ sep
 # ╚══════════════════════════════════════════════════════════════════════════════
 sep; info "Анализ сетевой архитектуры сервера..."
 
-MAIN_IFACE=$(ip -4 route show default | awk '{print $5}' | head -1)
+MAIN_IFACE=$(ip -4 route show default | grep -oP 'dev \K\S+' | head -1)
+[[ -z "${MAIN_IFACE}" ]] && MAIN_IFACE=$(ip -4 route show default | awk '{print $5}' | head -1)
 [[ -z "${MAIN_IFACE}" ]] && err "Не удалось определить основной сетевой интерфейс (нет default route)"
 
-MAIN_IP=$(ip -4 addr show "${MAIN_IFACE}" | grep -oP 'inet \K[\d.]+' | head -1)
-GATEWAY=$(ip -4 route show default | awk '{print $3}' | head -1)
+MAIN_IP=$(ip -4 addr show "${MAIN_IFACE}" | grep -oP 'inet \K[\d.]+' | head -1) || true
+GATEWAY=$(ip -4 route show default | grep -oP 'via \K\S+' | head -1) || true
 PUBLIC_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || echo "${MAIN_IP}")
-DNS_SERVERS=$(grep -oP 'nameserver \K[\d.]+' /etc/resolv.conf 2>/dev/null | sort -u | tr '\n' ' ')
+DNS_SERVERS=$(grep -oP 'nameserver \K[\d.]+' /etc/resolv.conf 2>/dev/null | sort -u | tr '\n' ' ') || true
 
 ALL_IFACES=$(ip -o link show | grep -oP '^\d+: \K[^:]+' | sort)
 
@@ -91,10 +93,15 @@ if [[ ! -c /dev/net/tun ]]; then
 fi
 log "/dev/net/tun доступен"
 
+# ── Pre-seed iptables-persistent to avoid interactive prompts ─────────
+echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
+echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
+
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║  ШАГ 1/7 — Обновление системы
 # ╚══════════════════════════════════════════════════════════════════════════════
 sep; info "Шаг 1/7 — Обновление системы"
+
 apt-get update -qq
 apt-get install -y -qq curl wget ca-certificates gnupg lsb-release openssl iptables-persistent
 log "Система обновлена, iptables-persistent установлен"
@@ -165,9 +172,9 @@ net.ipv6.conf.all.forwarding = 1
 net.ipv4.conf.all.send_redirects = 0
 EOF
 
-sysctl --system > /dev/null 2>&1
-sysctl -w net.ipv4.ip_forward=1 > /dev/null 2>&1
-sysctl -w net.ipv6.conf.all.forwarding=1 > /dev/null 2>&1
+sysctl --system > /dev/null 2>&1 || true
+sysctl -w net.ipv4.ip_forward=1 > /dev/null 2>&1 || true
+sysctl -w net.ipv6.conf.all.forwarding=1 > /dev/null 2>&1 || true
 
 CURRENT_FORWARD=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo 0)
 if [[ "${CURRENT_FORWARD}" == "1" ]]; then
