@@ -83,7 +83,7 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 - IP forwarding включён постоянно (переживает перезагрузку)
 - iptables правила сохраняются через `netfilter-persistent`
 - UFW: автоматически добавляются route rules + NAT
-- Скрипт `zt-nat-setup.sh` для восстановления NAT после перезапуска контейнера
+- Скрипт `zt-nat-setup.sh` для восстановления NAT после перезапуска контейнера. Этот скрипт генерируется установщиком zt-install.sh:452 и сохраняется внутри Docker-контейнера ZeroTier (/usr/local/bin/zt-nat-setup.sh по умолчанию)
 - Постановочные инструкции по настройке маршрута `0.0.0.0/0` в ZTNET Panel
 
 **Для раздачи интернета клиентам** — после установки:
