@@ -118,6 +118,7 @@ echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-
 # ╚══════════════════════════════════════════════════════════════════════════════
 sep; info "Шаг 1/7 - Обновление системы"
 
+rm -rf /var/lib/apt/lists/* || true
 apt-get update -qq
 apt-get install -y -qq curl wget ca-certificates gnupg lsb-release openssl iptables-persistent
 log "Система обновлена, iptables-persistent установлен"
