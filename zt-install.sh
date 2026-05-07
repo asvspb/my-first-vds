@@ -74,21 +74,26 @@ echo ""
 
 SERVER_IP="${PUBLIC_IP}"
 
-SERVER_IP="${PUBLIC_IP}"
-
 # ── Параметры ZTNET ───────────────────────────────────────────────────────────
 ZTNET_PORT="${ZTNET_PORT:-3000}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/ztnet}"
 
 # При повторном запуске сохраняем существующие пароли
 if [[ -f "${INSTALL_DIR}/.env.info" ]]; then
-    source "${INSTALL_DIR}/.env.info"
+    POSTGRES_PASSWORD=$(grep -oP '^POSTGRES_PASSWORD=\K.*' "${INSTALL_DIR}/.env.info" 2>/dev/null || echo "$POSTGRES_PASSWORD")
+    NEXTAUTH_SECRET=$(grep -oP '^NEXTAUTH_SECRET=\K.*' "${INSTALL_DIR}/.env.info" 2>/dev/null || echo "$NEXTAUTH_SECRET")
     warn "Обнаружен существующий .env.info — используем сохранённые пароли"
 fi
 
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(openssl rand -hex 16)}"
 NEXTAUTH_SECRET="${NEXTAUTH_SECRET:-$(openssl rand -hex 32)}"
-NEXTAUTH_URL="${NEXTAUTH_URL:-http://${SERVER_IP}:${ZTNET_PORT}}"
+
+if [[ "${SERVER_IP}" == *":"* ]]; then
+    SERVER_IP_URL="[${SERVER_IP}]"
+else
+    SERVER_IP_URL="${SERVER_IP}"
+fi
+NEXTAUTH_URL="http://${SERVER_IP_URL}:${ZTNET_PORT}"
 
 echo ""
 warn "Параметры установки:"
@@ -552,7 +557,7 @@ MAIN_IFACE="${MAIN_IFACE:-$(ip -4 route show default | grep -oP 'dev \K\S+' | he
 MAIN_IFACE="${MAIN_IFACE:-$(ip -4 route show default | awk '/dev/{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)}"
 [ -z "$MAIN_IFACE" ] && MAIN_IFACE="venet0"
 
-SERVER_IP="${PUBLIC_IP:-$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null)}"
+SERVER_IP="${PUBLIC_IP:-$(curl -s4 --max-time 5 https://ifconfig.me 2>/dev/null || curl -s --max-time 5 https://api.ipify.org 2>/dev/null)}"
 DOCKER_BRIDGE_SUBNET="${DOCKER_BRIDGE_SUBNET:-172.31.255.0/29}"
 ZT_SUBNET="${ZT_SUBNET:-10.121.15.0/24}"
 IS_OPENVZ="${IS_OPENVZ:-false}"
