@@ -61,13 +61,35 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 - Вывод QR-кода для подключения с мобильного устройства
 - Открытие порта 51820/udp в UFW
 
-### `zt-install.sh` — ZeroTier VPN
+### `zt-install.sh` — ZeroTier VPN + ZTNET Panel + Internet Gateway
 
-Установка ZeroTier — программно-определяемой сети (SDN) для объединения устройств:
+Полная установка ZeroTier с веб-панелью ZTNET и настройкой сервера как шлюза для раздачи интернета всем участникам ZT-сети (7 шагов):
 
-- Установка ZeroTier через официальный скрипт
-- Запуск и добавление в автозагрузку
-- Открытие порта 9993/udp в UFW
+| Шаг | Описание |
+|-----|----------|
+| — | 🌐 Анализ сетевой архитектуры: основной интерфейс, IP, шлюз, DNS, все интерфейсы |
+| 1 | 📦 Обновление системы, установка `iptables-persistent` |
+| 2 | 📡 Установка ZeroTier (официальный скрипт) |
+| 3 | 🐳 Установка Docker + Compose |
+| 4 | ⚡ IP Forwarding (`sysctl`, постоянный через `/etc/sysctl.d/99-zt-forward.conf`) |
+| 5 | 🐘 Docker Compose: PostgreSQL + ZeroTier (контейнер) + ZTNET Panel |
+| 5 | 🔥 NAT/iptables: хост (`MASQUERADE` Docker→интернет) + UFW правила |
+| 6 | 🚀 Запуск контейнеров, проверка DNS и API |
+| 7 | 🔀 NAT внутри контейнера zerotier (`zt+ → eth0 → MASQUERADE`) |
+
+**Ключевые возможности:**
+- Автоопределение сетевой архитектуры сервера (интерфейс, шлюз, публичный IP, DNS)
+- Двухуровневый NAT: хост + контейнер zerotier
+- IP forwarding включён постоянно (переживает перезагрузку)
+- iptables правила сохраняются через `netfilter-persistent`
+- UFW: автоматически добавляются route rules + NAT
+- Скрипт `zt-nat-setup.sh` для восстановления NAT после перезапуска контейнера
+- Постановочные инструкции по настройке маршрута `0.0.0.0/0` в ZTNET Panel
+
+**Для раздачи интернета клиентам** — после установки:
+1. Создайте сеть в ZTNET Panel
+2. Добавьте Managed Route: `0.0.0.0/0` → ZT-IP сервера
+3. На клиенте включите `Allow Default Route`
 
 ## Установка
 
