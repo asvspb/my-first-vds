@@ -199,40 +199,6 @@ mkdir -p "${INSTALL_DIR}"
 DOCKER_BRIDGE_SUBNET="172.31.255.0/29"
 DOCKER_BRIDGE_GW="172.31.255.1"
 
-if [[ "${IS_OPENVZ}" == "true" ]]; then
-    ZT_NET_MODE="host"
-    ZT_MANAGEMENT_FROM="127.0.0.1,${DOCKER_BRIDGE_SUBNET}"
-    ZT_EXTRA_ENV="ZTIER_ADDRESS: \"${DOCKER_BRIDGE_GW}\""
-    ZT_EXTRA_HOSTS='    extra_hosts:
-      - "zerotier:172.31.255.1"'
-    warn "OpenVZ: zerotier контейнер в network_mode=host"
-    warn "OpenVZ: ztnet подключается к zerotier через ${DOCKER_BRIDGE_GW}:9993"
-else
-    ZT_NET_MODE=""
-    ZT_MANAGEMENT_FROM="${DOCKER_BRIDGE_SUBNET}"
-    ZT_EXTRA_ENV=""
-    ZT_EXTRA_HOSTS=""
-    log "Стандартный VPS: zerotier в bridge-сети"
-fi
-
-ZT_SYSCTLS=""
-if [[ "${IS_OPENVZ}" != "true" ]]; then
-    ZT_SYSCTLS="    sysctls:
-      - net.ipv4.ip_forward=1
-      - net.ipv6.conf.all.forwarding=1
-      - net.ipv4.conf.all.send_redirects=0"
-fi
-
-ZT_PORTS='    ports:
-      - "9993:9993/udp"'
-ZT_NETWORKS='    networks:
-      - app-network'
-
-if [[ "${IS_OPENVZ}" == "true" ]]; then
-    ZT_PORTS=""
-    ZT_NETWORKS="    network_mode: host"
-fi
-
 cat > "${INSTALL_DIR}/docker-compose.yml" <<EOF
 services:
   postgres:
@@ -266,12 +232,34 @@ services:
       - NET_RAW
     devices:
       - /dev/net/tun:/dev/net/tun
-${ZT_NETWORKS}
-${ZT_PORTS}
-${ZT_SYSCTLS}
+EOF
+
+if [[ "${IS_OPENVZ}" == "true" ]]; then
+    warn "OpenVZ: zerotier в network_mode=host, SNAT для NAT"
+    cat >> "${INSTALL_DIR}/docker-compose.yml" <<EOF
+    network_mode: host
     environment:
       - ZT_OVERRIDE_LOCAL_CONF=true
-      - ZT_ALLOW_MANAGEMENT_FROM=${ZT_MANAGEMENT_FROM}
+      - ZT_ALLOW_MANAGEMENT_FROM=127.0.0.1,${DOCKER_BRIDGE_SUBNET}
+EOF
+else
+    log "Стандартный VPS: zerotier в bridge-сети, MASQUERADE для NAT"
+    cat >> "${INSTALL_DIR}/docker-compose.yml" <<EOF
+    networks:
+      - app-network
+    ports:
+      - "9993:9993/udp"
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+      - net.ipv4.conf.all.send_redirects=0
+    environment:
+      - ZT_OVERRIDE_LOCAL_CONF=true
+      - ZT_ALLOW_MANAGEMENT_FROM=${DOCKER_BRIDGE_SUBNET}
+EOF
+fi
+
+cat >> "${INSTALL_DIR}/docker-compose.yml" <<EOF
     healthcheck:
       test: ["CMD", "zerotier-cli", "info"]
       interval: 10s
@@ -296,8 +284,16 @@ ${ZT_SYSCTLS}
       NEXTAUTH_URL: "${NEXTAUTH_URL}"
       NEXTAUTH_SECRET: "${NEXTAUTH_SECRET}"
       NEXTAUTH_URL_INTERNAL: "http://ztnet:3000"
-      ${ZT_EXTRA_ENV}
-    ${ZT_EXTRA_HOSTS}
+EOF
+
+if [[ "${IS_OPENVZ}" == "true" ]]; then
+    cat >> "${INSTALL_DIR}/docker-compose.yml" <<EOF
+    extra_hosts:
+      - "zerotier:${DOCKER_BRIDGE_GW}"
+EOF
+fi
+
+cat >> "${INSTALL_DIR}/docker-compose.yml" <<EOF
     networks:
       - app-network
     links:
