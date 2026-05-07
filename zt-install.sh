@@ -354,6 +354,7 @@ EOF
 fi
 
 # ── Настройка UFW ────────────────────────────────────────────────────────────
+ZT_SUBNET="10.121.15.0/24"
 if command -v ufw &>/dev/null; then
     UFW_ACTIVE=$(ufw status 2>/dev/null | grep -c "active" || echo "0")
     if [[ "${UFW_ACTIVE}" -gt 0 ]]; then
@@ -396,8 +397,6 @@ fi
 
 # ── iptables: NAT для ZT-трафика ────────────────────────────────────────────
 info "Настройка iptables NAT..."
-
-ZT_SUBNET="10.121.15.0/24"
 
 if [[ "${IS_OPENVZ}" == "true" ]]; then
     warn "OpenVZ: используем SNAT вместо MASQUERADE (venet0 совместимость)"
