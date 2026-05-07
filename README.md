@@ -63,7 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 
 ### `zt-install.sh` — ZeroTier VPN + ZTNET Panel + Internet Gateway
 
-Полная установка ZeroTier с веб-панелью ZTNET и настройкой сервера как шлюза для раздачи интернета всем участникам ZT-сети (7 шагов):
+Полная установка ZeroTier с веб-панелью ZTNET и настройкой сервера как шлюза для раздачи интернета всем участникам ZT-сети (8 шагов):
 
 | Шаг | Описание |
 |-----|----------|
@@ -76,6 +76,15 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 | 5 | 🔥 NAT/iptables: хост (`MASQUERADE` Docker→интернет) + UFW правила |
 | 6 | 🚀 Запуск контейнеров, проверка DNS и API |
 | 7 | 🔀 NAT внутри контейнера zerotier (`zt+ → eth0 → MASQUERADE`) |
+| 8 | 🖧 Интерактивное подключение к ZT-сети: запрос Network ID → `zerotier-cli join` → ожидание авторизации → получение ZT-IP |
+
+**Интерактивный шаг 8:**
+1. Создайте сеть в браузере (`http://<IP>:3000`)
+2. Скрипт запросит **Network ID** — вставьте его
+3. Скрипт выполнит `zerotier-cli join <NETWORK_ID>`
+4. Скрипт попросит авторизовать ноду в панели (Members → Auth)
+5. Скрипт ждёт до 150 секунд (30 попыток по 5 сек), polling ZT-IP
+6. После авторизации ZT-IP выводится в итоговой сводке
 
 **Ключевые возможности:**
 - Автоопределение сетевой архитектуры сервера (интерфейс, шлюз, публичный IP, DNS)
@@ -83,13 +92,13 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 - IP forwarding включён постоянно (переживает перезагрузку)
 - iptables правила сохраняются через `netfilter-persistent`
 - UFW: автоматически добавляются route rules + NAT
-- Скрипт `zt-nat-setup.sh` для восстановления NAT после перезапуска контейнера. Этот скрипт генерируется установщиком zt-install.sh:452 и сохраняется внутри Docker-контейнера ZeroTier (/usr/local/bin/zt-nat-setup.sh по умолчанию)
+- Скрипт `zt-nat-setup.sh` для восстановления NAT после перезапуска контейнера
+- Интерактивное подключение к сети с ожиданием авторизации
 - Постановочные инструкции по настройке маршрута `0.0.0.0/0` в ZTNET Panel
 
 **Для раздачи интернета клиентам** — после установки:
-1. Создайте сеть в ZTNET Panel
-2. Добавьте Managed Route: `0.0.0.0/0` → ZT-IP сервера
-3. На клиенте включите `Allow Default Route`
+1. В ZTNET Panel добавьте Managed Route: `0.0.0.0/0` → ZT-IP сервера
+2. На клиенте включите `Allow Default Route`
 
 ## Установка
 
