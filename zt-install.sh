@@ -43,7 +43,7 @@ GATEWAY=$(ip -4 route show default | awk '{print $3}' | head -1)
 PUBLIC_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || echo "${MAIN_IP}")
 DNS_SERVERS=$(grep -oP 'nameserver \K[\d.]+' /etc/resolv.conf 2>/dev/null | sort -u | tr '\n' ' ')
 
-ALL_IFACES=$(ip -4 addr show | grep -oP '^\d+: \K[^:]+' | sort)
+ALL_IFACES=$(ip -o link show | grep -oP '^\d+: \K[^:]+' | sort)
 
 echo ""
 echo -e "${BOLD}  Сетевая архитектура:${NC}"
@@ -55,8 +55,9 @@ echo -e "  DNS                 : ${GREEN}${DNS_SERVERS}${NC}"
 echo ""
 echo -e "  Все интерфейсы:"
 for iface in ${ALL_IFACES}; do
-    iface_ip=$(ip -4 addr show "${iface}" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1 || echo "N/A")
-    iface_state=$(ip link show "${iface}" 2>/dev/null | grep -oP 'state \K\w+' || echo "UNKNOWN")
+    [[ -z "${iface}" ]] && continue
+    iface_ip=$(ip -4 addr show "${iface}" 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1 || echo "—")
+    iface_state=$(ip -o link show "${iface}" 2>/dev/null | grep -oP 'state \K\w+' || echo "UNKNOWN")
     printf "    %-20s %-18s %s\n" "${iface}" "${iface_ip:-—}" "${iface_state}"
 done
 echo ""
