@@ -643,7 +643,7 @@ echo -e "  4. ${GREEN}Дождитесь появления ZT-IP сервера
 echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-NETWORK_TIMEOUT=300
+NETWORK_TIMEOUT=120
 ELAPSED=0
 POLL_INTERVAL=10
 SERVER_ZT_IP=""
