@@ -74,12 +74,21 @@ echo ""
 
 SERVER_IP="${PUBLIC_IP}"
 
+SERVER_IP="${PUBLIC_IP}"
+
 # ── Параметры ZTNET ───────────────────────────────────────────────────────────
 ZTNET_PORT="${ZTNET_PORT:-3000}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/ztnet}"
+
+# При повторном запуске сохраняем существующие пароли
+if [[ -f "${INSTALL_DIR}/.env.info" ]]; then
+    source "${INSTALL_DIR}/.env.info"
+    warn "Обнаружен существующий .env.info — используем сохранённые пароли"
+fi
+
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(openssl rand -hex 16)}"
 NEXTAUTH_SECRET="${NEXTAUTH_SECRET:-$(openssl rand -hex 32)}"
 NEXTAUTH_URL="${NEXTAUTH_URL:-http://${SERVER_IP}:${ZTNET_PORT}}"
-INSTALL_DIR="${INSTALL_DIR:-/opt/ztnet}"
 
 echo ""
 warn "Параметры установки:"
