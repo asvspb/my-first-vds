@@ -49,7 +49,7 @@ MAIN_IFACE=$(ip -4 route show default | grep -oP 'dev \K\S+' | head -1)
 
 MAIN_IP=$(ip -4 addr show "${MAIN_IFACE}" | grep -oP 'inet \K[\d.]+' | head -1) || true
 GATEWAY=$(ip -4 route show default | grep -oP 'via \K\S+' | head -1) || true
-PUBLIC_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || echo "${MAIN_IP}")
+PUBLIC_IP=$(curl -s4 --max-time 5 https://ifconfig.me 2>/dev/null || curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "${MAIN_IP}")
 DNS_SERVERS=$(grep -oP 'nameserver \K[\d.]+' /etc/resolv.conf 2>/dev/null | sort -u | tr '\n' ' ') || true
 
 ALL_IFACES=$(ip -o link show | grep -oP '^\d+: \K[^:]+' | sort)
