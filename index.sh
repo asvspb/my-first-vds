@@ -8,7 +8,7 @@ ok()   { echo -e "${GREEN}✔${NC}  $*"; }
 warn() { echo -e "${YELLOW}⚠${NC}  $*"; }
 die()  { echo -e "${RED}✘  Ошибка: $*${NC}" >&2; exit 1; }
 
-TOTAL=12
+TOTAL=13
 step() { echo -e "\n${CYAN}[$1/$TOTAL]${NC} $2"; }
 
 echo "======================================================="
@@ -58,45 +58,170 @@ apt-get install -y \
 ok "Базовые пакеты установлены"
 
 # =======================================================================
-# [3] СОЗДАНИЕ ОБЫЧНОГО ПОЛЬЗОВАТЕЛЯ
+# [3] СОЗДАНИЕ ОБЫЧНОГО ПОЛЬЗОВАТЕЛЯ (интерактивный ввод данных)
 # =======================================================================
-step "3" "👤 Создание обычного пользователя..."
+step "3" "👤 Создание обычного пользователя (ввод данных)..."
 
-# Проверяем интерактивность и читаем имя пользователя
-if [[ -t 0 ]]; then
-    read -rp "Имя нового пользователя (без пробелов, латиница): " NEW_USER
-else
-    NEW_USER="${NEW_USER:-developer}"
-    warn "Неинтерактивный режим — используем имя пользователя: $NEW_USER"
+# ──────────────────────────────────────────────────────────────────────
+# Функция безопасного чтения пароля с подтверждением
+# ──────────────────────────────────────────────────────────────────────
+read_password() {
+    local prompt="$1" pass1 pass2
+    while true; do
+        read -rsp "$prompt: " pass1
+        echo >&2
+        read -rsp "Подтвердите пароль: " pass2
+        echo >&2
+        if [ "$pass1" != "$pass2" ]; then
+            warn "Пароли не совпадают. Повторите попытку."
+            continue
+        fi
+        if [ ${#pass1} -lt 6 ]; then
+            warn "Пароль слишком короткий (минимум 6 символов)."
+            continue
+        fi
+        break
+    done
+    echo "$pass1"
+}
+
+# ──────────────────────────────────────────────────────────────────────
+# 3a. Запрос имени пользователя
+# ──────────────────────────────────────────────────────────────────────
+while true; do
+    echo -e "${CYAN}   Введите имя нового пользователя (латиница, без пробелов):${NC}"
+    read -rp "   Имя пользователя: " NEW_USER
+    if [ -z "$NEW_USER" ]; then
+        warn "Имя не может быть пустым."
+        continue
+    fi
+    if ! echo "$NEW_USER" | grep -qE '^[a-z_][a-z0-9_-]*$'; then
+        warn "Имя должно начинаться с латинской буквы или '_', содержать только a-z, 0-9, -, _."
+        continue
+    fi
+    break
+done
+
+# ──────────────────────────────────────────────────────────────────────
+# 3b. Проверка существования пользователя
+# ──────────────────────────────────────────────────────────────────────
+if id "$NEW_USER" &>/dev/null; then
+    warn "Пользователь $NEW_USER уже существует — выбираем другое имя."
+    while true; do
+        read -rp "   Введите другое имя пользователя: " NEW_USER
+        if [ -z "$NEW_USER" ]; then
+            warn "Имя не может быть пустым."
+            continue
+        fi
+        if ! echo "$NEW_USER" | grep -qE '^[a-z_][a-z0-9_-]*$'; then
+            warn "Некорректное имя (только a-z, 0-9, -, _)."
+            continue
+        fi
+        if ! id "$NEW_USER" &>/dev/null; then
+            break
+        fi
+        warn "Пользователь $NEW_USER тоже существует. Попробуйте ещё раз."
+    done
 fi
 
-if id "$NEW_USER" &>/dev/null; then
-    warn "Пользователь $NEW_USER уже существует — пропускаем"
-else
-    useradd -m -s /bin/bash "$NEW_USER"
-    passwd "$NEW_USER"
-    usermod -aG sudo,docker "$NEW_USER"
-    mkdir -p /home/"$NEW_USER"/.ssh
-    touch /home/"$NEW_USER"/.ssh/authorized_keys
-    if [ -f /root/.ssh/authorized_keys ] && [ -s /root/.ssh/authorized_keys ]; then
-        cat /root/.ssh/authorized_keys >> /home/"$NEW_USER"/.ssh/authorized_keys
-        ok "SSH-ключи скопированы от root"
+# ──────────────────────────────────────────────────────────────────────
+# 3c. Запрос пароля (с подтверждением)
+# ──────────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${CYAN}   Задайте пароль для пользователя ${NEW_USER}:${NC}"
+PASSWORD=$(read_password "   Введите пароль")
+
+# ──────────────────────────────────────────────────────────────────────
+# 3d. Запрос групп (предложить sudo, docker по умолчанию)
+# ──────────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${CYAN}   Дополнительные группы (через запятую, без пробелов).${NC}"
+echo -e "${CYAN}   По умолчанию: sudo,docker${NC}"
+read -rp "   Группы: " USER_GROUPS
+USER_GROUPS="${USER_GROUPS:-sudo,docker}"
+
+# ──────────────────────────────────────────────────────────────────────
+# 3e. Запрос про SSH-ключи
+# ──────────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${CYAN}   Копировать SSH-ключи от root? (Y/n)${NC}"
+read -rp "   [Y/n]: " COPY_SSH
+COPY_SSH="${COPY_SSH:-y}"
+
+# ──────────────────────────────────────────────────────────────────────
+# 3f. Создание пользователя
+# ──────────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${YELLOW}   ⚙️  Создаю пользователя ${NEW_USER}...${NC}"
+
+useradd -m -s /bin/bash "$NEW_USER"
+
+# Устанавливаем пароль через chpasswd (безопаснее passwd в скриптах)
+echo "$NEW_USER:$PASSWORD" | chpasswd
+ok "Пароль установлен"
+
+# Добавляем в группы (перебираем по запятой)
+IFS=',' read -ra GROUP_ARRAY <<< "$USER_GROUPS"
+for grp in "${GROUP_ARRAY[@]}"; do
+    grp="$(echo "$grp" | xargs)"  # обрезаем лишние пробелы
+    if [ -n "$grp" ]; then
+        usermod -aG "$grp" "$NEW_USER" 2>/dev/null || warn "Группа '$grp' не найдена — пропускаем"
     fi
-    SERVER_IP=$(hostname -I | awk '{print $1}')
+done
+ok "Пользователь добавлен в группы: $USER_GROUPS"
+
+# Настройка SSH
+mkdir -p /home/"$NEW_USER"/.ssh
+touch /home/"$NEW_USER"/.ssh/authorized_keys
+
+if [[ "$COPY_SSH" =~ ^[YyДд]$ ]] && [ -f /root/.ssh/authorized_keys ] && [ -s /root/.ssh/authorized_keys ]; then
+    cat /root/.ssh/authorized_keys >> /home/"$NEW_USER"/.ssh/authorized_keys
+    ok "SSH-ключи скопированы от root"
+fi
+
+# ──────────────────────────────────────────────────────────────────────
+# 3g. Предложение скопировать ключ с локальной машины
+# ──────────────────────────────────────────────────────────────────────
+SERVER_IP=$(hostname -I | awk '{print $1}')
+KEY_COUNT=$(wc -l < /home/"$NEW_USER"/.ssh/authorized_keys)
+
+if [ "$KEY_COUNT" -eq 0 ]; then
     echo ""
-    echo -e "${CYAN}   Для добавления SSH-ключа выполните на локальной машине:${NC}"
-    echo -e "${YELLOW}   ssh-copy-id -i ~/.ssh/id_rsa.pub ${NEW_USER}@${SERVER_IP}${NC}"
+    echo -e "${YELLOW}   ⚠️  SSH-ключи не найдены. Подключитесь по паролю и добавьте ключ вручную.${NC}"
+    echo -e "${CYAN}   Выполните на своей локальной машине:${NC}"
+    echo -e "   ${YELLOW}ssh-copy-id -i ~/.ssh/id_rsa.pub ${NEW_USER}@${SERVER_IP}${NC}"
     echo ""
-    if [[ -t 0 ]]; then
-        read -rp "   Нажмите Enter когда ключ скопирован (или введите 's' чтобы пропустить): " WAIT_KEY
-    else
-        warn "Неинтерактивный режим — пропускаем ожидание копирования SSH-ключей"
+    echo -e "${CYAN}   После этого скрипт скопирует ключ.${NC}"
+    echo -e "${CYAN}   Готово? Нажмите Enter для продолжения (или введите 's' чтобы пропустить):${NC}"
+    read -rp "   [Enter/s]: " WAIT_KEY
+    if [ "$WAIT_KEY" != "s" ] && [ "$WAIT_KEY" != "S" ]; then
+        # Повторно проверяем authorized_keys — мог появиться через ssh-copy-id
+        if [ -f /home/"$NEW_USER"/.ssh/authorized_keys ]; then
+            cat /root/.ssh/authorized_keys 2>/dev/null >> /home/"$NEW_USER"/.ssh/authorized_keys
+        fi
+        KEY_COUNT=$(wc -l < /home/"$NEW_USER"/.ssh/authorized_keys)
     fi
-    chown -R "$NEW_USER:$NEW_USER" /home/"$NEW_USER"/.ssh
-    chmod 700 /home/"$NEW_USER"/.ssh
-    chmod 600 /home/"$NEW_USER"/.ssh/authorized_keys
-    KEY_COUNT=$(wc -l < /home/"$NEW_USER"/.ssh/authorized_keys)
-    ok "Пользователь $NEW_USER создан (группы: sudo, docker; ключей: $KEY_COUNT)"
+fi
+
+# Права
+chown -R "$NEW_USER:$NEW_USER" /home/"$NEW_USER"/.ssh
+chmod 700 /home/"$NEW_USER"/.ssh
+chmod 600 /home/"$NEW_USER"/.ssh/authorized_keys
+
+ok "Пользователь $NEW_USER создан (группы: $USER_GROUPS; ключей: $KEY_COUNT)"
+
+# ──────────────────────────────────────────────────────────────────────
+# 3h. Проверка — можно ли отключить пароль для sudo (если есть SSH-ключи)
+# ──────────────────────────────────────────────────────────────────────
+if [ "$KEY_COUNT" -gt 0 ]; then
+    echo ""
+    echo -e "${CYAN}   Отключить запрос пароля для sudo у ${NEW_USER}? (y/N)${NC}"
+    read -rp "   [y/N]: " NOPASSWD
+    if [[ "${NOPASSWD:-n}" =~ ^[YyДд]$ ]]; then
+        echo "$NEW_USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/"$NEW_USER"
+        chmod 440 /etc/sudoers.d/"$NEW_USER"
+        ok "sudo без пароля включён для $NEW_USER"
+    fi
 fi
 
 # =======================================================================
