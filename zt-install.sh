@@ -226,6 +226,7 @@ fi
 
 if ! $SKIP_COMPOSE; then
     log "Создаём docker-compose.yml..."
+    cat > "${INSTALL_DIR}/docker-compose.yml" <<COMPEOF
 services:
   postgres:
     image: postgres:15.2-alpine
@@ -258,7 +259,7 @@ services:
       - NET_RAW
     devices:
       - /dev/net/tun:/dev/net/tun
-EOF
+COMPEOF
 
 if [[ "${IS_OPENVZ}" == "true" ]]; then
     warn "OpenVZ: zerotier в network_mode=host, SNAT для NAT"
