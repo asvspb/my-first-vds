@@ -587,6 +587,50 @@ systemctl enable zt-nat-setup.service
 log "systemd сервис zt-nat-setup.service создан и включён"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
+# ║  ШАГ 8/8 — Ожидание создания сети в ZTNET
+# ╚══════════════════════════════════════════════════════════════════════════════
+sep; info "Шаг 8/8 - Ожидание создания сети в ZTNET"
+
+echo ""
+echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "  ${BOLD}ДЕЙСТВИЕ ТРЕБУЕТСЯ:${NC}"
+echo ""
+echo -e "  1. Откройте в браузере: ${CYAN}${NEXTAUTH_URL}${NC}"
+echo -e "  2. Зарегистрируйтесь (первый пользователь = администратор)"
+echo -e "  3. Создайте сеть в ZTNET Panel"
+echo -e "  4. ${GREEN}Дождитесь появления ZT-IP сервера ниже${NC}"
+echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+NETWORK_TIMEOUT=300
+ELAPSED=0
+POLL_INTERVAL=10
+SERVER_ZT_IP=""
+
+while [[ ${ELAPSED} -lt ${NETWORK_TIMEOUT} ]]; do
+    SERVER_ZT_IP=$(docker exec ztnet_zerotier zerotier-cli listnetworks 2>/dev/null \
+        | grep -oP '\d+\.\d+\.\d+\.\d+/\d+$' | head -1 || true)
+
+    if [[ -n "${SERVER_ZT_IP}" ]]; then
+        printf "\r${GREEN}  [OK]${NC} ZT-IP сервера: ${CYAN}%s${NC}   \n" "${SERVER_ZT_IP}"
+        break
+    fi
+
+    printf "\r  Ожидание сети: %3dс / %3dс   " "${ELAPSED}" "${NETWORK_TIMEOUT}"
+    sleep "${POLL_INTERVAL}"
+    ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
+done
+
+if [[ -z "${SERVER_ZT_IP}" ]]; then
+    echo ""
+    warn "Таймаут ${NETWORK_TIMEOUT}с — сеть не создана"
+    warn "Создайте сеть в панели ${NEXTAUTH_URL} и выполните:"
+    warn "  docker exec ztnet_zerotier zerotier-cli listnetworks"
+    SERVER_ZT_IP="<ZT-IP сервера>"
+fi
+echo ""
+
+# ╔══════════════════════════════════════════════════════════════════════════════
 # ║  ИТОГ
 # ╚══════════════════════════════════════════════════════════════════════════════
 sep
@@ -596,6 +640,7 @@ echo ""
 echo -e "  ${BOLD}Сеть:${NC}"
 echo -e "    Основной интерфейс  : ${CYAN}${MAIN_IFACE}${NC}"
 echo -e "    Публичный IP        : ${CYAN}${PUBLIC_IP}${NC}"
+echo -e "    ZT-IP сервера       : ${CYAN}${SERVER_ZT_IP}${NC}"
 echo -e "    Виртуализация       : ${CYAN}$(systemd-detect-virt 2>/dev/null || echo 'N/A')${NC}"
 echo ""
 echo -e "  ${BOLD}ZTNET:${NC}"
@@ -603,8 +648,7 @@ echo -e "    Веб-панель          : ${BOLD}${NEXTAUTH_URL}${NC}"
 echo -e "    Директория          : ${BOLD}${INSTALL_DIR}${NC}"
 echo -e "    Секреты             : ${BOLD}${INSTALL_DIR}/.env.info${NC}"
 echo ""
-echo -e "  ${YELLOW}Первый зарегистрированный пользователь -> администратор${NC}"
-echo ""
+
 echo -e "  ${BOLD}Для раздачи интернета через ZT:${NC}"
 echo ""
 echo -e "  1. Создайте сеть в ZTNET Panel"
