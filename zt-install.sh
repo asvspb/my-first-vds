@@ -491,13 +491,13 @@ ZT_PID=$(docker inspect ztnet_zerotier --format '{{.State.Pid}}')
 
 nsenter -t "${ZT_PID}" -n bash -c '
     echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
-    echo 1 > /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || true
-
+    echo 1 > /proc/sys/net/ipv6/conf/all.forwarding 2>/dev/null || true
     iptables -C FORWARD -i zt+ -o eth0 -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i zt+ -o eth0 -j ACCEPT
     iptables -C FORWARD -i eth0 -o zt+ -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i eth0 -o zt+ -m state --state RELATED,ESTABLISHED -j ACCEPT
-' 2>/dev/null && log "FORWARD внутри контейнера zerotier настроен (zt+ <-> eth0)" || \
+' 2>/dev/null
+log "FORWARD внутри контейнера zerotier настроен (zt+ <-> eth0)" 2>/dev/null || \
     warn "Не удалось настроить FORWARD внутри контейнера (network_mode=host использует хостовые правила)"
 
 # ── Скрипт авто-настройки NAT ────────────────────────────────────────────────
@@ -532,14 +532,14 @@ NET_MODE=$(docker inspect "${CONTAINER_NAME}" --format '{{.HostConfig.NetworkMod
 echo "  Network mode: $NET_MODE"
 
 if [[ "$NET_MODE" != "host" ]]; then
-    nsenter -t "$ZT_PID" -n bash -c "
+    nsenter -t "$ZT_PID" -n bash -c '
         echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
-        iptables -C FORWARD -i zt+ -o eth0 -j ACCEPT 2>/dev/null || \\
+        iptables -C FORWARD -i zt+ -o eth0 -j ACCEPT 2>/dev/null || \
             iptables -A FORWARD -i zt+ -o eth0 -j ACCEPT
-        iptables -C FORWARD -i eth0 -o zt+ -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \\
+        iptables -C FORWARD -i eth0 -o zt+ -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
             iptables -A FORWARD -i eth0 -o zt+ -m state --state RELATED,ESTABLISHED -j ACCEPT
-        echo '  Container FORWARD: zt+ <-> eth0'
-    " && echo "[zt-nat-setup] Container FORWARD настроен"
+        echo Container FORWARD: zt+ eth0
+    ' && echo "[zt-nat-setup] Container FORWARD настроен"
 fi
 
 iptables -C FORWARD -s "${ZT_SUBNET}" -j ACCEPT 2>/dev/null || \
@@ -610,13 +610,14 @@ echo ""
 echo -e "  1. Создайте сеть в ZTNET Panel"
 echo -e "  2. Добавьте Managed Routes:"
 echo -e "     ${CYAN}Destination: 0.0.0.0/0${NC}"
-echo -e "     ${CYAN}Via: ${SERVER_ZT_IP:-<ZT-IP сервера>${NC}"
+echo -e "     ${CYAN}Via: ${SERVER_ZT_IP:-<ZT-IP сервера>}${NC}"
 echo -e "  3. На КАЖДОМ клиенте (включая мобильные):"
 echo -e "     ${CYAN}zerotier-cli set <NETWORK_ID> allowDefault=1${NC}"
 echo -e "     ${CYAN}или в настройках ZeroTier включите Allow Default Route${NC}"
 echo ""
 echo -e "  ${YELLOW}Узнать ZT-IP сервера:${NC}"
-echo -e "    ${CYAN}docker exec ztnet_zerotier zerotier-cli listnetworks | grep -oP '\\d+\\.\\d+\\.\\d+\\.\\d+/\\d+\$'${NC}"
+ZT_IP_CMD="docker exec ztnet_zerotier zerotier-cli listnetworks | grep -oP '\\d+\\.\\d+\\.\\d+\\.\\d+/\\d+\$'"
+echo -e "    ${CYAN}${ZT_IP_CMD}${NC}"
 echo ""
 echo -e "  ${BOLD}Если NAT не работает после перезапуска:${NC}"
 echo -e "    ${CYAN}${INSTALL_DIR}/zt-nat-setup.sh${NC}"
@@ -628,3 +629,4 @@ echo -e "    ZT пиров     : ${CYAN}docker exec ztnet_zerotier zerotier-cli 
 echo -e "    NAT настройки: ${CYAN}${INSTALL_DIR}/zt-nat-setup.sh${NC}"
 echo ""
 sep
+
