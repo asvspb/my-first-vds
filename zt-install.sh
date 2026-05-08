@@ -808,21 +808,53 @@ NATEOF2
     chmod +x "${INSTALL_DIR}/zt-nat-setup.sh"
     log "zt-nat-setup.sh перегенерирован (ZT_SUBNET=${ZT_SUBNET})"
 
-    # ── Managed Route: инструкция для ZTNET Panel ─────────────────────────────
-    if [[ "${SERVER_ZT_IP}" != "<ZT-IP сервера>" ]]; then
+    # ── Managed Route: 0.0.0.0/0 via SERVER_ZT_IP ────────────────────────────
+    if [[ -n "${ZT_AUTHTOKEN}" && "${SERVER_ZT_IP}" != "<ZT-IP сервера>" ]]; then
         ZT_IP_ONLY=$(echo "${SERVER_ZT_IP}" | grep -oP '^\d+\.\d+\.\d+\.\d+' || true)
-        echo ""
-        echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "  ${BOLD}ДЕЙСТВИЕ ТРЕБУЕТСЯ (Managed Route):${NC}"
-        echo ""
-        echo -e "  ZTNET Panel перезаписывает маршруты Controller API."
-        echo -e "  Добавьте маршрут ${BOLD}вручную${NC} в ZTNET Panel:"
-        echo ""
-        echo -e "    ${CYAN}${NEXTAUTH_URL}${NC} → Сеть → Managed Routes → Add"
-        echo -e "    ${BOLD}Destination:${NC} 0.0.0.0/0"
-        echo -e "    ${BOLD}Via:${NC} ${ZT_IP_ONLY}"
-        echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo ""
+        if [[ -n "${ZT_IP_ONLY}" ]]; then
+            log "Добавляем Managed Route 0.0.0.0/0 via ${ZT_IP_ONLY}..."
+
+            CURRENT_ROUTES_RAW=$(curl -s -4 \
+                -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
+                "http://127.0.0.1:9993/controller/network/${NETWORK_ID}" 2>/dev/null || true)
+
+            if echo "${CURRENT_ROUTES_RAW}" | grep -q '"routes"'; then
+                if echo "${CURRENT_ROUTES_RAW}" | grep -oP '"target"\s*:\s*"[^"]*"' | grep -q '0\.0\.0\.0/0'; then
+                    log "Managed Route 0.0.0.0/0 уже существует"
+                else
+                    LAN_ROUTE=$(echo "${CURRENT_ROUTES_RAW}" | grep -oP '"routes"\s*:\s*\[\{[^}]+\}' | head -1 || true)
+                    LAN_ROUTE=$(echo "${CURRENT_ROUTES_RAW}" | sed -n 's/.*"routes":\s*\[/[/p' | sed 's/\].*$/]/' || true)
+                    if [[ -z "${LAN_ROUTE}" ]]; then
+                        NEW_ROUTES="[{\"target\":\"0.0.0.0/0\",\"via\":\"${ZT_IP_ONLY}\"}]"
+                    else
+                        NEW_ROUTES=$(echo "${LAN_ROUTE}" | sed "s/\]$/,{\"target\":\"0.0.0.0/0\",\"via\":\"${ZT_IP_ONLY}\"}\]/" || true)
+                    fi
+
+                    set +e
+                    ROUTE_RESPONSE=$(curl -s -4 -X POST \
+                        -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
+                        -H "Content-Type: application/json" \
+                        -d "{\"routes\": ${NEW_ROUTES}}" \
+                        "http://127.0.0.1:9993/controller/network/${NETWORK_ID}" 2>/dev/null || true)
+                    set -e
+
+                    if echo "${ROUTE_RESPONSE}" | grep -q '0\.0\.0\.0/0'; then
+                        log "Managed Route 0.0.0.0/0 via ${ZT_IP_ONLY} добавлен через Controller API"
+                    else
+                        warn "Не удалось добавить Managed Route через API"
+                    fi
+                fi
+            else
+                warn "Controller API недоступен для маршрутов"
+            fi
+
+            echo ""
+            echo -e "  ${YELLOW}Примечание:${NC} маршрут установлен через ZeroTier Controller API."
+            echo -e "  Он работает для клиентов, но может не отображаться в ZTNET Panel."
+            echo -e "  Если маршрут пропадёт после изменений в панели — добавьте вручную:"
+            echo -e "    ${CYAN}Destination:${NC} 0.0.0.0/0  ${CYAN}Via:${NC} ${ZT_IP_ONLY}"
+            echo ""
+        fi
     fi
 fi
 
@@ -860,9 +892,7 @@ if [[ "${SERVER_ZT_IP}" != "<ZT-IP сервера>" ]]; then
     echo -e "    ${GREEN}✓${NC} Нода подключена к сети и авторизована"
     echo -e "    ${GREEN}✓${NC} ZT subnet: ${ZT_SUBNET}"
     echo -e "    ${GREEN}✓${NC} iptables NAT обновлён"
-    echo ""
-    echo -e "  ${YELLOW}Осталось добавить вручную в ZTNET Panel:${NC}"
-    echo -e "    Managed Routes → Add → Destination: ${CYAN}0.0.0.0/0${NC}, Via: ${CYAN}$(echo "${SERVER_ZT_IP}" | grep -oP '^\d+\.\d+\.\d+\.\d+')${NC}"
+    echo -e "    ${GREEN}✓${NC} Managed Route 0.0.0.0/0 via $(echo "${SERVER_ZT_IP}" | grep -oP '^\d+\.\d+\.\d+\.\d+')"
     echo ""
 fi
 echo -e "  ${BOLD}На клиентах для доступа в интернет:${NC}"
