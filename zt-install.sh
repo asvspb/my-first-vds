@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  ZeroTier + ZTNET Panel — Auto Installer with Internet Gateway
+#  Version: 1.0
 #  Tested on: Ubuntu 20.04/22.04/24.04, Debian 11/12, OpenVZ 7
 #
 #  Функционал:
