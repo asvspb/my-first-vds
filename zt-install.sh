@@ -421,7 +421,7 @@ done
 if $ALL_RUNNING; then
     log "Контейнеры уже запущены — пропускаем docker compose up"
 else
-    docker compose pull
+    docker compose pull -q
 
     set +e
     docker compose up -d --wait 2>/dev/null
