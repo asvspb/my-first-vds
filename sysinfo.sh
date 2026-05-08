@@ -1,5 +1,23 @@
 #!/bin/bash
-# Version: 2.0 — Compact output for 100x30 terminal
+# Version: 2.1 — Compact output for 100x30 terminal + self-install
+
+SELF_INSTALL() {
+    if [[ $EUID -ne 0 ]]; then
+        echo "Need root to install. Run: sudo $0 --install"
+        return 1
+    fi
+    local dest="/etc/profile.d/sysinfo.sh"
+    cp "$0" "$dest"
+    chmod +x "$dest"
+    echo "sysinfo.sh installed to $dest"
+    echo "It will now show on every SSH login."
+    return 0
+}
+
+if [[ "${1:-}" == "--install" ]]; then
+    SELF_INSTALL
+    exit $?
+fi
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
@@ -37,7 +55,6 @@ bar() {
 }
 
 title() { printf "${CYAN}${BOLD}%s${NC}\n" "$1"; }
-line() { printf "${DIM}%s${NC}\n" "$1"; }
 
 echo ""
 title "  ════════════════════════════════════════════════════════════════════════════════════════"
@@ -65,7 +82,6 @@ echo ""
 title "  ─── Network & Docker ────────────────────────────────────────────────────────────"
 printf "  ${DIM}Pub IP:${NC} %-15s ${DIM}Loc IP:${NC} %s\n" "$public_ip" "$local_ip"
 printf "  ${DIM}Docker:${NC} %s containers running\n" "$docker_str"
-
 
 printf "${DIM}%s${NC}\n" "  ───────────────────────────────────────────────────────────────────────────────────"
 echo ""
