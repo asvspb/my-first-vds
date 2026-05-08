@@ -336,8 +336,8 @@ fi
 ZT_SUBNET="10.121.15.0/24"
 if command -v ufw &>/dev/null; then
     set +e
-    UFW_ACTIVE=$(ufw status 2>/dev/null | grep -c "active" || echo "0")
-    if [[ "${UFW_ACTIVE}" -eq 0 ]]; then
+    UFW_ACTIVE=$(ufw status 2>/dev/null | grep -c "active" || true)
+    if [[ "${UFW_ACTIVE}" == "0" || -z "${UFW_ACTIVE}" ]]; then
         warn "UFW установлен, но не активен — активируем с базовыми правилами"
         ufw allow 22/tcp >/dev/null 2>&1 || true
         ufw --force enable >/dev/null 2>&1 || true
