@@ -1,6 +1,6 @@
 # Настройка Ubuntu 24.04 для разработки
 
-Версия: **1.0**
+Версия: **1.1**
 
 Набор скриптов для быстрой инициализации и управления VDS на Ubuntu 24.04.
 
@@ -56,12 +56,14 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 
 ### `wg-install.sh` — WireGuard VPN
 
-Установка и настройка WireGuard VPN-сервера. Быстрое создание защищённого туннеля для доступа к серверу:
+Установка и настройка WireGuard VPN-сервера с менеджментом клиентов. Быстрое создание защищённого туннеля для доступа к серверу:
 
-- Генерация ключей сервера и клиента
-- Конфигурация интерфейса wg0
-- Вывод QR-кода для подключения с мобильного устройства
-- Открытие порта 51820/udp в UFW
+- **Первоначальная установка**: генерация ключей сервера и клиента, настройка интерфейса wg0, конфигурация NAT/iptables, вывод QR-кода
+- **Добавление клиентов** при повторном запуске: автоматический поиск свободного IP, генерация конфига и QR-кода
+- **Удаление WireGuard** при повторном запуске
+- **BoringTun** для контейнеров без модуля ядра (OpenVZ, LXC)
+- Поддержка UFW и firewalld
+- Открытие порта 51820/udp
 
 ### `zt-install.sh` — ZeroTier VPN + ZTNET Panel + Internet Gateway
 
@@ -74,33 +76,80 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 | 2 | 📡 Установка ZeroTier (официальный скрипт) |
 | 3 | 🐳 Установка Docker + Compose |
 | 4 | ⚡ IP Forwarding (`sysctl`, постоянный через `/etc/sysctl.d/99-zt-forward.conf`) |
-| 5 | 🐘 Docker Compose: PostgreSQL + ZeroTier (контейнер) + ZTNET Panel |
-| 5 | 🔥 NAT/iptables: хост (`MASQUERADE` Docker→интернет) + UFW правила |
+| 5 | 🐘 Docker Compose: PostgreSQL + ZeroTier (контейнер) + ZTNET Panel + NAT/iptables |
 | 6 | 🚀 Запуск контейнеров, проверка DNS и API |
-| 7 | 🔀 NAT внутри контейнера zerotier (`zt+ → eth0 → MASQUERADE`) |
-| 8 | 🖧 Интерактивное подключение к ZT-сети: запрос Network ID → `zerotier-cli join` → ожидание авторизации → получение ZT-IP |
+| 7 | 🔀 Настройка NAT: FORWARD правила для ZT-интерфейса + скрипт + systemd сервис |
+| 8 | 🖧 Авто-подключение к ZT-сети: join → само-авторизация → получение ZT-IP → обновление NAT |
 
-**Интерактивный шаг 8:**
+**Автоматический шаг 8:**
 1. Создайте сеть в браузере (`http://<IP>:3000`)
 2. Скрипт запросит **Network ID** — вставьте его
-3. Скрипт выполнит `zerotier-cli join <NETWORK_ID>`
-4. Скрипт попросит авторизовать ноду в панели (Members → Auth)
-5. Скрипт ждёт до 150 секунд (30 попыток по 5 сек), polling ZT-IP
-6. После авторизации ZT-IP выводится в итоговой сводке
+3. `zerotier-cli join <NETWORK_ID>`
+4. **Само-авторизация** через Controller API (POST `/controller/network/{ID}/member/{ADDR}`) — **ручная авторизация не требуется**
+5. Ожидание ZT-IP (до 150 сек, 30 попыток)
+6. **Динамическое определение реального ZT subnet** из Controller API
+7. **Автоматическое обновление iptables** при несовпадении подсети с дефолтной
+8. **Регенерация** `.env.info` и `zt-nat-setup.sh` с актуальным ZT subnet
+9. Инструкция по добавлению Managed Route `0.0.0.0/0` для раздачи интернета
 
 **Ключевые возможности:**
 - Автоопределение сетевой архитектуры сервера (интерфейс, шлюз, публичный IP, DNS)
+- Self-authorization через Controller API (не требует ручной авторизации в панели)
+- Динамическое определение реального ZT subnet — автоматическая корректировка iptables
 - Двухуровневый NAT: хост + контейнер zerotier
 - IP forwarding включён постоянно (переживает перезагрузку)
 - iptables правила сохраняются через `netfilter-persistent`
 - UFW: автоматически добавляются route rules + NAT
 - Скрипт `zt-nat-setup.sh` для восстановления NAT после перезапуска контейнера
-- Интерактивное подключение к сети с ожиданием авторизации
-- Постановочные инструкции по настройке маршрута `0.0.0.0/0` в ZTNET Panel
+- systemd сервис `zt-nat-setup.service` для авто-восстановления при загрузке
+- Поддержка OpenVZ/LXC (SNAT вместо MASQUERADE)
 
 **Для раздачи интернета клиентам** — после установки:
 1. В ZTNET Panel добавьте Managed Route: `0.0.0.0/0` → ZT-IP сервера
 2. На клиенте включите `Allow Default Route`
+
+### `zt-cleanup.sh` — ZeroTier + ZTNET — Полная очистка
+
+Полное удаление ZeroTier, ZTNET Panel и всех связанных компонентов:
+
+- Остановка и удаление Docker контейнеров (ztnet, postgres, zerotier)
+- Удаление Docker volumes (identity, БД)
+- Удаление Docker образов
+- Остановка хостового zerotier-one (systemd)
+- Удаление всех iptables правил NAT/FORWARD для ZT
+- Удаление UFW правил для ZT
+- Удаление `/opt/ztnet`, systemd сервиса `zt-nat-setup.service`, `/etc/sysctl.d/99-zt-forward.conf`
+- Напоминание об очистке браузера перед повторной установкой
+
+### `clean-sys.sh` — Системная очистка Ubuntu-сервера
+
+Мощный скрипт для высвобождения дискового пространства на сервере. Аналог desktop-версии, адаптированный для серверного окружения. Все параметры настраиваются через переменные окружения.
+
+**Основные модули (включены по умолчанию):**
+
+| Модуль | Описание |
+|--------|----------|
+| apt | `clean`, `autoclean`, `autoremove --purge`, deborphan |
+| Ядра | Удаление старых неиспользуемых ядер (кроме текущего) |
+| journalctl | `--vacuum-size=200M` |
+| Логи | Старые `.gz` (>7d), `.log` (>30d), ротированные логи в `/var/log` |
+| Fail2ban | Очистка persistent bans старше 30 дней |
+| /tmp, /var/tmp | Файлы старше 7 дней |
+| Docker | Щадящий safe prune (контейнеры >48h, образы >7d), buildx prune |
+| pip | `cache purge` |
+| /var/cache | `.deb` пакеты в apt archives |
+| /var/crash | Очистка краш-репортов |
+| /var/mail | Очистка пользовательской почты |
+
+**Опционально (отключено по умолчанию):**
+- npm, yarn, uv, poetry, cargo cache
+- Snap/Flatpak
+- Nginx/Apache логи
+- MySQL/PostgreSQL логи
+- Docker orphan volumes, deep prune
+- Корзина (включена)
+
+**Режим сухого прогона:** `DRY_RUN=1 bash clean-sys.sh`
 
 ## Установка
 
@@ -127,6 +176,16 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 **ZeroTier:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/zt-install.sh | sudo bash
+```
+
+**ZeroTier Cleanup:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/zt-cleanup.sh | sudo bash
+```
+
+**Системная очистка:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/clean-sys.sh | sudo bash
 ```
 
 ## Требования

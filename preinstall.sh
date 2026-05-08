@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Version: 1.0
+# Version: 1.1
 
 # 1. Чиним прерванные ранее установки (из-за tzdata)
 sudo dpkg --configure -a

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # WireGuard Installer — Debug & Manage Edition
-# Version: 1.0
+# Version: 1.1
 # Улучшения: защита от усечения (wrap в main), меню управления, umask, точный NAT
 #
 
