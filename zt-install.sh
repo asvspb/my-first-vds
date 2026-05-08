@@ -126,7 +126,7 @@ sep; info "Шаг 1/8 - Обновление системы"
 
 rm -rf /var/lib/apt/lists/* || true
 apt-get update -qq
-apt-get install -y -qq curl wget ca-certificates gnupg lsb-release openssl iptables-persistent
+apt-get install -y -qq curl wget ca-certificates gnupg lsb-release openssl iptables-persistent ufw
 log "Система обновлена, iptables-persistent установлен"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
@@ -335,19 +335,19 @@ fi
 ZT_SUBNET="10.121.15.0/24"
 if command -v ufw &>/dev/null; then
     UFW_ACTIVE=$(ufw status 2>/dev/null | grep -c "active" || echo "0")
-    if [[ "${UFW_ACTIVE}" -gt 0 ]]; then
-        warn "UFW активен - настраиваем для форвардинга ZT-трафика"
-
-        ufw allow 9993/udp >/dev/null 2>&1
-        ufw allow 9993/tcp >/dev/null 2>&1
-        ufw allow "${ZTNET_PORT}/tcp" >/dev/null 2>&1
-
-        ufw default allow routed >/dev/null 2>&1 || true
-
-        log "UFW: порты 9993/udp, 9993/tcp, ${ZTNET_PORT}/tcp открыты, форвардинг разрешён"
-    else
-        info "UFW не активен - пропускаем настройку"
+    if [[ "${UFW_ACTIVE}" -eq 0 ]]; then
+        warn "UFW установлен, но не активен — активируем с базовыми правилами"
+        ufw allow 22/tcp >/dev/null 2>&1
+        ufw --force enable >/dev/null 2>&1
+        log "UFW активирован (SSH:22/tcp открыт)"
     fi
+
+    ufw allow 9993/udp >/dev/null 2>&1
+    ufw allow 9993/tcp >/dev/null 2>&1
+    ufw allow "${ZTNET_PORT}/tcp" >/dev/null 2>&1
+    ufw default allow routed >/dev/null 2>&1 || true
+
+    log "UFW: порты 9993/udp, 9993/tcp, ${ZTNET_PORT}/tcp открыты, форвардинг разрешён"
 else
     info "UFW не установлен - пропускаем настройку"
 fi
@@ -805,50 +805,21 @@ NATEOF2
     chmod +x "${INSTALL_DIR}/zt-nat-setup.sh"
     log "zt-nat-setup.sh перегенерирован (ZT_SUBNET=${ZT_SUBNET})"
 
-    # ── Managed Route: 0.0.0.0/0 via SERVER_ZT_IP ────────────────────────────
-    if [[ -n "${ZT_AUTHTOKEN}" && "${SERVER_ZT_IP}" != "<ZT-IP сервера>" ]]; then
+    # ── Managed Route: инструкция для ZTNET Panel ─────────────────────────────
+    if [[ "${SERVER_ZT_IP}" != "<ZT-IP сервера>" ]]; then
         ZT_IP_ONLY=$(echo "${SERVER_ZT_IP}" | grep -oP '^\d+\.\d+\.\d+\.\d+' || true)
-        if [[ -n "${ZT_IP_ONLY}" ]]; then
-            log "Добавляем Managed Route 0.0.0.0/0 via ${ZT_IP_ONLY}..."
-
-            CURRENT_ROUTES_RAW=$(curl -s \
-                -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
-                "http://localhost:9993/controller/network/${NETWORK_ID}" 2>/dev/null || true)
-
-            if echo "${CURRENT_ROUTES_RAW}" | grep -q '"routes"'; then
-                if echo "${CURRENT_ROUTES_RAW}" | grep -oP '"target"\s*:\s*"[^"]*"' | grep -q '0\.0\.0\.0/0'; then
-                    log "Managed Route 0.0.0.0/0 уже существует"
-                else
-                    EXISTING_ROUTES=$(echo "${CURRENT_ROUTES_RAW}" | grep -oP '"routes"\s*:\s*\[\K.*?(?=\])' || true)
-
-                    if [[ -z "${EXISTING_ROUTES}" ]]; then
-                        NEW_ROUTES="[{\"target\":\"0.0.0.0/0\",\"via\":\"${ZT_IP_ONLY}\"}]"
-                    else
-                        EXISTING_ROUTES=$(echo "${CURRENT_ROUTES_RAW}" | sed -n 's/.*"routes"\s*:\s*\[/[/p' | sed 's/\].*$/]/' || true)
-                        NEW_ROUTES=$(echo "${EXISTING_ROUTES}" | sed "s/\]$/,{\"target\":\"0.0.0.0/0\",\"via\":\"${ZT_IP_ONLY}\"}\]/" || true)
-                    fi
-
-                    ROUTE_RESPONSE=$(curl -s -X POST \
-                        -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
-                        -H "Content-Type: application/json" \
-                        -d "{\"routes\": ${NEW_ROUTES}}" \
-                        "http://localhost:9993/controller/network/${NETWORK_ID}" 2>/dev/null || true)
-
-                    if echo "${ROUTE_RESPONSE}" | grep -q '0\.0\.0\.0/0'; then
-                        log "Managed Route 0.0.0.0/0 via ${ZT_IP_ONLY} добавлен"
-                    else
-                        warn "Не удалось добавить Managed Route автоматически"
-                        warn "Добавьте вручную: Destination 0.0.0.0/0, Via ${ZT_IP_ONLY}"
-                    fi
-                fi
-            else
-                warn "Не удалось получить текущие маршруты из Controller API"
-                warn "Добавьте вручную: Destination 0.0.0.0/0, Via ${ZT_IP_ONLY}"
-            fi
-        fi
-    else
-        warn "Managed Route нужно добавить вручную:"
-        warn "  Destination: 0.0.0.0/0, Via: ${SERVER_ZT_IP}"
+        echo ""
+        echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "  ${BOLD}ДЕЙСТВИЕ ТРЕБУЕТСЯ (Managed Route):${NC}"
+        echo ""
+        echo -e "  ZTNET Panel перезаписывает маршруты Controller API."
+        echo -e "  Добавьте маршрут ${BOLD}вручную${NC} в ZTNET Panel:"
+        echo ""
+        echo -e "    ${CYAN}${NEXTAUTH_URL}${NC} → Сеть → Managed Routes → Add"
+        echo -e "    ${BOLD}Destination:${NC} 0.0.0.0/0"
+        echo -e "    ${BOLD}Via:${NC} ${ZT_IP_ONLY}"
+        echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
     fi
 fi
 
@@ -886,7 +857,9 @@ if [[ "${SERVER_ZT_IP}" != "<ZT-IP сервера>" ]]; then
     echo -e "    ${GREEN}✓${NC} Нода подключена к сети и авторизована"
     echo -e "    ${GREEN}✓${NC} ZT subnet: ${ZT_SUBNET}"
     echo -e "    ${GREEN}✓${NC} iptables NAT обновлён"
-    echo -e "    ${GREEN}✓${NC} Managed Route 0.0.0.0/0 via ${SERVER_ZT_IP}"
+    echo ""
+    echo -e "  ${YELLOW}Осталось добавить вручную в ZTNET Panel:${NC}"
+    echo -e "    Managed Routes → Add → Destination: ${CYAN}0.0.0.0/0${NC}, Via: ${CYAN}$(echo "${SERVER_ZT_IP}" | grep -oP '^\d+\.\d+\.\d+\.\d+')${NC}"
     echo ""
 fi
 echo -e "  ${BOLD}На клиентах для доступа в интернет:${NC}"

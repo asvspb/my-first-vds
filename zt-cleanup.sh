@@ -83,27 +83,49 @@ fi
 # ╚══════════════════════════════════════════════════════════════════════════════
 sep; echo ""
 log "Удаляем iptables правила ZT..."
-RULES=$(iptables -t nat -L POSTROUTING -n --line-numbers 2>/dev/null | grep -E '10\.121\.15\.|172\.31\.255\.' | sort -rn | awk '{print $1}' || true)
-for n in $RULES; do
-    iptables -t nat -D POSTROUTING "$n" 2>/dev/null || true
-done
-for chain in FORWARD DOCKER-USER; do
-    RULES=$(iptables -L "$chain" -n --line-numbers 2>/dev/null | grep -E '10\.121\.15\.|172\.31\.255\.' | sort -rn | awk '{print $1}' || true)
-    for n in $RULES; do
-        iptables -D "$chain" "$n" 2>/dev/null || true
-    done
-done
-iptables -D FORWARD -s 10.121.15.0/24 -j ACCEPT 2>/dev/null || true
-iptables -D FORWARD -d 10.121.15.0/24 -j ACCEPT 2>/dev/null || true
-iptables -D FORWARD -s 172.31.255.0/29 -j ACCEPT 2>/dev/null || true
-iptables -D FORWARD -d 172.31.255.0/29 -j ACCEPT 2>/dev/null || true
 
-# UFW before.rules
+ZT_SUBNET=$(grep -oP '^ZT_SUBNET=\K.*' "${INSTALL_DIR}/.env.info" 2>/dev/null || echo "10.121.15.0/24")
+DOCKER_BRIDGE_SUBNET=$(grep -oP '^DOCKER_BRIDGE_SUBNET=\K.*' "${INSTALL_DIR}/.env.info" 2>/dev/null || echo "172.31.255.0/29")
+MAIN_IFACE=$(grep -oP '^MAIN_IFACE=\K.*' "${INSTALL_DIR}/.env.info" 2>/dev/null || true)
+IS_OPENVZ=$(grep -oP '^IS_OPENVZ=\K.*' "${INSTALL_DIR}/.env.info" 2>/dev/null || echo "false")
+SERVER_IP=$(grep -oP '^PUBLIC_IP=\K.*' "${INSTALL_DIR}/.env.info" 2>/dev/null || true)
+
+log "  ZT_SUBNET=${ZT_SUBNET}, DOCKER_BRIDGE=${DOCKER_BRIDGE_SUBNET}"
+
+# NAT POSTROUTING
+if [[ "${IS_OPENVZ}" == "true" && -n "${MAIN_IFACE}" && -n "${SERVER_IP}" ]]; then
+    iptables -t nat -D POSTROUTING -s "${ZT_SUBNET}" -o "${MAIN_IFACE}" -j SNAT --to-source "${SERVER_IP}" 2>/dev/null || true
+else
+    iptables -t nat -D POSTROUTING -s "${ZT_SUBNET}" -o "${MAIN_IFACE}" -j MASQUERADE 2>/dev/null || true
+fi
+iptables -t nat -D POSTROUTING -s "${ZT_SUBNET}" -j MASQUERADE 2>/dev/null || true
+iptables -t nat -D POSTROUTING -s "${DOCKER_BRIDGE_SUBNET}" -o "${MAIN_IFACE}" -j MASQUERADE 2>/dev/null || true
+iptables -t nat -D POSTROUTING -s "${DOCKER_BRIDGE_SUBNET}" -j MASQUERADE 2>/dev/null || true
+
+# FORWARD
+iptables -D FORWARD -s "${ZT_SUBNET}" -j ACCEPT 2>/dev/null || true
+iptables -D FORWARD -d "${ZT_SUBNET}" -j ACCEPT 2>/dev/null || true
+iptables -D FORWARD -s "${DOCKER_BRIDGE_SUBNET}" -j ACCEPT 2>/dev/null || true
+iptables -D FORWARD -d "${DOCKER_BRIDGE_SUBNET}" -j ACCEPT 2>/dev/null || true
+
+# ZT-интерфейс правила
+ZT_IFACE=$(ip -o link show | grep -oP 'zt[a-z0-9]+' | head -1 || true)
+if [[ -n "${ZT_IFACE}" && -n "${MAIN_IFACE}" ]]; then
+    iptables -D FORWARD -i "${ZT_IFACE}" -o "${MAIN_IFACE}" -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -i "${MAIN_IFACE}" -o "${ZT_IFACE}" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+fi
+
+# UFW: удаляем только ZT-правила
+if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "active"; then
+    log "Удаляем ZT-правила из UFW..."
+    ufw delete allow 9993/udp >/dev/null 2>&1 || true
+    ufw delete allow 9993/tcp >/dev/null 2>&1 || true
+    ufw delete allow 3000/tcp >/dev/null 2>&1 || true
+    log "ZT-правила UFW удалены (UFW оставлен активным)"
+fi
+
 rm -f /etc/ufw/before.rules.d/zt-forward.rules 2>/dev/null || true
 rm -f /etc/ufw/before.rules.d/zt-nat.rules 2>/dev/null || true
-if command -v ufw &>/dev/null; then
-    ufw reload 2>/dev/null || true
-fi
 
 netfilter-persistent save >/dev/null 2>&1 || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 log "iptables правила очищены и сохранены"
