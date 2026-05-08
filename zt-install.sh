@@ -624,7 +624,7 @@ else
     # ── Само-авторизация через Controller API ──────────────────────────────────
     if [[ -n "${ZT_AUTHTOKEN}" && -n "${ZT_ADDR}" ]]; then
         log "Само-авторизация ноды ${ZT_ADDR} через Controller API..."
-        AUTH_RESPONSE=$(docker exec ztnet_zerotier curl -s -X POST \
+        AUTH_RESPONSE=$(curl -s -X POST \
             -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
             -H "Content-Type: application/json" \
             -d '{"authorized": true}' \
@@ -682,12 +682,13 @@ else
     # ── Динамическое определение ZT_SUBNET ────────────────────────────────────
     ACTUAL_SUBNET=""
     if [[ -n "${ZT_AUTHTOKEN}" ]]; then
-        NETWORK_CONFIG=$(docker exec ztnet_zerotier curl -s \
+        NETWORK_CONFIG=$(curl -s \
             -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
             "http://localhost:9993/controller/network/${NETWORK_ID}" 2>/dev/null || true)
 
         if [[ -n "${NETWORK_CONFIG}" ]]; then
-            ACTUAL_SUBNET=$(echo "${NETWORK_CONFIG}" | grep -oP '"networkRange"\s*:\s*"\K[\d./]+' | head -1 || true)
+            ACTUAL_SUBNET=$(echo "${NETWORK_CONFIG}" | grep -oP '"ipRangeStart"\s*:\s*"\K[\d.]+' | head -1 \
+                | sed -E 's/\.[0-9]+$/\.0\/24/' || true)
 
             if [[ -z "${ACTUAL_SUBNET}" ]]; then
                 ACTUAL_SUBNET=$(echo "${NETWORK_CONFIG}" | grep -oP '"target"\s*:\s*"\K[\d./]+' | grep -v '0\.0\.0\.0' | head -1 || true)
@@ -810,7 +811,7 @@ NATEOF2
         if [[ -n "${ZT_IP_ONLY}" ]]; then
             log "Добавляем Managed Route 0.0.0.0/0 via ${ZT_IP_ONLY}..."
 
-            CURRENT_ROUTES_RAW=$(docker exec ztnet_zerotier curl -s \
+            CURRENT_ROUTES_RAW=$(curl -s \
                 -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
                 "http://localhost:9993/controller/network/${NETWORK_ID}" 2>/dev/null || true)
 
@@ -827,7 +828,7 @@ NATEOF2
                         NEW_ROUTES=$(echo "${EXISTING_ROUTES}" | sed "s/\]$/,{\"target\":\"0.0.0.0/0\",\"via\":\"${ZT_IP_ONLY}\"}\]/" || true)
                     fi
 
-                    ROUTE_RESPONSE=$(docker exec ztnet_zerotier curl -s -X POST \
+                    ROUTE_RESPONSE=$(curl -s -X POST \
                         -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
                         -H "Content-Type: application/json" \
                         -d "{\"routes\": ${NEW_ROUTES}}" \
