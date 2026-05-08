@@ -335,18 +335,20 @@ fi
 # ── Настройка UFW ────────────────────────────────────────────────────────────
 ZT_SUBNET="10.121.15.0/24"
 if command -v ufw &>/dev/null; then
+    set +e
     UFW_ACTIVE=$(ufw status 2>/dev/null | grep -c "active" || echo "0")
     if [[ "${UFW_ACTIVE}" -eq 0 ]]; then
         warn "UFW установлен, но не активен — активируем с базовыми правилами"
-        ufw allow 22/tcp >/dev/null 2>&1
-        ufw --force enable >/dev/null 2>&1
+        ufw allow 22/tcp >/dev/null 2>&1 || true
+        ufw --force enable >/dev/null 2>&1 || true
         log "UFW активирован (SSH:22/tcp открыт)"
     fi
 
-    ufw allow 9993/udp >/dev/null 2>&1
-    ufw allow 9993/tcp >/dev/null 2>&1
-    ufw allow "${ZTNET_PORT}/tcp" >/dev/null 2>&1
+    ufw allow 9993/udp >/dev/null 2>&1 || true
+    ufw allow 9993/tcp >/dev/null 2>&1 || true
+    ufw allow "${ZTNET_PORT}/tcp" >/dev/null 2>&1 || true
     ufw default allow routed >/dev/null 2>&1 || true
+    set -e
 
     log "UFW: порты 9993/udp, 9993/tcp, ${ZTNET_PORT}/tcp открыты, форвардинг разрешён"
 else
