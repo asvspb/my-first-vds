@@ -120,9 +120,9 @@ echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-
 echo iptables-persistent iptables-persistent/autosave_v6 boolean true | debconf-set-selections
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║  ШАГ 1/7 — Обновление системы
+# ║  ШАГ 1/8 — Обновление системы
 # ╚══════════════════════════════════════════════════════════════════════════════
-sep; info "Шаг 1/7 - Обновление системы"
+sep; info "Шаг 1/8 - Обновление системы"
 
 rm -rf /var/lib/apt/lists/* || true
 apt-get update -qq
@@ -130,9 +130,9 @@ apt-get install -y -qq curl wget ca-certificates gnupg lsb-release openssl iptab
 log "Система обновлена, iptables-persistent установлен"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║  ШАГ 2/7 — Установка ZeroTier (на хосте для network_mode=host)
+# ║  ШАГ 2/8 — Установка ZeroTier (на хосте для network_mode=host)
 # ╚══════════════════════════════════════════════════════════════════════════════
-sep; info "Шаг 2/7 - Установка ZeroTier"
+sep; info "Шаг 2/8 - Установка ZeroTier"
 
 if command -v zerotier-one &>/dev/null; then
     warn "ZeroTier уже установлен: $(zerotier-one -v 2>/dev/null || echo 'unknown version')"
@@ -157,9 +157,9 @@ if ss -tuln | grep -q ':9993 '; then
 fi
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║  ШАГ 3/7 — Установка Docker
+# ║  ШАГ 3/8 — Установка Docker
 # ╚══════════════════════════════════════════════════════════════════════════════
-sep; info "Шаг 3/7 - Установка Docker"
+sep; info "Шаг 3/8 - Установка Docker"
 
 if command -v docker &>/dev/null; then
     warn "Docker уже установлен: $(docker --version)"
@@ -184,9 +184,9 @@ else
 fi
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║  ШАГ 4/7 — Настройка IP Forwarding + Sysctl
+# ║  ШАГ 4/8 — Настройка IP Forwarding + Sysctl
 # ╚══════════════════════════════════════════════════════════════════════════════
-sep; info "Шаг 4/7 - Настройка IP Forwarding"
+sep; info "Шаг 4/8 - Настройка IP Forwarding"
 
 FORWARD_CONF="/etc/sysctl.d/99-zt-forward.conf"
 cat > "${FORWARD_CONF}" <<EOF
@@ -206,9 +206,9 @@ else
 fi
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║  ШАГ 5/7 — Создание docker-compose.yml + NAT iptables
+# ║  ШАГ 5/8 — Создание docker-compose.yml + NAT iptables
 # ╚══════════════════════════════════════════════════════════════════════════════
-sep; info "Шаг 5/7 - Настройка ZTNET + NAT/iptables"
+sep; info "Шаг 5/8 - Настройка ZTNET + NAT/iptables"
 
 mkdir -p "${INSTALL_DIR}"
 
@@ -405,9 +405,9 @@ chmod 600 "${INSTALL_DIR}/.env.info"
 log "Секреты сохранены в ${INSTALL_DIR}/.env.info"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║  ШАГ 6/7 — Запуск ZTNET
+# ║  ШАГ 6/8 — Запуск ZTNET
 # ╚══════════════════════════════════════════════════════════════════════════════
-sep; info "Шаг 6/7 - Запуск ZTNET (docker compose pull + up)"
+sep; info "Шаг 6/8 - Запуск ZTNET (docker compose pull + up)"
 
 cd "${INSTALL_DIR}"
 
@@ -472,6 +472,16 @@ else
     err "  ZeroTier не отвечает в контейнере"
 fi
 
+ZT_AUTHTOKEN=$(docker exec ztnet_zerotier cat /var/lib/zerotier-one/authtoken.secret 2>/dev/null | tr -d '[:space:]' || true)
+if [[ -n "${ZT_AUTHTOKEN}" ]]; then
+    log "ZT authtoken.secret получен (для Controller API)"
+else
+    warn "Не удалось получить authtoken.secret — авто-авторизация будет недоступна"
+fi
+
+ZT_ADDR=$(docker exec ztnet_zerotier zerotier-cli info 2>/dev/null | awk '{print $3}' || true)
+log "ZeroTier node address: ${BOLD}${ZT_ADDR:-неизвестен}${NC}"
+
 # Определяем ZT-IP сервера для Managed Route
 SERVER_ZT_IP=$(docker exec ztnet_zerotier zerotier-cli listnetworks 2>/dev/null | grep -oP '\d+\.\d+\.\d+\.\d+/\d+$' | head -1 || true)
 if [[ -n "${SERVER_ZT_IP}" ]]; then
@@ -481,9 +491,9 @@ else
 fi
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║  ШАГ 7/7 — Настройка NAT (хостовые iptables, без nsenter)
+# ║  ШАГ 7/8 — Настройка NAT (хостовые iptables, без nsenter)
 # ╚══════════════════════════════════════════════════════════════════════════════
-sep; info "Шаг 7/7 - Настройка NAT для ZT-клиентов"
+sep; info "Шаг 7/8 - Настройка NAT для ZT-клиентов"
 
 # При network_mode=host ZeroTier использует хостовый стек iptables,
 # поэтому правила FORWARD уже работают через хостовые правила.
@@ -586,9 +596,9 @@ systemctl enable zt-nat-setup.service
 log "systemd сервис zt-nat-setup.service создан и включён"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║  ШАГ 8/8 — Ожидание создания сети в ZTNET
+# ║  ШАГ 8/8 — Ожидание создания сети + авто-подключение
 # ╚══════════════════════════════════════════════════════════════════════════════
-sep; info "Шаг 8/8 - Ожидание создания сети в ZTNET"
+sep; info "Шаг 8/8 - Ожидание создания сети + авто-подключение"
 
 echo ""
 echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -611,23 +621,52 @@ else
     log "Подключаемся к сети ${NETWORK_ID}..."
     docker exec ztnet_zerotier zerotier-cli join "${NETWORK_ID}" || true
 
-    echo ""
-    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  ${BOLD}ДЕЙСТВИЕ ТРЕБУЕТСЯ:${NC}"
-    echo ""
-    echo -e "  Авторизуйте ноду ${CYAN}${ZT_ADDR:-сервера}${NC} в панели ZTNET:"
-    echo -e "    ${CYAN}${NEXTAUTH_URL}${NC} → Сеть → Members → ${BOLD}Auth${NC}"
-    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
+    # ── Само-авторизация через Controller API ──────────────────────────────────
+    if [[ -n "${ZT_AUTHTOKEN}" && -n "${ZT_ADDR}" ]]; then
+        log "Само-авторизация ноды ${ZT_ADDR} через Controller API..."
+        AUTH_RESPONSE=$(docker exec ztnet_zerotier curl -s -X POST \
+            -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"authorized": true}' \
+            "http://localhost:9993/controller/network/${NETWORK_ID}/member/${ZT_ADDR}" 2>/dev/null || true)
 
+        if echo "${AUTH_RESPONSE}" | grep -q '"authorized"'; then
+            log "Нода ${ZT_ADDR} авторизована через Controller API"
+        else
+            warn "Авто-авторизация не удалась. Ответ: ${AUTH_RESPONSE:-пусто}"
+            warn "Авторизуйте вручную в ZTNET Panel"
+
+            echo ""
+            echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            echo -e "  ${BOLD}ДЕЙСТВИЕ ТРЕБУЕТСЯ:${NC}"
+            echo ""
+            echo -e "  Авторизуйте ноду ${CYAN}${ZT_ADDR}${NC} в панели ZTNET:"
+            echo -e "    ${CYAN}${NEXTAUTH_URL}${NC} → Сеть → Members → ${BOLD}Auth${NC}"
+            echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            echo ""
+        fi
+    else
+        warn "authtoken.secret или ZT_ADDR недоступны — ручная авторизация"
+
+        echo ""
+        echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "  ${BOLD}ДЕЙСТВИЕ ТРЕБУЕТСЯ:${NC}"
+        echo ""
+        echo -e "  Авторизуйте ноду ${CYAN}${ZT_ADDR:-сервера}${NC} в панели ZTNET:"
+        echo -e "    ${CYAN}${NEXTAUTH_URL}${NC} → Сеть → Members → ${BOLD}Auth${NC}"
+        echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+    fi
+
+    # ── Ожидание ZT-IP ────────────────────────────────────────────────────────
     SERVER_ZT_IP=""
     for i in $(seq 1 30); do
-        echo -ne "\r  Ожидание авторизации... ($i/30)"
+        echo -ne "\r  Ожидание назначения ZT-IP... ($i/30)"
         SERVER_ZT_IP=$(docker exec ztnet_zerotier zerotier-cli listnetworks 2>/dev/null \
             | grep -oP '\d+\.\d+\.\d+\.\d+/\d+$' | head -1 || true)
         if [[ -n "${SERVER_ZT_IP}" ]]; then
             echo ""
-            log "Нода авторизована!"
+            log "ZT-IP получен: ${SERVER_ZT_IP}"
             break
         fi
         sleep 5
@@ -638,6 +677,177 @@ else
         warn "ZT-IP не получен за отведённое время."
         warn "Проверьте позже: docker exec ztnet_zerotier zerotier-cli listnetworks"
         SERVER_ZT_IP="<ZT-IP сервера>"
+    fi
+
+    # ── Динамическое определение ZT_SUBNET ────────────────────────────────────
+    ACTUAL_SUBNET=""
+    if [[ -n "${ZT_AUTHTOKEN}" ]]; then
+        NETWORK_CONFIG=$(docker exec ztnet_zerotier curl -s \
+            -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
+            "http://localhost:9993/controller/network/${NETWORK_ID}" 2>/dev/null || true)
+
+        if [[ -n "${NETWORK_CONFIG}" ]]; then
+            ACTUAL_SUBNET=$(echo "${NETWORK_CONFIG}" | grep -oP '"networkRange"\s*:\s*"\K[\d./]+' | head -1 || true)
+
+            if [[ -z "${ACTUAL_SUBNET}" ]]; then
+                ACTUAL_SUBNET=$(echo "${NETWORK_CONFIG}" | grep -oP '"target"\s*:\s*"\K[\d./]+' | grep -v '0\.0\.0\.0' | head -1 || true)
+            fi
+        fi
+
+        if [[ -z "${ACTUAL_SUBNET}" && "${SERVER_ZT_IP}" != "<ZT-IP сервера>" ]]; then
+            ACTUAL_SUBNET=$(echo "${SERVER_ZT_IP}" | sed -E 's/\.[0-9]+\/([0-9]+)$/.0\/\1/')
+        fi
+
+        if [[ -n "${ACTUAL_SUBNET}" && "${ACTUAL_SUBNET}" != "${ZT_SUBNET}" ]]; then
+            OLD_SUBNET="${ZT_SUBNET}"
+            warn "Реальный ZT subnet (${ACTUAL_SUBNET}) отличается от дефолтного (${OLD_SUBNET})"
+            info "Обновляем iptables правила..."
+
+            if [[ "${IS_OPENVZ}" == "true" ]]; then
+                iptables -t nat -D POSTROUTING -s "${OLD_SUBNET}" -o "${MAIN_IFACE}" -j SNAT --to-source "${SERVER_IP}" 2>/dev/null || true
+                iptables -t nat -A POSTROUTING -s "${ACTUAL_SUBNET}" -o "${MAIN_IFACE}" -j SNAT --to-source "${SERVER_IP}"
+                log "SNAT обновлён: ${OLD_SUBNET} → ${ACTUAL_SUBNET}"
+            else
+                iptables -t nat -D POSTROUTING -s "${OLD_SUBNET}" -o "${MAIN_IFACE}" -j MASQUERADE 2>/dev/null || true
+                iptables -t nat -A POSTROUTING -s "${ACTUAL_SUBNET}" -o "${MAIN_IFACE}" -j MASQUERADE
+                log "MASQUERADE обновлён: ${OLD_SUBNET} → ${ACTUAL_SUBNET}"
+            fi
+
+            iptables -D FORWARD -s "${OLD_SUBNET}" -j ACCEPT 2>/dev/null || true
+            iptables -I FORWARD 1 -s "${ACTUAL_SUBNET}" -j ACCEPT
+
+            iptables -D FORWARD -d "${OLD_SUBNET}" -j ACCEPT 2>/dev/null || true
+            iptables -I FORWARD 2 -d "${ACTUAL_SUBNET}" -j ACCEPT
+
+            ZT_SUBNET="${ACTUAL_SUBNET}"
+
+            netfilter-persistent save >/dev/null 2>&1 || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+            log "iptables правила обновлены и сохранены"
+        elif [[ -n "${ACTUAL_SUBNET}" ]]; then
+            log "ZT subnet совпадает с дефолтным: ${ACTUAL_SUBNET}"
+        else
+            warn "Не удалось определить реальный ZT subnet автоматически"
+        fi
+    fi
+
+    # ── Обновление .env.info ──────────────────────────────────────────────────
+    cat > "${INSTALL_DIR}/.env.info" <<EOF
+# ZTNET Installation info - $(date)
+SERVER_IP=${SERVER_IP}
+MAIN_IFACE=${MAIN_IFACE}
+MAIN_IP=${MAIN_IP}
+PUBLIC_IP=${PUBLIC_IP}
+IS_OPENVZ=${IS_OPENVZ}
+ZTNET_URL=${NEXTAUTH_URL}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+INSTALL_DIR=${INSTALL_DIR}
+DOCKER_BRIDGE_SUBNET=${DOCKER_BRIDGE_SUBNET}
+DOCKER_BRIDGE_GW=${DOCKER_BRIDGE_GW}
+ZT_SUBNET=${ZT_SUBNET}
+NETWORK_ID=${NETWORK_ID}
+EOF
+    chmod 600 "${INSTALL_DIR}/.env.info"
+    log ".env.info обновлён (ZT_SUBNET=${ZT_SUBNET})"
+
+    # ── Регенерация zt-nat-setup.sh ───────────────────────────────────────────
+    cat > "${INSTALL_DIR}/zt-nat-setup.sh" <<NATEOF2
+#!/bin/bash
+set -euo pipefail
+echo "[zt-nat-setup] Настройка NAT для ZeroTier..."
+
+source /opt/ztnet/.env.info 2>/dev/null || true
+MAIN_IFACE="\${MAIN_IFACE:-\$(ip -4 route show default | grep -oP 'dev \\K\\S+' | head -1)}"
+MAIN_IFACE="\${MAIN_IFACE:-\$(ip -4 route show default | awk '/dev/{for(i=1;i<=NF;i++) if(\$i=="dev") print \$(i+1)}' | head -1)}"
+[ -z "\$MAIN_IFACE" ] && MAIN_IFACE="venet0"
+
+SERVER_IP="\${PUBLIC_IP:-\$(curl -s4 --max-time 5 https://ifconfig.me 2>/dev/null || curl -s --max-time 5 https://api.ipify.org 2>/dev/null)}"
+DOCKER_BRIDGE_SUBNET="\${DOCKER_BRIDGE_SUBNET:-172.31.255.0/29}"
+ZT_SUBNET="\${ZT_SUBNET:-${ZT_SUBNET}}"
+IS_OPENVZ="\${IS_OPENVZ:-false}"
+
+echo "  Main iface  : \$MAIN_IFACE"
+echo "  Server IP   : \$SERVER_IP"
+echo "  OpenVZ      : \$IS_OPENVZ"
+echo "  ZT subnet   : \$ZT_SUBNET"
+
+iptables -C FORWARD -s "\${ZT_SUBNET}" -j ACCEPT 2>/dev/null || \\
+    iptables -I FORWARD 1 -s "\${ZT_SUBNET}" -j ACCEPT
+iptables -C FORWARD -d "\${ZT_SUBNET}" -j ACCEPT 2>/dev/null || \\
+    iptables -I FORWARD 2 -d "\${ZT_SUBNET}" -j ACCEPT
+
+ZT_IFACE=\$(ip -o link show | grep -oP 'zt[a-z0-9]+' | head -1 || true)
+if [ -n "\$ZT_IFACE" ]; then
+    echo "  ZT interface: \$ZT_IFACE"
+    iptables -C FORWARD -i "\$ZT_IFACE" -o "\$MAIN_IFACE" -j ACCEPT 2>/dev/null || \\
+        iptables -A FORWARD -i "\$ZT_IFACE" -o "\$MAIN_IFACE" -j ACCEPT
+    iptables -C FORWARD -i "\$MAIN_IFACE" -o "\$ZT_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \\
+        iptables -A FORWARD -i "\$MAIN_IFACE" -o "\$ZT_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+fi
+
+if [[ "\${IS_OPENVZ}" == "true" ]]; then
+    iptables -t nat -C POSTROUTING -s "\${ZT_SUBNET}" -o "\$MAIN_IFACE" -j SNAT --to-source "\$SERVER_IP" 2>/dev/null || \\
+        iptables -t nat -A POSTROUTING -s "\${ZT_SUBNET}" -o "\$MAIN_IFACE" -j SNAT --to-source "\$SERVER_IP"
+    echo "[zt-nat-setup] SNAT: \${ZT_SUBNET} -> \$MAIN_IFACE (src=\$SERVER_IP)"
+else
+    iptables -t nat -C POSTROUTING -s "\${ZT_SUBNET}" -o "\$MAIN_IFACE" -j MASQUERADE 2>/dev/null || \\
+        iptables -t nat -A POSTROUTING -s "\${ZT_SUBNET}" -o "\$MAIN_IFACE" -j MASQUERADE
+    echo "[zt-nat-setup] MASQUERADE: \${ZT_SUBNET} -> \$MAIN_IFACE"
+fi
+
+iptables -t nat -C POSTROUTING -s "\${DOCKER_BRIDGE_SUBNET}" -o "\$MAIN_IFACE" -j MASQUERADE 2>/dev/null || \\
+    iptables -t nat -A POSTROUTING -s "\${DOCKER_BRIDGE_SUBNET}" -o "\$MAIN_IFACE" -j MASQUERADE
+
+netfilter-persistent save >/dev/null 2>&1 || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+echo "[zt-nat-setup] Правила сохранены"
+NATEOF2
+    chmod +x "${INSTALL_DIR}/zt-nat-setup.sh"
+    log "zt-nat-setup.sh перегенерирован (ZT_SUBNET=${ZT_SUBNET})"
+
+    # ── Managed Route: 0.0.0.0/0 via SERVER_ZT_IP ────────────────────────────
+    if [[ -n "${ZT_AUTHTOKEN}" && "${SERVER_ZT_IP}" != "<ZT-IP сервера>" ]]; then
+        ZT_IP_ONLY=$(echo "${SERVER_ZT_IP}" | grep -oP '^\d+\.\d+\.\d+\.\d+' || true)
+        if [[ -n "${ZT_IP_ONLY}" ]]; then
+            log "Добавляем Managed Route 0.0.0.0/0 via ${ZT_IP_ONLY}..."
+
+            CURRENT_ROUTES_RAW=$(docker exec ztnet_zerotier curl -s \
+                -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
+                "http://localhost:9993/controller/network/${NETWORK_ID}" 2>/dev/null || true)
+
+            if echo "${CURRENT_ROUTES_RAW}" | grep -q '"routes"'; then
+                if echo "${CURRENT_ROUTES_RAW}" | grep -oP '"target"\s*:\s*"[^"]*"' | grep -q '0\.0\.0\.0/0'; then
+                    log "Managed Route 0.0.0.0/0 уже существует"
+                else
+                    EXISTING_ROUTES=$(echo "${CURRENT_ROUTES_RAW}" | grep -oP '"routes"\s*:\s*\[\K.*?(?=\])' || true)
+
+                    if [[ -z "${EXISTING_ROUTES}" ]]; then
+                        NEW_ROUTES="[{\"target\":\"0.0.0.0/0\",\"via\":\"${ZT_IP_ONLY}\"}]"
+                    else
+                        EXISTING_ROUTES=$(echo "${CURRENT_ROUTES_RAW}" | sed -n 's/.*"routes"\s*:\s*\[/[/p' | sed 's/\].*$/]/' || true)
+                        NEW_ROUTES=$(echo "${EXISTING_ROUTES}" | sed "s/\]$/,{\"target\":\"0.0.0.0/0\",\"via\":\"${ZT_IP_ONLY}\"}\]/" || true)
+                    fi
+
+                    ROUTE_RESPONSE=$(docker exec ztnet_zerotier curl -s -X POST \
+                        -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
+                        -H "Content-Type: application/json" \
+                        -d "{\"routes\": ${NEW_ROUTES}}" \
+                        "http://localhost:9993/controller/network/${NETWORK_ID}" 2>/dev/null || true)
+
+                    if echo "${ROUTE_RESPONSE}" | grep -q '0\.0\.0\.0/0'; then
+                        log "Managed Route 0.0.0.0/0 via ${ZT_IP_ONLY} добавлен"
+                    else
+                        warn "Не удалось добавить Managed Route автоматически"
+                        warn "Добавьте вручную: Destination 0.0.0.0/0, Via ${ZT_IP_ONLY}"
+                    fi
+                fi
+            else
+                warn "Не удалось получить текущие маршруты из Controller API"
+                warn "Добавьте вручную: Destination 0.0.0.0/0, Via ${ZT_IP_ONLY}"
+            fi
+        fi
+    else
+        warn "Managed Route нужно добавить вручную:"
+        warn "  Destination: 0.0.0.0/0, Via: ${SERVER_ZT_IP}"
     fi
 fi
 
@@ -652,6 +862,7 @@ echo -e "  ${BOLD}Сеть:${NC}"
 echo -e "    Основной интерфейс  : ${CYAN}${MAIN_IFACE}${NC}"
 echo -e "    Публичный IP        : ${CYAN}${PUBLIC_IP}${NC}"
 echo -e "    ZT-IP сервера       : ${CYAN}${SERVER_ZT_IP}${NC}"
+echo -e "    ZT Subnet           : ${CYAN}${ZT_SUBNET}${NC}"
 echo -e "    Виртуализация       : ${CYAN}$(systemd-detect-virt 2>/dev/null || echo 'N/A')${NC}"
 echo ""
 echo -e "  ${BOLD}ZTNET:${NC}"
@@ -669,22 +880,17 @@ echo -e "    ${BOLD}Настройки → Приватность → Очист
 echo -e "    Или F12 → Application → Clear site data"
 echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-echo -e "  ${BOLD}Для раздачи интернета через ZT:${NC}"
-echo ""
-echo -e "  1. Создайте сеть в ZTNET Panel"
-echo -e "  2. Добавьте Managed Routes:"
-echo -e "     ${CYAN}Destination: 0.0.0.0/0${NC}"
-echo -e "     ${CYAN}Via: ${SERVER_ZT_IP:-<ZT-IP сервера>}${NC}"
-echo -e "  3. На КАЖДОМ клиенте (включая мобильные):"
+if [[ "${SERVER_ZT_IP}" != "<ZT-IP сервера>" ]]; then
+    echo -e "  ${BOLD}${GREEN}Авто-настройка выполнена:${NC}"
+    echo -e "    ${GREEN}✓${NC} Нода подключена к сети и авторизована"
+    echo -e "    ${GREEN}✓${NC} ZT subnet: ${ZT_SUBNET}"
+    echo -e "    ${GREEN}✓${NC} iptables NAT обновлён"
+    echo -e "    ${GREEN}✓${NC} Managed Route 0.0.0.0/0 via ${SERVER_ZT_IP}"
+    echo ""
+fi
+echo -e "  ${BOLD}На клиентах для доступа в интернет:${NC}"
 echo -e "     ${CYAN}zerotier-cli set <NETWORK_ID> allowDefault=1${NC}"
 echo -e "     ${CYAN}или в настройках ZeroTier включите Allow Default Route${NC}"
-echo ""
-echo -e "  ${YELLOW}Узнать ZT-IP сервера:${NC}"
-ZT_IP_CMD="docker exec ztnet_zerotier zerotier-cli listnetworks | grep -oP '\\d+\\.\\d+\\.\\d+\\.\\d+/\\d+\$'"
-echo -e "    ${CYAN}${ZT_IP_CMD}${NC}"
-echo ""
-echo -e "  ${BOLD}Если NAT не работает после перезапуска:${NC}"
-echo -e "    ${CYAN}${INSTALL_DIR}/zt-nat-setup.sh${NC}"
 echo ""
 echo -e "  ${BOLD}Полезные команды:${NC}"
 echo -e "    Статус       : ${CYAN}docker compose -f ${INSTALL_DIR}/docker-compose.yml ps${NC}"
