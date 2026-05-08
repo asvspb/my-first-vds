@@ -126,7 +126,8 @@ sep; info "Шаг 1/8 - Обновление системы"
 
 rm -rf /var/lib/apt/lists/* || true
 apt-get update -qq
-apt-get install -y -qq curl wget ca-certificates gnupg lsb-release openssl iptables-persistent ufw
+apt-get install -y -qq curl wget ca-certificates gnupg lsb-release openssl iptables-persistent
+apt-get install -y -qq ufw 2>/dev/null || warn "UFW не установлен: конфликт с iptables-persistent (пропускаем)"
 log "Система обновлена, iptables-persistent установлен"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
