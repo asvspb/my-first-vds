@@ -208,15 +208,15 @@ iptables -C FORWARD -s "${NEW_SUBNET}" -j ACCEPT 2>/dev/null || \
 iptables -C FORWARD -d "${NEW_SUBNET}" -j ACCEPT 2>/dev/null || \
     iptables -I FORWARD 2 -d "${NEW_SUBNET}" -j ACCEPT
 
-# ZT-интерфейс
-ZT_IFACE=$(ip -o link show | grep -oP 'zt[a-z0-9]+' | head -1 || true)
-if [[ -n "${ZT_IFACE}" ]]; then
+# Все ZT-интерфейсы
+while IFS= read -r ZT_IFACE; do
+    [[ -z "${ZT_IFACE}" ]] && continue
     iptables -C FORWARD -i "${ZT_IFACE}" -o "${MAIN_IFACE}" -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i "${ZT_IFACE}" -o "${MAIN_IFACE}" -j ACCEPT
     iptables -C FORWARD -i "${MAIN_IFACE}" -o "${ZT_IFACE}" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i "${MAIN_IFACE}" -o "${ZT_IFACE}" -m state --state RELATED,ESTABLISHED -j ACCEPT
     log "FORWARD для ${ZT_IFACE} настроен"
-fi
+done < <(ip -o link show | grep -oP 'zt[a-z0-9]+' || true)
 
 # Persist
 netfilter-persistent save >/dev/null 2>&1 || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
@@ -319,14 +319,14 @@ for SUB in "${SUBNETS[@]}"; do
     fi
 done
 
-ZT_IFACE=$(ip -o link show | grep -oP 'zt[a-z0-9]+' | head -1 || true)
-if [ -n "$ZT_IFACE" ]; then
+while IFS= read -r ZT_IFACE; do
+    [ -z "$ZT_IFACE" ] && continue
     echo "  ZT interface: $ZT_IFACE"
     iptables -C FORWARD -i "$ZT_IFACE" -o "$MAIN_IFACE" -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i "$ZT_IFACE" -o "$MAIN_IFACE" -j ACCEPT
     iptables -C FORWARD -i "$MAIN_IFACE" -o "$ZT_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i "$MAIN_IFACE" -o "$ZT_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
-fi
+done < <(ip -o link show | grep -oP 'zt[a-z0-9]+' || true)
 
 iptables -t nat -C POSTROUTING -s "${DOCKER_BRIDGE_SUBNET}" -o "$MAIN_IFACE" -j MASQUERADE 2>/dev/null || \
     iptables -t nat -A POSTROUTING -s "${DOCKER_BRIDGE_SUBNET}" -o "$MAIN_IFACE" -j MASQUERADE
