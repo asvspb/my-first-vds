@@ -448,10 +448,11 @@ try:
         if not auth: flags.append('NOT_AUTH')
         if not has_id and not is_controller: flags.append('NO_IDENTITY')
         if vrev == -1 and auth and not is_controller: flags.append('NEVER_CONNECTED')
+        if vrev == 0 and auth and has_id and not is_controller: flags.append('CONFIG_STUCK')
         if is_controller: flags.append('CONTROLLER')
 
         flag_str = ' '.join(flags)
-        if 'NOT_AUTH' in flags or 'NO_IDENTITY' in flags:
+        if 'NOT_AUTH' in flags or 'NO_IDENTITY' in flags or 'CONFIG_STUCK' in flags:
             color = '\033[0;31m'
         elif 'NEVER_CONNECTED' in flags:
             color = '\033[1;33m'
@@ -462,6 +463,33 @@ try:
 except Exception as e:
     print(f'  \033[0;31mОшибка чтения: {e}\033[0m')
 " 2>/dev/null || warn "  Не удалось получить список членов"
+
+        STUCK_MEMBERS=$(controller_api GET "/controller/network/${NWID}/member" | python3 -c "
+import sys, json, urllib.request
+token = '${AUTHTOKEN}'
+nwid = '${NWID}'
+zt_addr = '${ZT_ADDR}'
+raw = json.load(sys.stdin)
+for addr in raw:
+    if addr == zt_addr: continue
+    try:
+        req = urllib.request.Request(f'http://localhost:9993/controller/network/{nwid}/member/{addr}', headers={'X-ZT1-Auth': token})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            m = json.loads(resp.read())
+        if m.get('authorized') and m.get('identity') and m.get('vRev', -1) == 0:
+            print(addr)
+    except: pass
+" 2>/dev/null || true)
+        for STUCK_ADDR in ${STUCK_MEMBERS}; do
+            fail "Член ${STUCK_ADDR}: vRev=0 — конфиг сети не доставлен (контроллер крашился при подключении)"
+            tip "Принудительное обновление: deauth → reauth через Controller API"
+            if ask_fix; then
+                controller_api POST "/controller/network/${NWID}/member/${STUCK_ADDR}" '{"authorized":false}' >/dev/null 2>&1
+                sleep 1
+                controller_api POST "/controller/network/${NWID}/member/${STUCK_ADDR}" '{"authorized":true}' >/dev/null 2>&1
+                log "Конфиг для ${STUCK_ADDR} принудительно обновлён"
+            fi
+        done
     done
 else
     warn "Нет доступа к Controller API — пропускаю проверку членов"

@@ -479,6 +479,20 @@ else
     err "  ZeroTier не отвечает в контейнере"
 fi
 
+info "Ожидание ONLINE статуса контроллера..."
+for i in $(seq 1 12); do
+    ZT_STATUS=$(docker exec ztnet_zerotier zerotier-cli info 2>/dev/null | awk '{for(j=1;j<=NF;j++) if($j~/^(ONLINE|OFFLINE|TUNNELED)$/) print $j}')
+    if [[ "${ZT_STATUS}" == "ONLINE" || "${ZT_STATUS}" == "TUNNELED" ]]; then
+        log "Контроллер ${ZT_STATUS} — готов к подключению клиентов"
+        break
+    fi
+    if [[ "$i" -eq 12 ]]; then
+        warn "Контроллер не перешёл в ONLINE за 60 сек (статус: ${ZT_STATUS:-?})"
+        warn "Клиенты могут не получить конфиг сети — запустите диагностику позже"
+    fi
+    sleep 5
+done
+
 ZT_AUTHTOKEN=$(docker exec ztnet_zerotier cat /var/lib/zerotier-one/authtoken.secret 2>/dev/null | tr -d '[:space:]' || true)
 if [[ -n "${ZT_AUTHTOKEN}" ]]; then
     log "ZT authtoken.secret получен (для Controller API)"
@@ -685,6 +699,24 @@ else
         warn "ZT-IP не получен за отведённое время."
         warn "Проверьте позже: docker exec ztnet_zerotier zerotier-cli listnetworks"
         SERVER_ZT_IP="<ZT-IP сервера>"
+    fi
+
+    # ── Верификация доставки конфига (vRev > 0) ───────────────────────────────
+    if [[ -n "${ZT_AUTHTOKEN}" && -n "${ZT_ADDR}" ]]; then
+        VREV=$(curl -s -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
+            "http://localhost:9993/controller/network/${NETWORK_ID}/member/${ZT_ADDR}" 2>/dev/null \
+            | python3 -c "import sys,json; print(json.load(sys.stdin).get('vRev',-1))" 2>/dev/null || echo "-1")
+        if [[ "${VREV}" -le 0 ]]; then
+            warn "vRev=${VREV} — конфиг сети не доставлен, принудительно обновляем..."
+            curl -s -X POST -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" -H "Content-Type: application/json" \
+                -d '{"authorized":false}' \
+                "http://localhost:9993/controller/network/${NETWORK_ID}/member/${ZT_ADDR}" >/dev/null 2>&1
+            sleep 1
+            curl -s -X POST -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" -H "Content-Type: application/json" \
+                -d '{"authorized":true}' \
+                "http://localhost:9993/controller/network/${NETWORK_ID}/member/${ZT_ADDR}" >/dev/null 2>&1
+            log "Конфиг обновлён (deauth→reauth)"
+        fi
     fi
 
     # ── Динамическое определение ZT_SUBNET ────────────────────────────────────
