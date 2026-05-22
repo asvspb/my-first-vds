@@ -74,9 +74,12 @@ sep; echo ""
 if systemctl is-active --quiet zerotier-one 2>/dev/null; then
     log "Останавливаем хостовой zerotier-one..."
     systemctl stop zerotier-one
-    systemctl disable zerotier-one 2>/dev/null || true
-    log "  zerotier-one остановлен"
 fi
+systemctl disable zerotier-one 2>/dev/null || true
+systemctl unmask zerotier-one 2>/dev/null || true
+pkill -9 -x zerotier-one 2>/dev/null || true
+sleep 1
+log "  zerotier-one остановлен, отключён и размаскирован"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║  4. iptables NAT правила для ZT
@@ -85,26 +88,32 @@ sep; echo ""
 log "Удаляем iptables правила ZT..."
 
 ZT_SUBNET=$(grep -oP '^ZT_SUBNET=\K.*' "${INSTALL_DIR}/.env.info" 2>/dev/null || echo "10.121.15.0/24")
+ZT_SUBNETS=$(grep -oP '^ZT_SUBNETS=\K.*' "${INSTALL_DIR}/.env.info" 2>/dev/null || true)
 DOCKER_BRIDGE_SUBNET=$(grep -oP '^DOCKER_BRIDGE_SUBNET=\K.*' "${INSTALL_DIR}/.env.info" 2>/dev/null || echo "172.31.255.0/29")
 MAIN_IFACE=$(grep -oP '^MAIN_IFACE=\K.*' "${INSTALL_DIR}/.env.info" 2>/dev/null || true)
 IS_OPENVZ=$(grep -oP '^IS_OPENVZ=\K.*' "${INSTALL_DIR}/.env.info" 2>/dev/null || echo "false")
 SERVER_IP=$(grep -oP '^PUBLIC_IP=\K.*' "${INSTALL_DIR}/.env.info" 2>/dev/null || true)
 
-log "  ZT_SUBNET=${ZT_SUBNET}, DOCKER_BRIDGE=${DOCKER_BRIDGE_SUBNET}"
+ALL_ZT_SUBNETS="${ZT_SUBNETS:-${ZT_SUBNET}}"
+log "  ZT subnets: ${ALL_ZT_SUBNETS}, DOCKER_BRIDGE: ${DOCKER_BRIDGE_SUBNET}"
 
-# NAT POSTROUTING
-if [[ "${IS_OPENVZ}" == "true" && -n "${MAIN_IFACE}" && -n "${SERVER_IP}" ]]; then
-    iptables -t nat -D POSTROUTING -s "${ZT_SUBNET}" -o "${MAIN_IFACE}" -j SNAT --to-source "${SERVER_IP}" 2>/dev/null || true
-else
-    iptables -t nat -D POSTROUTING -s "${ZT_SUBNET}" -o "${MAIN_IFACE}" -j MASQUERADE 2>/dev/null || true
-fi
-iptables -t nat -D POSTROUTING -s "${ZT_SUBNET}" -j MASQUERADE 2>/dev/null || true
+# NAT POSTROUTING — удаляем для всех ZT subnet'ов
+IFS=',' read -ra SUBNET_ARRAY <<< "${ALL_ZT_SUBNETS}"
+for SUB in "${SUBNET_ARRAY[@]}"; do
+    [[ -z "${SUB}" ]] && continue
+    if [[ "${IS_OPENVZ}" == "true" && -n "${MAIN_IFACE}" && -n "${SERVER_IP}" ]]; then
+        iptables -t nat -D POSTROUTING -s "${SUB}" -o "${MAIN_IFACE}" -j SNAT --to-source "${SERVER_IP}" 2>/dev/null || true
+    else
+        iptables -t nat -D POSTROUTING -s "${SUB}" -o "${MAIN_IFACE}" -j MASQUERADE 2>/dev/null || true
+    fi
+    iptables -t nat -D POSTROUTING -s "${SUB}" -j MASQUERADE 2>/dev/null || true
+    iptables -D FORWARD -s "${SUB}" -j ACCEPT 2>/dev/null || true
+    iptables -D FORWARD -d "${SUB}" -j ACCEPT 2>/dev/null || true
+done
 iptables -t nat -D POSTROUTING -s "${DOCKER_BRIDGE_SUBNET}" -o "${MAIN_IFACE}" -j MASQUERADE 2>/dev/null || true
 iptables -t nat -D POSTROUTING -s "${DOCKER_BRIDGE_SUBNET}" -j MASQUERADE 2>/dev/null || true
 
-# FORWARD
-iptables -D FORWARD -s "${ZT_SUBNET}" -j ACCEPT 2>/dev/null || true
-iptables -D FORWARD -d "${ZT_SUBNET}" -j ACCEPT 2>/dev/null || true
+# FORWARD for Docker bridge
 iptables -D FORWARD -s "${DOCKER_BRIDGE_SUBNET}" -j ACCEPT 2>/dev/null || true
 iptables -D FORWARD -d "${DOCKER_BRIDGE_SUBNET}" -j ACCEPT 2>/dev/null || true
 

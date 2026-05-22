@@ -365,9 +365,77 @@ if [[ -n "${ZT_IP_ONLY}" ]]; then
     echo -e "    ${BOLD}Destination:${NC} 0.0.0.0/0"
     echo -e "    ${BOLD}Via:${NC} ${ZT_IP_ONLY}"
     echo ""
+    echo -e "  ${YELLOW}ВНИМАНИЕ: Via должен быть IP этой ноды в ДАННОЙ сети${NC}"
+    echo -e "  (${ZT_IP_ONLY}), а НЕ IP из другой сети — иначе трафик не пойдёт."
+    echo ""
     echo -e "  ${BOLD}На клиентах:${NC}"
     echo -e "    ${CYAN}zerotier-cli set ${NETWORK_ID} allowDefault=1${NC}"
     echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+fi
+
+# ── Проверка маршрутов сети ──────────────────────────────────────────────────
+if [[ -n "${ZT_AUTHTOKEN}" ]]; then
+    ROUTES_RAW=$(curl -s -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
+        "http://localhost:9993/controller/network/${NETWORK_ID}" 2>/dev/null || true)
+    if [[ -n "${ROUTES_RAW}" ]]; then
+        BAD_ROUTES=$(echo "${ROUTES_RAW}" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    pool_start = d.get('ipAssignmentPools', [{}])[0].get('ipRangeStart', '')
+    pool_end = d.get('ipAssignmentPools', [{}])[0].get('ipRangeEnd', '')
+    subnet_prefix = '.'.join(pool_start.split('.')[:3]) + '.'
+    zt_ip = '${ZT_IP_ONLY:-}'
+    for r in d.get('routes', []):
+        via = r.get('via')
+        target = r.get('target', '')
+        if via and not via.startswith(subnet_prefix):
+            print(f'BAD: route {target} via {via} — gateway NOT in this network subnet ({subnet_prefix}0/24)')
+        if target == '0.0.0.0/0' and not via:
+            print('WARN: default route with via=null will not forward traffic')
+except: pass
+" 2>/dev/null || true)
+        if [[ -n "${BAD_ROUTES}" ]]; then
+            warn "Обнаружены проблемные маршруты в сети ${NETWORK_ID}:"
+            echo "${BAD_ROUTES}" | while read -r line; do warn "  $line"; done
+            warn "Исправьте маршруты в ZTNET Panel — Via должен быть IP в этой сети"
+        fi
+    fi
+fi
+
+# ── Проверка состояния членов сети ──────────────────────────────────────────
+if [[ -n "${ZT_AUTHTOKEN}" ]]; then
+    warn "Проверка членов сети ${NETWORK_ID}..."
+    MEMBERS_RAW=$(curl -s -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
+        "http://localhost:9993/controller/network/${NETWORK_ID}/member" 2>/dev/null || true)
+    if [[ -n "${MEMBERS_RAW}" ]]; then
+        MEMBER_ISSUES=$(echo "${MEMBERS_RAW}" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    members = data if isinstance(data, dict) else {}
+    for addr, m in members.items():
+        name = m.get('name', '?')
+        auth = m.get('authorized', False)
+        has_id = bool(m.get('identity', ''))
+        vrev = m.get('vRev', -1)
+        ips = m.get('ipAssignments', [])
+        flags = []
+        if not auth: flags.append('NOT_AUTHORIZED')
+        if not has_id and addr != '${ZT_ADDR:-}': flags.append('NO_IDENTITY')
+        if vrev == -1 and auth: flags.append('NEVER_CONNECTED')
+        if flags:
+            print(f'{addr} ({name}): ip={ips} {\" \".join(flags)}')
+except: pass
+" 2>/dev/null || true)
+        if [[ -n "${MEMBER_ISSUES}" ]]; then
+            warn "Члены сети с проблемами:"
+            echo "${MEMBER_ISSUES}" | while read -r line; do warn "  $line"; done
+            warn "Члены с NO_IDENTITY/NEVER_CONNECTED должны выполнить: zerotier-cli join ${NETWORK_ID}"
+        else
+            log "Все члены сети в порядке"
+        fi
+    fi
 fi
 echo ""
 echo -e "  ${BOLD}Полезные команды:${NC}"

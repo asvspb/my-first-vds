@@ -147,14 +147,18 @@ fi
 ZT_ADDR=$(zerotier-cli info 2>/dev/null | awk '{print $3}') || true
 log "ZeroTier node address: ${BOLD}${ZT_ADDR:-неизвестен}${NC}"
 
-if ss -tuln | grep -q ':9993 '; then
-    warn "Порт 9993/udp занят (системный zerotier-one)"
-    if systemctl is-active --quiet zerotier-one 2>/dev/null; then
-        info "Останавливаем системный zerotier-one..."
-        systemctl stop zerotier-one
-        systemctl disable zerotier-one
-        log "Системный zerotier-one остановлен"
+if ss -tuln | grep -q ':9993 ' || systemctl is-active --quiet zerotier-one 2>/dev/null || pgrep -x zerotier-one &>/dev/null; then
+    warn "Порт 9993 занят или системный zerotier-one активен — освобождаем"
+    systemctl stop zerotier-one 2>/dev/null || true
+    systemctl disable zerotier-one 2>/dev/null || true
+    pkill -9 -x zerotier-one 2>/dev/null || true
+    sleep 2
+    if ss -tuln | grep -q ':9993 '; then
+        fuser -k 9993/tcp 9993/udp 2>/dev/null || true
+        sleep 2
     fi
+    systemctl mask zerotier-one 2>/dev/null || true
+    log "Системный zerotier-one остановлен, отключён и замаскирован (не займёт порт 9993)"
 fi
 
 # ╔══════════════════════════════════════════════════════════════════════════════
@@ -523,55 +527,56 @@ fi
 cat > "${INSTALL_DIR}/zt-nat-setup.sh" <<'NATEOF'
 #!/bin/bash
 set -euo pipefail
-echo "[zt-nat-setup] Настройка NAT для ZeroTier..."
+echo "[zt-nat-setup] Настройка NAT для всех ZeroTier сетей..."
 
-source /opt/ztnet/.env.info 2>/dev/null || true
+INSTALL_DIR="/opt/ztnet"
+source "${INSTALL_DIR}/.env.info" 2>/dev/null || true
 MAIN_IFACE="${MAIN_IFACE:-$(ip -4 route show default | grep -oP 'dev \K\S+' | head -1)}"
 MAIN_IFACE="${MAIN_IFACE:-$(ip -4 route show default | awk '/dev/{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)}"
 [ -z "$MAIN_IFACE" ] && MAIN_IFACE="venet0"
 
 SERVER_IP="${PUBLIC_IP:-$(curl -s4 --max-time 5 https://ifconfig.me 2>/dev/null || curl -s --max-time 5 https://api.ipify.org 2>/dev/null)}"
 DOCKER_BRIDGE_SUBNET="${DOCKER_BRIDGE_SUBNET:-172.31.255.0/29}"
-ZT_SUBNET="${ZT_SUBNET:-10.121.15.0/24}"
 IS_OPENVZ="${IS_OPENVZ:-false}"
 
 echo "  Main iface  : $MAIN_IFACE"
 echo "  Server IP   : $SERVER_IP"
 echo "  OpenVZ      : $IS_OPENVZ"
-echo "  ZT subnet   : $ZT_SUBNET"
 
-# Хостовые правила FORWARD (ZT -> внешняя сеть)
-iptables -C FORWARD -s "${ZT_SUBNET}" -j ACCEPT 2>/dev/null || \
-    iptables -I FORWARD 1 -s "${ZT_SUBNET}" -j ACCEPT
-iptables -C FORWARD -d "${ZT_SUBNET}" -j ACCEPT 2>/dev/null || \
-    iptables -I FORWARD 2 -d "${ZT_SUBNET}" -j ACCEPT
+IFS=',' read -ra SUBNETS <<< "${ZT_SUBNETS:-${ZT_SUBNET:-10.121.15.0/24}}"
+for SUB in "${SUBNETS[@]}"; do
+    echo "  ZT subnet   : $SUB"
 
-# FORWARD для ZT-интерфейса на хосте (при network_mode=host)
-ZT_IFACE=$(ip -o link show | grep -oP 'zt[a-z0-9]+' | head -1 || true)
-if [ -n "$ZT_IFACE" ]; then
+    iptables -C FORWARD -s "$SUB" -j ACCEPT 2>/dev/null || \
+        iptables -I FORWARD 1 -s "$SUB" -j ACCEPT
+    iptables -C FORWARD -d "$SUB" -j ACCEPT 2>/dev/null || \
+        iptables -I FORWARD 2 -d "$SUB" -j ACCEPT
+
+    if [[ "${IS_OPENVZ}" == "true" ]]; then
+        iptables -t nat -C POSTROUTING -s "$SUB" -o "$MAIN_IFACE" -j SNAT --to-source "$SERVER_IP" 2>/dev/null || \
+            iptables -t nat -A POSTROUTING -s "$SUB" -o "$MAIN_IFACE" -j SNAT --to-source "$SERVER_IP"
+        echo "  SNAT: $SUB -> $MAIN_IFACE"
+    else
+        iptables -t nat -C POSTROUTING -s "$SUB" -o "$MAIN_IFACE" -j MASQUERADE 2>/dev/null || \
+            iptables -t nat -A POSTROUTING -s "$SUB" -o "$MAIN_IFACE" -j MASQUERADE
+        echo "  MASQUERADE: $SUB -> $MAIN_IFACE"
+    fi
+done
+
+while IFS= read -r ZT_IFACE; do
+    [ -z "$ZT_IFACE" ] && continue
     echo "  ZT interface: $ZT_IFACE"
     iptables -C FORWARD -i "$ZT_IFACE" -o "$MAIN_IFACE" -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i "$ZT_IFACE" -o "$MAIN_IFACE" -j ACCEPT
     iptables -C FORWARD -i "$MAIN_IFACE" -o "$ZT_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
         iptables -A FORWARD -i "$MAIN_IFACE" -o "$ZT_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
-fi
+done < <(ip -o link show | grep -oP 'zt[a-z0-9]+' || true)
 
-# NAT (SNAT/MASQUERADE)
-if [[ "${IS_OPENVZ}" == "true" ]]; then
-    iptables -t nat -C POSTROUTING -s "${ZT_SUBNET}" -o "${MAIN_IFACE}" -j SNAT --to-source "${SERVER_IP}" 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -s "${ZT_SUBNET}" -o "${MAIN_IFACE}" -j SNAT --to-source "${SERVER_IP}"
-    echo "[zt-nat-setup] SNAT: ${ZT_SUBNET} -> ${MAIN_IFACE} (src=${SERVER_IP})"
-else
-    iptables -t nat -C POSTROUTING -s "${ZT_SUBNET}" -o "${MAIN_IFACE}" -j MASQUERADE 2>/dev/null || \
-        iptables -t nat -A POSTROUTING -s "${ZT_SUBNET}" -o "${MAIN_IFACE}" -j MASQUERADE
-    echo "[zt-nat-setup] MASQUERADE: ${ZT_SUBNET} -> ${MAIN_IFACE}"
-fi
-
-iptables -t nat -C POSTROUTING -s "${DOCKER_BRIDGE_SUBNET}" -o "${MAIN_IFACE}" -j MASQUERADE 2>/dev/null || \
-    iptables -t nat -A POSTROUTING -s "${DOCKER_BRIDGE_SUBNET}" -o "${MAIN_IFACE}" -j MASQUERADE
+iptables -t nat -C POSTROUTING -s "${DOCKER_BRIDGE_SUBNET}" -o "$MAIN_IFACE" -j MASQUERADE 2>/dev/null || \
+    iptables -t nat -A POSTROUTING -s "${DOCKER_BRIDGE_SUBNET}" -o "$MAIN_IFACE" -j MASQUERADE
 
 netfilter-persistent save >/dev/null 2>&1 || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-echo "[zt-nat-setup] Правила сохранены"
+echo "[zt-nat-setup] Правила сохранены для ${#SUBNETS[@]} сетей"
 NATEOF
 chmod +x "${INSTALL_DIR}/zt-nat-setup.sh"
 log "Скрипт авто-NAT сохранён: ${INSTALL_DIR}/zt-nat-setup.sh"
@@ -755,55 +760,59 @@ EOF
     log ".env.info обновлён (ZT_SUBNET=${ZT_SUBNET})"
 
     # ── Регенерация zt-nat-setup.sh ───────────────────────────────────────────
-    cat > "${INSTALL_DIR}/zt-nat-setup.sh" <<NATEOF2
+    cat > "${INSTALL_DIR}/zt-nat-setup.sh" <<'NATEOF2'
 #!/bin/bash
 set -euo pipefail
-echo "[zt-nat-setup] Настройка NAT для ZeroTier..."
+echo "[zt-nat-setup] Настройка NAT для всех ZeroTier сетей..."
 
-source /opt/ztnet/.env.info 2>/dev/null || true
-MAIN_IFACE="\${MAIN_IFACE:-\$(ip -4 route show default | grep -oP 'dev \\K\\S+' | head -1)}"
-MAIN_IFACE="\${MAIN_IFACE:-\$(ip -4 route show default | awk '/dev/{for(i=1;i<=NF;i++) if(\$i=="dev") print \$(i+1)}' | head -1)}"
-[ -z "\$MAIN_IFACE" ] && MAIN_IFACE="venet0"
+INSTALL_DIR="/opt/ztnet"
+source "${INSTALL_DIR}/.env.info" 2>/dev/null || true
+MAIN_IFACE="${MAIN_IFACE:-$(ip -4 route show default | grep -oP 'dev \K\S+' | head -1)}"
+MAIN_IFACE="${MAIN_IFACE:-$(ip -4 route show default | awk '/dev/{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)}"
+[ -z "$MAIN_IFACE" ] && MAIN_IFACE="venet0"
 
-SERVER_IP="\${PUBLIC_IP:-\$(curl -s4 --max-time 5 https://ifconfig.me 2>/dev/null || curl -s --max-time 5 https://api.ipify.org 2>/dev/null)}"
-DOCKER_BRIDGE_SUBNET="\${DOCKER_BRIDGE_SUBNET:-172.31.255.0/29}"
-ZT_SUBNET="\${ZT_SUBNET:-${ZT_SUBNET}}"
-IS_OPENVZ="\${IS_OPENVZ:-false}"
+SERVER_IP="${PUBLIC_IP:-$(curl -s4 --max-time 5 https://ifconfig.me 2>/dev/null || curl -s --max-time 5 https://api.ipify.org 2>/dev/null)}"
+DOCKER_BRIDGE_SUBNET="${DOCKER_BRIDGE_SUBNET:-172.31.255.0/29}"
+IS_OPENVZ="${IS_OPENVZ:-false}"
 
-echo "  Main iface  : \$MAIN_IFACE"
-echo "  Server IP   : \$SERVER_IP"
-echo "  OpenVZ      : \$IS_OPENVZ"
-echo "  ZT subnet   : \$ZT_SUBNET"
+echo "  Main iface  : $MAIN_IFACE"
+echo "  Server IP   : $SERVER_IP"
+echo "  OpenVZ      : $IS_OPENVZ"
 
-iptables -C FORWARD -s "\${ZT_SUBNET}" -j ACCEPT 2>/dev/null || \\
-    iptables -I FORWARD 1 -s "\${ZT_SUBNET}" -j ACCEPT
-iptables -C FORWARD -d "\${ZT_SUBNET}" -j ACCEPT 2>/dev/null || \\
-    iptables -I FORWARD 2 -d "\${ZT_SUBNET}" -j ACCEPT
+IFS=',' read -ra SUBNETS <<< "${ZT_SUBNETS:-${ZT_SUBNET:-10.121.15.0/24}}"
+for SUB in "${SUBNETS[@]}"; do
+    echo "  ZT subnet   : $SUB"
 
-ZT_IFACE=\$(ip -o link show | grep -oP 'zt[a-z0-9]+' | head -1 || true)
-if [ -n "\$ZT_IFACE" ]; then
-    echo "  ZT interface: \$ZT_IFACE"
-    iptables -C FORWARD -i "\$ZT_IFACE" -o "\$MAIN_IFACE" -j ACCEPT 2>/dev/null || \\
-        iptables -A FORWARD -i "\$ZT_IFACE" -o "\$MAIN_IFACE" -j ACCEPT
-    iptables -C FORWARD -i "\$MAIN_IFACE" -o "\$ZT_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \\
-        iptables -A FORWARD -i "\$MAIN_IFACE" -o "\$ZT_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
-fi
+    iptables -C FORWARD -s "$SUB" -j ACCEPT 2>/dev/null || \
+        iptables -I FORWARD 1 -s "$SUB" -j ACCEPT
+    iptables -C FORWARD -d "$SUB" -j ACCEPT 2>/dev/null || \
+        iptables -I FORWARD 2 -d "$SUB" -j ACCEPT
 
-if [[ "\${IS_OPENVZ}" == "true" ]]; then
-    iptables -t nat -C POSTROUTING -s "\${ZT_SUBNET}" -o "\$MAIN_IFACE" -j SNAT --to-source "\$SERVER_IP" 2>/dev/null || \\
-        iptables -t nat -A POSTROUTING -s "\${ZT_SUBNET}" -o "\$MAIN_IFACE" -j SNAT --to-source "\$SERVER_IP"
-    echo "[zt-nat-setup] SNAT: \${ZT_SUBNET} -> \$MAIN_IFACE (src=\$SERVER_IP)"
-else
-    iptables -t nat -C POSTROUTING -s "\${ZT_SUBNET}" -o "\$MAIN_IFACE" -j MASQUERADE 2>/dev/null || \\
-        iptables -t nat -A POSTROUTING -s "\${ZT_SUBNET}" -o "\$MAIN_IFACE" -j MASQUERADE
-    echo "[zt-nat-setup] MASQUERADE: \${ZT_SUBNET} -> \$MAIN_IFACE"
-fi
+    if [[ "${IS_OPENVZ}" == "true" ]]; then
+        iptables -t nat -C POSTROUTING -s "$SUB" -o "$MAIN_IFACE" -j SNAT --to-source "$SERVER_IP" 2>/dev/null || \
+            iptables -t nat -A POSTROUTING -s "$SUB" -o "$MAIN_IFACE" -j SNAT --to-source "$SERVER_IP"
+        echo "  SNAT: $SUB -> $MAIN_IFACE"
+    else
+        iptables -t nat -C POSTROUTING -s "$SUB" -o "$MAIN_IFACE" -j MASQUERADE 2>/dev/null || \
+            iptables -t nat -A POSTROUTING -s "$SUB" -o "$MAIN_IFACE" -j MASQUERADE
+        echo "  MASQUERADE: $SUB -> $MAIN_IFACE"
+    fi
+done
 
-iptables -t nat -C POSTROUTING -s "\${DOCKER_BRIDGE_SUBNET}" -o "\$MAIN_IFACE" -j MASQUERADE 2>/dev/null || \\
-    iptables -t nat -A POSTROUTING -s "\${DOCKER_BRIDGE_SUBNET}" -o "\$MAIN_IFACE" -j MASQUERADE
+while IFS= read -r ZT_IFACE; do
+    [ -z "$ZT_IFACE" ] && continue
+    echo "  ZT interface: $ZT_IFACE"
+    iptables -C FORWARD -i "$ZT_IFACE" -o "$MAIN_IFACE" -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -i "$ZT_IFACE" -o "$MAIN_IFACE" -j ACCEPT
+    iptables -C FORWARD -i "$MAIN_IFACE" -o "$ZT_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+        iptables -A FORWARD -i "$MAIN_IFACE" -o "$ZT_IFACE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+done < <(ip -o link show | grep -oP 'zt[a-z0-9]+' || true)
+
+iptables -t nat -C POSTROUTING -s "${DOCKER_BRIDGE_SUBNET}" -o "$MAIN_IFACE" -j MASQUERADE 2>/dev/null || \
+    iptables -t nat -A POSTROUTING -s "${DOCKER_BRIDGE_SUBNET}" -o "$MAIN_IFACE" -j MASQUERADE
 
 netfilter-persistent save >/dev/null 2>&1 || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-echo "[zt-nat-setup] Правила сохранены"
+echo "[zt-nat-setup] Правила сохранены для ${#SUBNETS[@]} сетей"
 NATEOF2
     chmod +x "${INSTALL_DIR}/zt-nat-setup.sh"
     log "zt-nat-setup.sh перегенерирован (ZT_SUBNET=${ZT_SUBNET})"
@@ -821,10 +830,102 @@ NATEOF2
             echo -e "    ${CYAN}${NEXTAUTH_URL}${NC} → Сеть → Managed Routes → Add"
             echo -e "    ${BOLD}Destination:${NC} 0.0.0.0/0"
             echo -e "    ${BOLD}Via:${NC} ${ZT_IP_ONLY}"
+            echo ""
+            echo -e "  ${YELLOW}ВНИМАНИЕ: Via должен быть IP этой ноды в ДАННОЙ сети${NC}"
+            echo -e "  (${ZT_IP_ONLY}), а НЕ IP из другой сети — иначе трафик не пойдёт."
             echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             echo ""
         fi
     fi
+
+    # ── Проверка маршрутов сети ─────────────────────────────────────────────
+    if [[ -n "${ZT_AUTHTOKEN}" ]]; then
+        ROUTES_RAW=$(curl -s -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" \
+            "http://localhost:9993/controller/network/${NETWORK_ID}" 2>/dev/null || true)
+        if [[ -n "${ROUTES_RAW}" ]]; then
+            BAD_ROUTES=$(echo "${ROUTES_RAW}" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    zt_ip = '${ZT_IP_ONLY:-}'
+    for r in d.get('routes', []):
+        via = r.get('via')
+        target = r.get('target', '')
+        if via and via != zt_ip:
+            print(f'WARN: route {target} via {via} — gateway IP not in this network')
+        if target == '0.0.0.0/0' and not via:
+            print('WARN: default route with via=null will not forward traffic')
+except: pass
+" 2>/dev/null || true)
+            if [[ -n "${BAD_ROUTES}" ]]; then
+                warn "Обнаружены потенциально проблемные маршруты:"
+                echo "${BAD_ROUTES}" | while read -r line; do warn "  $line"; done
+            fi
+        fi
+    fi
+fi
+
+# ╔══════════════════════════════════════════════════════════════════════════════
+# ║  ВЕРИФИКАЦИЯ ПЕРСИСТЕНТНОСТИ
+# ╚══════════════════════════════════════════════════════════════════════════════
+echo ""
+info "Проверка персистентности настроек..."
+
+PERSIST_OK=true
+
+if [[ -f /etc/iptables/rules.v4 ]]; then
+    NAT_IN_SAVED=$(grep -c "POSTROUTING.*${ZT_SUBNET}" /etc/iptables/rules.v4 2>/dev/null || echo "0")
+    FWD_IN_SAVED=$(grep -c "FORWARD.*${ZT_SUBNET}" /etc/iptables/rules.v4 2>/dev/null || echo "0")
+    if [[ "${NAT_IN_SAVED}" -gt 0 && "${FWD_IN_SAVED}" -gt 0 ]]; then
+        log "iptables: NAT и FORWARD для ${ZT_SUBNET} сохранены в /etc/iptables/rules.v4"
+    else
+        warn "iptables: правила для ${ZT_SUBNET} отсутствуют в rules.v4 — пересохраняем..."
+        netfilter-persistent save >/dev/null 2>&1 || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+        PERSIST_OK=false
+    fi
+else
+    warn "Файл /etc/iptables/rules.v4 не найден — сохраняем..."
+    mkdir -p /etc/iptables
+    iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+    PERSIST_OK=false
+fi
+
+if systemctl is-enabled zt-nat-setup.service >/dev/null 2>&1; then
+    log "systemd: zt-nat-setup.service включён (правила восстановятся при загрузке)"
+else
+    warn "systemd: zt-nat-setup.service НЕ включён — NAT может не восстановиться"
+    PERSIST_OK=false
+fi
+
+if [[ -f /etc/sysctl.d/99-zt-forward.conf ]]; then
+    log "sysctl: ip_forward сохранён в /etc/sysctl.d/99-zt-forward.conf"
+else
+    warn "sysctl: /etc/sysctl.d/99-zt-forward.conf не найден"
+    PERSIST_OK=false
+fi
+
+if readlink /etc/systemd/system/zerotier-one.service 2>/dev/null | grep -q '/dev/null'; then
+    log "zerotier-one: замаскирован (не конфликтует с Docker)"
+else
+    warn "zerotier-one: НЕ замаскирован — может перехватить порт 9993"
+    PERSIST_OK=false
+fi
+
+for SVC in ztnet ztnet_postgres ztnet_zerotier; do
+    RP=$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "${SVC}" 2>/dev/null || echo "?")
+    if [[ "${RP}" == "unless-stopped" || "${RP}" == "always" ]]; then
+        log "Docker: ${SVC} restart policy = ${RP}"
+    else
+        warn "Docker: ${SVC} restart policy = ${RP} (рекомендуется unless-stopped)"
+        PERSIST_OK=false
+    fi
+done
+
+if $PERSIST_OK; then
+    log "Персистентность: ВСЕ настройки переживут перезагрузку"
+else
+    warn "Персистентность: некоторые настройки могут не пережить перезагрузку"
+    tip "Запустите диагностику: sudo bash ${INSTALL_DIR}/zt-diagnose.sh"
 fi
 
 # ╔══════════════════════════════════════════════════════════════════════════════

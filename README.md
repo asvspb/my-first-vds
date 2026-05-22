@@ -121,6 +121,31 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 - Удаление `/opt/ztnet`, systemd сервиса `zt-nat-setup.service`, `/etc/sysctl.d/99-zt-forward.conf`
 - Напоминание об очистке браузера перед повторной установкой
 
+### `zt-diagnose.sh` — Диагностика и устранение проблем
+
+Интерактивная диагностика всех компонентов ZeroTier + ZTNET с автоматическим выявлением проблем и предложением исправлений:
+
+| Проверка | Что ищет |
+|----------|----------|
+| Порт 9993 | Конфликт системного zerotier-one с Docker-контейнером |
+| Контейнеры | Статус, health, crash loop (ztnet, postgres, zerotier) |
+| ZT демон | ONLINE / TUNNELED / OFFLINE, версия |
+| TUN/TAP | Доступность `/dev/net/tun` на хосте и в контейнере |
+| Сети/маршруты | NOT_FOUND сети, сломанные Managed Routes (via не в своей подсети) |
+| Члены сетей | NOT_AUTH, NO_IDENTITY, NEVER_CONNECTED |
+| Пир-соединения | LEAF/PLANET пири, TUNNELED режим |
+| NAT/Firewall | IP forwarding, SNAT/MASQUERADE для всех подсетей, UFW |
+| Конфиг .env.info | Расхождение реальных подсетей с сохранёнными |
+| Связность | Self-ping, ping до авторизованных членов |
+
+```bash
+# Только диагностика
+sudo bash zt-diagnose.sh
+
+# Диагностика + интерактивное исправление (спрашивает подтверждение)
+sudo bash zt-diagnose.sh --fix
+```
+
 ### `clean-sys.sh` — Системная очистка Ubuntu-сервера
 
 Мощный скрипт для высвобождения дискового пространства на сервере. Аналог desktop-версии, адаптированный для серверного окружения. Все параметры настраиваются через переменные окружения.
@@ -176,6 +201,11 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 **ZeroTier:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/zt-install.sh | sudo bash
+```
+
+**ZeroTier Diagnose:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/zt-diagnose.sh | sudo bash
 ```
 
 **ZeroTier Cleanup:**
