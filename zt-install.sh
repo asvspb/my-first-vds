@@ -617,6 +617,123 @@ systemctl daemon-reload
 systemctl enable zt-nat-setup.service
 log "systemd сервис zt-nat-setup.service создан и включён"
 
+# ── Watchdog — автоконтроль и восстановление ZT ──────────────────────────────
+cat > "${INSTALL_DIR}/zt-watchdog.sh" <<'WDEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+INSTALL_DIR="/opt/ztnet"
+LOG_FILE="${INSTALL_DIR}/zt-watchdog.log"
+MAX_LOG_SIZE=$((512 * 1024))
+CONTAINER="ztnet_zerotier"
+CHECK_WINDOW="5m"
+MAX_RESTARTS_PER_HOUR=3
+STATE_FILE="/tmp/zt-watchdog-restarts"
+ts() { date '+%Y-%m-%d %H:%M:%S'; }
+log_w() { echo "[$(ts)] [WATCHDOG] $*" | tee -a "${LOG_FILE}"; }
+rotate_log() { [[ -f "${LOG_FILE}" ]] && [[ $(stat -c%s "${LOG_FILE}" 2>/dev/null || echo 0) -gt ${MAX_LOG_SIZE} ]] && tail -200 "${LOG_FILE}" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "${LOG_FILE}"; }
+count_recent_restarts() {
+    [[ ! -f "${STATE_FILE}" ]] && echo 0 && return
+    local cutoff=$(date -d '1 hour ago' '+%s' 2>/dev/null || date -v-1H '+%s' 2>/dev/null || echo 0)
+    local count=0
+    while IFS= read -r line; do
+        local e=$(date -d "${line}" '+%s' 2>/dev/null || echo 0)
+        [[ "${e}" -ge "${cutoff}" ]] && count=$((count + 1))
+    done < "${STATE_FILE}"
+    echo "${count}"
+}
+record_restart() {
+    echo "$(ts)" >> "${STATE_FILE}"
+    local cutoff=$(date -d '1 hour ago' '+%s' 2>/dev/null || date -v-1H '+%s' 2>/dev/null || echo 0)
+    local tmp=$(mktemp)
+    while IFS= read -r line; do
+        local e=$(date -d "${line}" '+%s' 2>/dev/null || echo 0)
+        [[ "${e}" -ge "${cutoff}" ]] && echo "${line}" >> "${tmp}"
+    done < "${STATE_FILE}"
+    mv "${tmp}" "${STATE_FILE}"
+}
+restart_container() {
+    local recent=$(count_recent_restarts)
+    if [[ "${recent}" -ge "${MAX_RESTARTS_PER_HOUR}" ]]; then
+        log_w "STOP: ${recent} рестартов за час (лимит ${MAX_RESTARTS_PER_HOUR})"
+        return 1
+    fi
+    log_w "Рестарт #$((recent+1))/${MAX_RESTARTS_PER_HOUR}"
+    record_restart
+    docker restart "${CONTAINER}" 2>&1 | while read -r line; do log_w "  docker: ${line}"; done
+    log_w "Ожидаем ONLINE..."
+    for i in $(seq 1 12); do
+        sleep 5
+        local info=$(docker exec "${CONTAINER}" zerotier-cli info 2>/dev/null || true)
+        if echo "${info}" | grep -qE 'ONLINE|TUNNELED'; then log_w "OK: ${info}"; return 0; fi
+        log_w "  ($((i*5))с): ${info:-нет ответа}"
+    done
+    log_w "ERROR: не ONLINE за 60с"
+    return 1
+}
+rotate_log
+BIND_ERRORS=$(docker logs "${CONTAINER}" --since "${CHECK_WINDOW}" 2>&1 | grep -cE "Could not bind|fatal error.*9993" 2>/dev/null || true)
+BIND_ERRORS="${BIND_ERRORS:-0}"
+ZT_INFO=$(docker exec "${CONTAINER}" zerotier-cli info 2>/dev/null || true)
+ZT_STATUS=$(echo "${ZT_INFO}" | awk '{for(i=1;i<=NF;i++) if($i~/^(ONLINE|OFFLINE|TUNNELED|DEGRADED)$/) print $i}' | head -1)
+CONTAINER_RUNNING=$(docker inspect --format '{{.State.Running}}' "${CONTAINER}" 2>/dev/null || echo "false")
+PROBLEM=false
+[[ "${CONTAINER_RUNNING}" != "true" ]] && log_w "PROBLEM: контейнер не запущен" && PROBLEM=true
+[[ "${BIND_ERRORS}" -gt 3 ]] && log_w "PROBLEM: ${BIND_ERRORS} ошибок биндинга за ${CHECK_WINDOW}" && PROBLEM=true
+[[ "${ZT_STATUS}" == "OFFLINE" || -z "${ZT_STATUS}" ]] && log_w "PROBLEM: ZT статус=${ZT_STATUS:-NO_RESPONSE}" && PROBLEM=true
+if ! docker exec "${CONTAINER}" pgrep -x zerotier-one >/dev/null 2>&1; then
+    log_w "PROBLEM: процесс zerotier-one не найден"; PROBLEM=true
+fi
+if $PROBLEM; then
+    log_w "Восстановление..."
+    systemctl is-active --quiet zerotier-one 2>/dev/null && systemctl stop zerotier-one 2>/dev/null || true
+    systemctl mask zerotier-one 2>/dev/null || true
+    pkill -9 -x zerotier-one 2>/dev/null || true
+    sleep 2
+    for pid in $(ss -tlnup 2>/dev/null | grep ':9993 ' | grep -oP 'pid=\K\d+' || true); do
+        local cpid=$(docker inspect --format '{{.State.Pid}}' "${CONTAINER}" 2>/dev/null || echo "")
+        [[ "${pid}" == "${cpid}" ]] && continue
+        log_w "Убиваем конфликт PID ${pid}"
+        kill -9 "${pid}" 2>/dev/null || true
+    done
+    sleep 2
+    restart_container && log_w "Восстановлено" || log_w "Восстановление с ошибками"
+else
+    [[ "${BIND_ERRORS}" -gt 0 ]] && log_w "OK (${BIND_ERRORS} ошибок, но ZT ${ZT_STATUS})"
+fi
+WDEOF
+chmod +x "${INSTALL_DIR}/zt-watchdog.sh"
+
+cat > /etc/systemd/system/zt-watchdog.service <<WDSVEOF
+[Unit]
+Description=ZeroTier Watchdog
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=${INSTALL_DIR}/zt-watchdog.sh
+IOSchedulingClass=idle
+CPUWeight=1
+WDSVEOF
+
+cat > /etc/systemd/system/zt-watchdog.timer <<WDTEOF
+[Unit]
+Description=ZeroTier Watchdog Timer
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+WDTEOF
+
+systemctl daemon-reload
+systemctl enable zt-watchdog.timer
+systemctl start zt-watchdog.timer
+log "Watchdog zt-watchdog.timer включён (проверка каждые 2 мин)"
+
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║  ШАГ 8/8 — Ожидание создания сети + авто-подключение
 # ╚══════════════════════════════════════════════════════════════════════════════
