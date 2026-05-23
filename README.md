@@ -1,6 +1,6 @@
 # Настройка Ubuntu 24.04 для разработки
 
-Версия: **1.1**
+Версия: **1.2**
 
 Набор скриптов для быстрой инициализации и управления VDS на Ubuntu 24.04.
 
@@ -121,6 +121,37 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 - Удаление `/opt/ztnet`, systemd сервиса `zt-nat-setup.service`, `/etc/sysctl.d/99-zt-forward.conf`
 - Напоминание об очистке браузера перед повторной установкой
 
+### `zt-add-network.sh` — Добавление новой ZeroTier сети
+
+Добавление дополнительной сети к существующей установке ZTNET без переустановки:
+
+1. **Проверка** — контейнеры работают, `.env.info` на месте
+2. **Join сети** — `zerotier-cli join <NETWORK_ID>`
+3. **Само-авторизация** — через Controller API (ручная авторизация не нужна)
+4. **Ожидание ZT-IP** — до 150 сек
+5. **Определение subnet** — из Controller API
+6. **Настройка NAT** — iptables FORWARD + POSTROUTING для нового subnet
+7. **Обновление конфигурации** — `.env.info` и `zt-nat-setup.sh` для всех сетей
+8. **Проверка маршрутов** — валидация Managed Routes, предупреждение о проблемах
+
+**Поддержка нескольких сетей**: все сети хранятся в `ZT_SUBNETS` и `NETWORK_IDS` через запятую.
+
+### `zt-watchdog.sh` — Автоматический мониторинг и восстановление ZeroTier
+
+Автоматический watchdog для поддержания работоспособности ZeroTier:
+
+| Проверка | Действие |
+|----------|----------|
+| Контейнер не запущен | Запуск контейнера |
+| Ошибки "Could not bind" >3 за 5 мин | Рестарт контейнера |
+| ZT статус OFFLINE | Рестарт контейнера |
+| Нет процесса zerotier-one | Рестарт контейнера |
+| Порт 9993 занят чужим процессом | Убить процесс |
+| Системный zerotier-one активен | Остановить и замаскировать |
+| Отсутствуют NAT правила | Восстановить iptables |
+
+**Защита от частых рестартов**: лимит 3 рестарта в час.
+
 ### `zt-diagnose.sh` — Диагностика и устранение проблем
 
 Интерактивная диагностика всех компонентов ZeroTier + ZTNET с автоматическим выявлением проблем и предложением исправлений:
@@ -213,6 +244,16 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/zt-cleanup.sh | sudo bash
 ```
 
+**ZeroTier Добавить сеть:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/zt-add-network.sh | sudo bash
+```
+
+**ZeroTier Watchdog (автозапуск):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/zt-watchdog.sh | sudo tee /etc/cron.hourly/zt-watchdog > /dev/null && sudo chmod +x /etc/cron.hourly/zt-watchdog
+```
+
 **Системная очистка:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/clean-sys.sh | sudo bash
@@ -223,6 +264,10 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 - Ubuntu 24.04 (LTS)
 - Доступ к интернету
 - Права суперпользователя (sudo)
+
+## Документация
+
+- [docs/zt-auto-join-plan.md](docs/zt-auto-join-plan.md) — технические детали реализации Auto-Join
 
 ## Лицензия
 

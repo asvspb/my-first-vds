@@ -9,7 +9,7 @@ ok()   { echo -e "${GREEN}✔${NC}  $*"; }
 warn() { echo -e "${YELLOW}⚠${NC}  $*"; }
 die()  { echo -e "${RED}✘  Ошибка: $*${NC}" >&2; exit 1; }
 
-TOTAL=13
+TOTAL=12
 step() { echo -e "\n${CYAN}[$1/$TOTAL]${NC} $2"; }
 
 echo "======================================================="
