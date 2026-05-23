@@ -157,6 +157,39 @@ if ! docker exec "${CONTAINER}" pgrep -x zerotier-one >/dev/null 2>&1; then
     PROBLEM=true
 fi
 
+if [[ -f "${INSTALL_DIR}/.env.info" ]]; then
+    source "${INSTALL_DIR}/.env.info" 2>/dev/null || true
+fi
+
+ALL_SUBNETS="${ZT_SUBNETS:-${ZT_SUBNET:-}}"
+RUNTIME_SUBNETS=$(docker exec "${CONTAINER}" zerotier-cli -j listnetworks 2>/dev/null | python3 -c "
+import sys, json
+for n in json.load(sys.stdin):
+    for a in n.get('assignedAddresses', []):
+        parts = a.split('/')
+        if len(parts) == 2:
+            import ipaddress
+            net = ipaddress.ip_network(f'{parts[0]}/{parts[1]}', strict=False)
+            print(str(net))
+" 2>/dev/null || true)
+
+for SUB in ${RUNTIME_SUBNETS} ${ALL_SUBNETS//,/ }; do
+    [[ -z "${SUB}" ]] && continue
+    if ! iptables -t nat -L POSTROUTING -n 2>/dev/null | grep -q "${SUB}"; then
+        log_w "ПРОБЛЕМА: NAT для ${SUB} отсутствует — восстанавливаем"
+        MAIN_IF="${MAIN_IFACE:-$(ip -4 route show default | awk '/dev/{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)}"
+        iptables -C FORWARD -s "${SUB}" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s "${SUB}" -j ACCEPT
+        iptables -C FORWARD -d "${SUB}" -j ACCEPT 2>/dev/null || iptables -I FORWARD 2 -d "${SUB}" -j ACCEPT
+        if [[ "${IS_OPENVZ:-false}" == "true" && -n "${PUBLIC_IP:-}" ]]; then
+            iptables -t nat -A POSTROUTING -s "${SUB}" -o "${MAIN_IF}" -j SNAT --to-source "${PUBLIC_IP}" 2>/dev/null || true
+        else
+            iptables -t nat -A POSTROUTING -s "${SUB}" -o "${MAIN_IF}" -j MASQUERADE 2>/dev/null || true
+        fi
+        iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+        log_w "NAT для ${SUB} восстановлен"
+    fi
+done
+
 if $PROBLEM; then
     log_w "Начинаем восстановление..."
     kill_system_zt
@@ -168,7 +201,6 @@ if $PROBLEM; then
         exit 1
     fi
 else
-    if [[ "${BIND_ERRORS}" -gt 0 ]]; then
-        log_w "OK (${BIND_ERRORS} ошибок биндинга, но ZT ${ZT_STATUS})"
-    fi
+    NAT_COUNT=$(iptables -t nat -L POSTROUTING -n 2>/dev/null | grep -cE "10\.121\." || echo "0")
+    log_w "OK — ZT ${ZT_STATUS}, ${BIND_ERRORS} bind errors, ${NAT_COUNT} NAT rules"
 fi
