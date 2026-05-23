@@ -10,8 +10,9 @@
 #    4. Интерактивный режим исправления (--fix)
 #
 #  Использование:
-#    sudo bash zt-diagnose.sh          # только диагностика
-#    sudo bash zt-diagnose.sh --fix    # диагностика + интерактивное исправление
+#    sudo bash zt-diagnose.sh              # только диагностика
+#    sudo bash zt-diagnose.sh --fix        # диагностика + интерактивное исправление
+#    sudo bash zt-diagnose.sh --fix --yes  # диагностика + автоисправление без подтверждения
 # =============================================================================
 
 set -euo pipefail
@@ -30,7 +31,11 @@ header() { echo -e "\n${BOLD}${CYAN}[$1]${NC} ${BOLD}$2${NC}"; }
 [[ $EUID -ne 0 ]] && { echo "Запустите от root: sudo bash $0"; exit 1; }
 
 FIX_MODE=false
-[[ "${1:-}" == "--fix" ]] && FIX_MODE=true
+AUTO_YES=false
+for arg in "$@"; do
+    [[ "${arg}" == "--fix" ]] && FIX_MODE=true
+    [[ "${arg}" == "--yes" || "${arg}" == "-y" ]] && AUTO_YES=true
+done
 
 CRITICAL=0
 WARNINGS=0
@@ -47,6 +52,10 @@ sep
 
 ask_fix() {
     $FIX_MODE || return 1
+    if $AUTO_YES; then
+        echo "  ${YELLOW}Применить исправление? [y/N]: ${NC}y (auto)"
+        return 0
+    fi
     echo -en "  ${YELLOW}Применить исправление? [y/N]: ${NC}"
     read -r ANSWER
     [[ "${ANSWER}" == "y" || "${ANSWER}" == "Y" ]]

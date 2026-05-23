@@ -190,6 +190,76 @@ for SUB in ${RUNTIME_SUBNETS} ${ALL_SUBNETS//,/ }; do
     fi
 done
 
+STUCK_HEALED=0
+AUTHTOKEN=$(docker exec "${CONTAINER}" cat /var/lib/zerotier-one/authtoken.secret 2>/dev/null | tr -d '[:space:]' || true)
+ZT_ADDR=$(echo "${ZT_INFO}" | awk '{print $3}' || true)
+
+if [[ -n "${AUTHTOKEN}" && -n "${ZT_ADDR}" && "${ZT_STATUS}" == "ONLINE" ]]; then
+    HEAL_LOG=$(docker exec "${CONTAINER}" zerotier-cli -j listnetworks 2>/dev/null | python3 -c "
+import sys, json, urllib.request
+
+token = '${AUTHTOKEN}'
+zt_addr = '${ZT_ADDR}'
+healed = []
+
+try:
+    nets = json.load(sys.stdin)
+    for n in nets:
+        if n.get('status') != 'OK':
+            continue
+        nwid = n['id']
+        req = urllib.request.Request(
+            f'http://localhost:9993/controller/network/{nwid}/member',
+            headers={'X-ZT1-Auth': token}
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            raw = json.loads(resp.read())
+        members = raw if isinstance(raw, dict) else {}
+        for addr in members:
+            if addr == zt_addr:
+                continue
+            req2 = urllib.request.Request(
+                f'http://localhost:9993/controller/network/{nwid}/member/{addr}',
+                headers={'X-ZT1-Auth': token}
+            )
+            with urllib.request.urlopen(req2, timeout=5) as resp2:
+                m = json.loads(resp2.read())
+            vrev = m.get('vRev', -1)
+            auth = m.get('authorized', False)
+            has_id = bool(m.get('identity', ''))
+            ips = m.get('ipAssignments', [])
+            if vrev == 0 and auth and has_id:
+                req3 = urllib.request.Request(
+                    f'http://localhost:9993/controller/network/{nwid}/member/{addr}',
+                    data=json.dumps({'authorized': False}).encode(),
+                    headers={'X-ZT1-Auth': token, 'Content-Type': 'application/json'},
+                    method='POST'
+                )
+                urllib.request.urlopen(req3, timeout=5)
+                import time; time.sleep(1)
+                req4 = urllib.request.Request(
+                    f'http://localhost:9993/controller/network/{nwid}/member/{addr}',
+                    data=json.dumps({'authorized': True, 'ipAssignments': ips}).encode(),
+                    headers={'X-ZT1-Auth': token, 'Content-Type': 'application/json'},
+                    method='POST'
+                )
+                urllib.request.urlopen(req4, timeout=5)
+                healed.append(f'{addr}@{nwid}')
+except Exception:
+    pass
+
+if healed:
+    print(f'HEALED:{len(healed)}:' + ','.join(healed))
+" 2>/dev/null || true)
+
+    if [[ "${HEAL_LOG}" == HEAILED:* ]]; then
+        COUNT=$(echo "${HEAL_LOG}" | cut -d: -f2)
+        DETAILS=$(echo "${HEAL_LOG}" | cut -d: -f3)
+        log_w "AUTO-HEAL: ${COUNT} CONFIG_STUCK members восстановлено (${DETAILS})"
+        STUCK_HEALED=${COUNT}
+    fi
+fi
+
 if $PROBLEM; then
     log_w "Начинаем восстановление..."
     kill_system_zt
@@ -202,5 +272,7 @@ if $PROBLEM; then
     fi
 else
     NAT_COUNT=$(iptables -t nat -L POSTROUTING -n 2>/dev/null | grep -cE "10\.121\." || echo "0")
-    log_w "OK — ZT ${ZT_STATUS}, ${BIND_ERRORS} bind errors, ${NAT_COUNT} NAT rules"
+    EXTRA=""
+    [[ ${STUCK_HEALED} -gt 0 ]] && EXTRA=", healed ${STUCK_HEALED} CONFIG_STUCK"
+    log_w "OK — ZT ${ZT_STATUS}, ${BIND_ERRORS} bind errors, ${NAT_COUNT} NAT rules${EXTRA}"
 fi
