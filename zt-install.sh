@@ -741,6 +741,42 @@ systemctl enable zt-watchdog.timer
 systemctl start zt-watchdog.timer
 log "Watchdog zt-watchdog.timer включён (проверка каждые 2 мин)"
 
+# ── Reconciler — декларативный контроль состояния ────────────────────────────
+log "Настройка Reconciler (systemd timer)..."
+
+cp "${INSTALL_DIR}/zt-reconcile.py" /usr/local/bin/zt-reconcile.py 2>/dev/null || true
+chmod +x /usr/local/bin/zt-reconcile.py 2>/dev/null || true
+
+cat > /etc/systemd/system/zt-reconcile.service <<RCSVEOF
+[Unit]
+Description=ZeroTier Network Reconciler
+After=docker.service zt-nat-setup.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/zt-reconcile.py --apply
+StandardOutput=journal
+StandardError=journal
+RCSVEOF
+
+cat > /etc/systemd/system/zt-reconcile.timer <<RCTEOF
+[Unit]
+Description=Timer for ZeroTier Network Reconciler
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+RandomizedDelaySec=10s
+
+[Install]
+WantedBy=timers.target
+RCTEOF
+
+systemctl daemon-reload
+systemctl enable zt-reconcile.timer
+log "Reconciler zt-reconcile.timer включён (проверка каждые 5 мин)"
+
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║  ШАГ 8/8 — Ожидание создания сети + авто-подключение
 # ╚══════════════════════════════════════════════════════════════════════════════

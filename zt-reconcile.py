@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """
-ZeroTier Desired-State Reconciler (P2: Declarative Control Plane)
+ZeroTier Desired-State Reconciler (Declarative Control Plane)
 
 Reads topology.json (desired state) and reconciles actual ZT state.
 Safe operations only — never deletes members, only authorizes and sets IPs.
+
+Daemon-ready for systemd timer execution.
 
 Usage:
     python3 zt-reconcile.py                    # dry-run (show diff)
     python3 zt-reconcile.py --apply             # apply changes
     python3 zt-reconcile.py --init              # generate topology.json from current state
     python3 zt-reconcile.py --validate          # validate topology.json schema
+
+Exit codes:
+    0 — success (or no changes needed)
+    1 — error (API down, validation failed, lock contention)
 """
 
 import json
@@ -19,37 +25,108 @@ import subprocess
 import urllib.request
 import urllib.error
 import argparse
+import fcntl
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
 INSTALL_DIR = os.environ.get("INSTALL_DIR", "/opt/ztnet")
 TOPOLOGY_FILE = os.path.join(INSTALL_DIR, "topology.json")
 ENV_FILE = os.path.join(INSTALL_DIR, ".env.info")
+LOCK_FILE = "/var/run/ztnet.lock"
+LOG_FILE = os.path.join(INSTALL_DIR, "zt-reconcile.log")
 
 ANSI = {
-    "RED": "\033[0;31m",
-    "GREEN": "\033[0;32m",
-    "YELLOW": "\033[1;33m",
-    "CYAN": "\033[0;36m",
-    "BOLD": "\033[1m",
-    "NC": "\033[0m",
+    "RED": "\033[0;31m", "GREEN": "\033[0;32m", "YELLOW": "\033[1;33m",
+    "CYAN": "\033[0;36m", "BOLD": "\033[1m", "NC": "\033[0m",
 }
 
+log_fmt = "%(asctime)s [%(levelname)s] %(message)s"
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format=log_fmt, datefmt="%Y-%m-%d %H:%M:%S")
+logger = logging.getLogger("zt-reconcile")
 
-def log(msg):
-    print(f"{ANSI['GREEN']}[OK]{ANSI['NC']} {msg}")
-
-
-def warn(msg):
-    print(f"{ANSI['YELLOW']}[!!]{ANSI['NC']} {msg}")
+_changes_found = False
 
 
-def fail(msg):
-    print(f"{ANSI['RED']}[XX]{ANSI['NC']} {msg}")
+def _out(level, msg):
+    global _changes_found
+    if level == "ok":
+        logger.info(msg)
+    elif level == "warn":
+        logger.warning(msg)
+    elif level == "fail":
+        logger.error(msg)
+    elif level == "info":
+        logger.info(msg)
+        _changes_found = True
+    elif level == "change":
+        _changes_found = True
+        logger.info(f"CHANGE: {msg}")
 
 
-def info(msg):
-    print(f"{ANSI['CYAN']}[>>]{ANSI['NC']} {msg}")
+def cprint(prefix, msg):
+    print(f"{prefix} {msg}")
+
+
+def log_ok(msg):
+    _out("ok", msg)
+    cprint(f"{ANSI['GREEN']}[OK]{ANSI['NC']}", msg)
+
+
+def log_warn(msg):
+    _out("warn", msg)
+    cprint(f"{ANSI['YELLOW']}[!!]{ANSI['NC']}", msg)
+
+
+def log_fail(msg):
+    _out("fail", msg)
+    cprint(f"{ANSI['RED']}[XX]{ANSI['NC']}", msg)
+
+
+def log_info(msg):
+    _out("info", msg)
+    cprint(f"{ANSI['CYAN']}[>>]{ANSI['NC']}", msg)
+
+
+def log_change(msg):
+    _out("change", msg)
+    cprint(f"{ANSI['GREEN']}[APPLY]{ANSI['NC']} {msg}")
+
+
+def acquire_lock(nonblock=True):
+    try:
+        fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o644)
+        flags = fcntl.LOCK_EX
+        if nonblock:
+            flags |= fcntl.LOCK_NB
+        fcntl.flock(fd, flags)
+        return fd
+    except (OSError, IOError):
+        return None
+
+
+def release_lock(fd):
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    except (OSError, IOError):
+        pass
+
+
+def api_healthcheck(token=None):
+    try:
+        if not token:
+            token = get_authtoken()
+        if not token:
+            return False
+        url = "http://localhost:9993/status"
+        req = urllib.request.Request(url)
+        req.add_header("X-ZT1-Auth", token)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+            return isinstance(data, dict) and "address" in data
+    except Exception:
+        return False
 
 
 def get_authtoken():
@@ -145,13 +222,28 @@ def save_topology(topology):
     os.chmod(TOPOLOGY_FILE, 0o600)
 
 
+def rotate_log(max_size=512 * 1024):
+    try:
+        if os.path.isfile(LOG_FILE) and os.path.getsize(LOG_FILE) > max_size:
+            lines = open(LOG_FILE).readlines()
+            with open(LOG_FILE, "w") as f:
+                f.writelines(lines[-200:])
+    except OSError:
+        pass
+
+
 def init_topology():
-    info("Generating topology.json from current state...")
     token = get_authtoken()
+
+    if not api_healthcheck(token):
+        log_fail("Controller API healthcheck FAILED — cannot generate topology")
+        sys.exit(1)
+
     zt_addr = get_zt_addr()
     env = load_env()
     networks = get_networks_runtime()
 
+    log_info("Generating topology.json from current state...")
     topology = {
         "_meta": {
             "version": 1,
@@ -202,10 +294,10 @@ def init_topology():
         }
 
     save_topology(topology)
-    log(f"Topology saved to {TOPOLOGY_FILE}")
-    log(f"Networks: {len(topology['networks'])}")
+    log_ok(f"Topology saved to {TOPOLOGY_FILE}")
+    log_ok(f"Networks: {len(topology['networks'])}")
     for nwid, nd in topology["networks"].items():
-        info(f"  {nwid} ({nd['name']}): {nd['role']}, {len(nd['members'])} members")
+        log_info(f"  {nwid} ({nd['name']}): {nd['role']}, {len(nd['members'])} members")
 
 
 def validate_topology(topology):
@@ -242,32 +334,37 @@ def validate_topology(topology):
 
 
 def reconcile(dry_run=True):
+    global _changes_found
+    _changes_found = False
+
     topology = load_topology()
     if not topology:
-        fail(f"Topology file not found: {TOPOLOGY_FILE}")
-        fail("Run: python3 zt-reconcile.py --init")
+        log_fail(f"Topology file not found: {TOPOLOGY_FILE}")
+        log_fail("Run: python3 zt-reconcile.py --init")
         return 1
 
     errors, warnings = validate_topology(topology)
     for e in errors:
-        fail(f"VALIDATION ERROR: {e}")
+        log_fail(f"VALIDATION ERROR: {e}")
     for w in warnings:
-        warn(f"VALIDATION WARN: {w}")
+        log_warn(f"VALIDATION WARN: {w}")
     if errors:
-        fail("Fix validation errors before applying")
+        log_fail("Fix validation errors before applying")
         return 1
 
     token = get_authtoken()
     if not token:
-        fail("Cannot get authtoken")
+        log_fail("Cannot get authtoken — controller unavailable?")
+        return 1
+
+    if not api_healthcheck(token):
+        log_fail("Controller API healthcheck FAILED — aborting to prevent data loss")
         return 1
 
     zt_addr = topology.get("_meta", {}).get("zt_addr", get_zt_addr())
     changes = 0
 
     for nwid, desired in topology.get("networks", {}).items():
-        info(f"Network {nwid} ({desired.get('name', '?')}):")
-
         actual_members = get_members_runtime(nwid, token)
 
         for addr, desired_member in desired.get("members", {}).items():
@@ -275,42 +372,44 @@ def reconcile(dry_run=True):
 
             if actual.get("authorized") != desired_member.get("authorized"):
                 action = "authorize" if desired_member["authorized"] else "deauthorize"
-                info(f"  {addr}: {action} (desired={desired_member['authorized']}, actual={actual.get('authorized')})")
+                log_change(f"{nwid}/{addr}: {action} (desired={desired_member['authorized']}, actual={actual.get('authorized')})")
                 if not dry_run:
                     result = controller_api("POST", f"/controller/network/{nwid}/member/{addr}",
                                            {"authorized": desired_member["authorized"]}, token)
                     if result:
-                        log(f"  {addr}: {action}d")
+                        log_ok(f"  {addr}: {action}d")
                     else:
-                        fail(f"  {addr}: failed to {action}")
+                        log_fail(f"  {addr}: failed to {action}")
                 changes += 1
 
             desired_ips = desired_member.get("ip_assignments", [])
             actual_ips = actual.get("ipAssignments", [])
             if desired_ips and set(desired_ips) != set(actual_ips):
-                info(f"  {addr}: update IPs {actual_ips} -> {desired_ips}")
+                log_change(f"{nwid}/{addr}: update IPs {actual_ips} -> {desired_ips}")
                 if not dry_run:
                     result = controller_api("POST", f"/controller/network/{nwid}/member/{addr}",
                                            {"ipAssignments": desired_ips}, token)
                     if result:
-                        log(f"  {addr}: IPs updated")
+                        log_ok(f"  {addr}: IPs updated")
                     else:
-                        fail(f"  {addr}: failed to update IPs")
+                        log_fail(f"  {addr}: failed to update IPs")
                 changes += 1
 
         for addr in actual_members:
             if addr == zt_addr:
                 continue
             if addr not in desired.get("members", {}):
-                warn(f"  {addr}: exists in controller but NOT in topology (orphan)")
-                warn(f"  NOT deleting — add to topology.json to manage, or ignore")
+                log_warn(f"{nwid}/{addr}: orphan (in controller, not in topology) — NOT deleting")
 
     if changes == 0:
-        log("Desired state matches actual state. No changes needed.")
+        if not dry_run or os.isatty(sys.stdout.fileno()):
+            log_ok("State is in sync. No changes needed.")
+        else:
+            logger.info("State is in sync. No changes needed.")
     elif dry_run:
-        info(f"{changes} changes would be applied. Run with --apply to execute.")
+        log_info(f"{changes} changes would be applied. Run with --apply to execute.")
     else:
-        log(f"{changes} changes applied.")
+        log_ok(f"{changes} changes applied.")
 
     return 0
 
@@ -323,23 +422,34 @@ def main():
     group.add_argument("--validate", action="store_true", help="Validate topology.json schema")
     args = parser.parse_args()
 
-    if args.init:
-        init_topology()
-    elif args.validate:
-        topology = load_topology()
-        if not topology:
-            fail(f"Not found: {TOPOLOGY_FILE}")
-            sys.exit(1)
-        errors, warnings = validate_topology(topology)
-        if errors:
-            for e in errors:
-                fail(e)
-            sys.exit(1)
-        for w in warnings:
-            warn(w)
-        log("Topology is valid")
-    else:
-        sys.exit(reconcile(dry_run=not args.apply))
+    rotate_log()
+
+    lock_fd = acquire_lock(nonblock=True)
+    if lock_fd is None:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [RECONCILE] Lock contention — another instance holds {LOCK_FILE}. Exiting.")
+        sys.exit(1)
+
+    try:
+        if args.init:
+            init_topology()
+        elif args.validate:
+            topology = load_topology()
+            if not topology:
+                log_fail(f"Not found: {TOPOLOGY_FILE}")
+                sys.exit(1)
+            errors, warnings = validate_topology(topology)
+            if errors:
+                for e in errors:
+                    log_fail(e)
+                sys.exit(1)
+            for w in warnings:
+                log_warn(w)
+            log_ok("Topology is valid")
+        else:
+            rc = reconcile(dry_run=not args.apply)
+            sys.exit(rc)
+    finally:
+        release_lock(lock_fd)
 
 
 if __name__ == "__main__":
