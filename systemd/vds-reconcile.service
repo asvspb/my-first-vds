@@ -1,0 +1,10 @@
+[Unit]
+Description=VDS ZeroTier Network Reconciler
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/my-vds/venv/bin/python /opt/my-vds/src/main.py zerotier reconcile
+StandardOutput=journal
+StandardError=journal

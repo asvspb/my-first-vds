@@ -1,0 +1,12 @@
+[Unit]
+Description=VDS ZeroTier Watchdog
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/my-vds/venv/bin/python /opt/my-vds/src/main.py zerotier watchdog
+StandardOutput=journal
+StandardError=journal
+IOSchedulingClass=idle
+CPUWeight=1

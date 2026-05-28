@@ -1,10 +1,128 @@
 # Настройка Ubuntu 24.04 для разработки
 
-Версия: **1.2**
+Версия: **2.0**
 
-Набор скриптов для быстрой инициализации и управления VDS на Ubuntu 24.04.
+Python-оркестратор для быстрой инициализации и управления VDS на Ubuntu 24.04.
 
-## Скрипты
+## Архитектура v2.0
+
+Проект мигрировал с коллекции bash-скриптов на **Python-оркестратор** с изолированным виртуальным окружением.
+
+**Ключевые изменения:**
+- Единая CLI-команда `vds` вместо множества bash-скриптов
+- Python 3 + venv (обход блокировки системного pip в Ubuntu 24.04)
+- Модульная структура: `core/`, `zerotier/`, `wireguard/`, `sysinfo/`, `system/`
+- Библиотеки: `typer` (CLI), `requests` (API), `pydantic` (валидация), `rich` (вывод), `psutil` (метрики)
+- Systemd-таймеры для watchdog и reconcile
+- Старые bash-скрипты сохранены для обратной совместимости (Strangler Fig Pattern)
+
+## Быстрый старт
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/install.sh | sudo bash
+```
+
+После установки доступна команда `vds`:
+
+```bash
+vds --help                    # Справка
+vds sysinfo                   # Статус сервера (CPU, RAM, Docker, Disk)
+vds cleanup                   # Системная очистка
+vds zerotier install          # Установить ZeroTier + ZTNET Panel
+vds zerotier status           # Диагностика ZeroTier
+vds wireguard install         # Установить WireGuard VPN
+```
+
+## Структура проекта
+
+```
+my-first-vds/
+├── install.sh                  # Bootstrap (venv + deps + symlink vds)
+├── requirements.txt            # Python-зависимости
+├── src/
+│   ├── main.py                 # CLI entry point (typer)
+│   ├── core/
+│   │   ├── logger.py           # Rich-based логирование
+│   │   ├── shell.py            # Обёртки subprocess
+│   │   └── lock.py             # fcntl мьютексы
+│   ├── zerotier/
+│   │   ├── api.py              # ZeroTierAPI класс (requests)
+│   │   ├── reconcile.py        # Desired-state reconciler (pydantic)
+│   │   ├── nat.py              # iptables NAT/FORWARD
+│   │   ├── watchdog.py         # Авто-восстановление
+│   │   ├── diagnose.py         # Диагностика 8 проверок
+│   │   ├── install.py          # Установка ZTNET
+│   │   └── cleanup.py          # Полное удаление
+│   ├── sysinfo/
+│   │   └── dashboard.py        # Rich dashboard (psutil)
+│   ├── wireguard/
+│   │   └── install.py          # WireGuard + клиенты
+│   └── system/
+│       └── cleanup.py          # Системная очистка
+└── systemd/
+    ├── vds-watchdog.service
+    ├── vds-watchdog.timer
+    ├── vds-reconcile.service
+    └── vds-reconcile.timer
+```
+
+## CLI команды
+
+### Общие
+
+```bash
+vds sysinfo                    # Статус сервера (CPU, RAM, Swap, Disk, Docker)
+vds cleanup [--dry-run]        # Очистка системы (apt, Docker, логи, /tmp)
+vds cleanup --aggressive       # Агрессивная очистка Docker
+```
+
+### ZeroTier
+
+```bash
+vds zerotier install [--port 3000]     # Установить ZeroTier + ZTNET Panel
+vds zerotier status                    # Диагностика (8 проверок)
+vds zerotier diagnose --fix            # Диагностика + интерактивное исправление
+vds zerotier diagnose --fix --yes      # Автоисправление без подтверждения
+vds zerotier reconcile                 # Dry-run: показать расхождения
+vds zerotier reconcile --apply         # Применить изменения из topology.json
+vds zerotier reconcile --init          # Сгенерировать topology.json
+vds zerotier reconcile --validate      # Проверить topology.json
+vds zerotier watchdog                  # Фоновый мониторинг и восстановление
+vds zerotier nat                       # Восстановить NAT правила
+vds zerotier cleanup                   # Полное удаление ZeroTier + ZTNET
+```
+
+### WireGuard
+
+```bash
+vds wireguard install [--port 51820] [--client name] [--dns "8.8.8.8"]
+vds wireguard add-client [--name client2]
+vds wireguard remove
+```
+
+## Systemd-сервисы
+
+После установки ZeroTier автоматически настраиваются таймеры:
+
+| Сервис | Описание | Интервал |
+|--------|----------|----------|
+| `vds-watchdog.timer` | Мониторинг и авто-восстановление ZeroTier | каждые 2 мин |
+| `vds-reconcile.timer` | Синхронизация состояния с topology.json | каждые 5 мин |
+
+**Установка таймеров:**
+```bash
+sudo cp systemd/vds-*.service systemd/vds-*.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now vds-watchdog.timer vds-reconcile.timer
+```
+
+---
+
+## Legacy bash-скрипты
+
+Старые bash-скрипты сохранены для обратной совместимости и постепенной миграции.
+
+### Скрипты
 
 ### `preinstall.sh` — Предварительная настройка
 
@@ -234,6 +352,23 @@ sudo bash zt-diagnose.sh --fix
 
 ## Установка
 
+### Новая архитектура (v2.0) — рекомендуется
+
+**Bootstrap + Python-оркестратор:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/install.sh | sudo bash
+```
+
+Скрипт `install.sh`:
+1. Устанавливает системные зависимости (python3, python3-venv, git, curl)
+2. Создаёт директорию `/opt/my-vds/`
+3. Создаёт виртуальное окружение `/opt/my-vds/venv/`
+4. Устанавливает Python-библиотеки из `requirements.txt`
+5. Создаёт симлинк `/usr/local/bin/vds`
+6. Проверяет работу CLI
+
+### Legacy bash-скрипты (v1.x)
+
 **Предварительная настройка** (перед основной):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/preinstall.sh | sudo bash
@@ -287,12 +422,42 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 ## Требования
 
 - Ubuntu 24.04 (LTS)
+- Python 3.10+ (устанавливается автоматически)
 - Доступ к интернету
 - Права суперпользователя (sudo)
+
+## Разработка
+
+**Локальная разработка:**
+```bash
+git clone https://github.com/asvspb/my-first-vds.git
+cd my-first-vds
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python src/main.py --help
+```
+
+**Добавление новых команд:**
+1. Создайте модуль в `src/<category>/<module>.py`
+2. Добавьте функцию с логикой
+3. Зарегистрируйте команду в `src/main.py` через `@app.command()` или `@<category>_app.command()`
 
 ## Документация
 
 - [docs/zt-auto-join-plan.md](docs/zt-auto-join-plan.md) — технические детали реализации Auto-Join
+
+## Миграция с v1.x на v2.0
+
+Проект использует **Strangler Fig Pattern** — постепенная замена bash-скриптов Python-модулями:
+
+1. **Неделя 1**: Установка новой структуры, `install.sh` создаёт venv
+2. **Неделя 2**: Перенос ZeroTier reconcile + watchdog на Python
+3. **Неделя 3**: Перенос sysinfo dashboard на Python + Rich
+4. **Неделя 4**: Перенос WireGuard и cleanup на Python
+5. **Финал**: Удаление старых `*.sh` (кроме `install.sh`)
+
+Старые bash-скрипты продолжают работать параллельно с новой Python-архитектурой.
 
 ## Лицензия
 
