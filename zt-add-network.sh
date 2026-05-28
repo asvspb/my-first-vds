@@ -16,6 +16,13 @@
 
 set -euo pipefail
 
+LOCK_FILE="/var/run/ztnet-add-network.lock"
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+    echo "Другой экземпляр добавления сети уже запущен. Выход."
+    exit 1
+fi
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
@@ -356,21 +363,61 @@ echo ""
 # Managed Route
 ZT_IP_ONLY=$(echo "${NEW_ZT_IP}" | grep -oP '^\d+\.\d+\.\d+\.\d+' || true)
 if [[ -n "${ZT_IP_ONLY}" ]]; then
-    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  ${BOLD}ДЕЙСТВИЕ ТРЕБУЕТСЯ (Managed Route):${NC}"
-    echo ""
-    echo -e "  Для раздачи интернета добавьте маршрут в ZTNET Panel:"
-    echo ""
-    echo -e "    ${CYAN}${ZTNET_URL}${NC} → Сеть ${NETWORK_ID} → Managed Routes → Add"
-    echo -e "    ${BOLD}Destination:${NC} 0.0.0.0/0"
-    echo -e "    ${BOLD}Via:${NC} ${ZT_IP_ONLY}"
-    echo ""
-    echo -e "  ${YELLOW}ВНИМАНИЕ: Via должен быть IP этой ноды в ДАННОЙ сети${NC}"
-    echo -e "  (${ZT_IP_ONLY}), а НЕ IP из другой сети — иначе трафик не пойдёт."
-    echo ""
-    echo -e "  ${BOLD}На клиентах:${NC}"
-    echo -e "    ${CYAN}zerotier-cli set ${NETWORK_ID} allowDefault=1${NC}"
-    echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    DEFAULT_ROUTE_CONFLICT=false
+    if [[ -n "${ZT_AUTHTOKEN}" ]]; then
+        DEFAULT_ROUTE_NETWORKS=$(docker exec ztnet_zerotier zerotier-cli -j listnetworks 2>/dev/null | python3 -c "
+import sys, json
+nets = json.load(sys.stdin)
+for n in nets:
+    nwid = n.get('id', '')
+    for r in n.get('routes', []):
+        if r.get('target') == '0.0.0.0/0' and r.get('via') and nwid != '${NETWORK_ID}':
+            print(f'{nwid} ({n.get(\"name\",\"?\")}) via {r[\"via\"]}')
+" 2>/dev/null || true)
+        if [[ -n "${DEFAULT_ROUTE_NETWORKS}" ]]; then
+            DEFAULT_ROUTE_CONFLICT=true
+            warn "ОБНАРУЖЕН КОНФЛИКТ DEFAULT ROUTE!"
+            warn "Следующие сети уже имеют маршрут 0.0.0.0/0:"
+            echo "${DEFAULT_ROUTE_NETWORKS}" | while read -r line; do warn "  $line"; done
+            echo ""
+            warn "Только ОДНА сеть может раздавать интернет через 0.0.0.0/0!"
+            warn "Если добавить маршрут в ${NETWORK_ID} — клиенты могут потерять связь."
+            echo ""
+            echo -e "  ${YELLOW}Рекомендация:${NC}"
+            echo -e "    Создайте эту сеть как ${CYAN}Transport/Mesh${NC} (без default route)"
+            echo -e "    Или удалите 0.0.0.0/0 из другой сети перед добавлением сюда"
+            echo ""
+        fi
+    fi
+
+    if ${DEFAULT_ROUTE_CONFLICT}; then
+        echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "  ${BOLD}ВНИМАНИЕ: Managed Route 0.0.0.0/0 НЕ добавлен${NC}"
+        echo ""
+        echo -e "  Сеть работает как ${CYAN}Transport/Mesh${NC} — только внутренняя маршрутизация."
+        echo -e "  Для раздачи интернета сначала удалите 0.0.0.0/0 из другой сети,"
+        echo -e "  затем добавьте маршрут вручную:"
+        echo ""
+        echo -e "    ${CYAN}${ZTNET_URL}${NC} → Сеть ${NETWORK_ID} → Managed Routes → Add"
+        echo -e "    ${BOLD}Destination:${NC} 0.0.0.0/0   ${BOLD}Via:${NC} ${ZT_IP_ONLY}"
+        echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    else
+        echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "  ${BOLD}ДЕЙСТВИЕ ТРЕБУЕТСЯ (Managed Route):${NC}"
+        echo ""
+        echo -e "  Для раздачи интернета добавьте маршрут в ZTNET Panel:"
+        echo ""
+        echo -e "    ${CYAN}${ZTNET_URL}${NC} → Сеть ${NETWORK_ID} → Managed Routes → Add"
+        echo -e "    ${BOLD}Destination:${NC} 0.0.0.0/0"
+        echo -e "    ${BOLD}Via:${NC} ${ZT_IP_ONLY}"
+        echo ""
+        echo -e "  ${YELLOW}ВНИМАНИЕ: Via должен быть IP этой ноды в ДАННОЙ сети${NC}"
+        echo -e "  (${ZT_IP_ONLY}), а НЕ IP из другой сети — иначе трафик не пойдёт."
+        echo ""
+        echo -e "  ${BOLD}На клиентах:${NC}"
+        echo -e "    ${CYAN}zerotier-cli set ${NETWORK_ID} allowDefault=1${NC}"
+        echo -e "  ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    fi
 fi
 
 # ── Проверка маршрутов сети ──────────────────────────────────────────────────

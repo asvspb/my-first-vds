@@ -152,6 +152,31 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 
 **Защита от частых рестартов**: лимит 3 рестарта в час.
 
+**Защита от параллельного выполнения**: `flock` mutex на всех скриптах.
+
+**Запрещено (watchdog не делает)**: DELETE member, deauth/reauth, запись в controller.d/, изменение маршрутов.
+
+### `zt-reconcile.py` — Декларативный Control Plane (Desired State)
+
+Python-скрипт для управления состоянием ZeroTier через desired-state модель:
+
+```bash
+python3 zt-reconcile.py --init       # Сгенерировать topology.json из текущего состояния
+python3 zt-reconcile.py --validate   # Проверить корректность topology.json
+python3 zt-reconcile.py              # Dry-run: показать расхождения (desired vs actual)
+python3 zt-reconcile.py --apply      # Применить изменения
+```
+
+**Возможности:**
+- Генерация `topology.json` — единый источник истины (desired state)
+- Валидация: детектит >1 exit-node, отсутствующие подсети, неавторизованных членов
+- Reconcile: авторизация членов, назначение IP — только безопасные операции
+- **Никогда не удаляет** member-записи и не делает deauth
+
+**Топология сетей (role):**
+- `exit-node` — сеть с NAT и маршрутом 0.0.0.0/0 (раздаёт интернет). Только ОДНА на контроллере.
+- `mesh` — транспортная сеть (только внутренняя маршрутизация, без default route)
+
 ### `zt-diagnose.sh` — Диагностика и устранение проблем
 
 Интерактивная диагностика всех компонентов ZeroTier + ZTNET с автоматическим выявлением проблем и предложением исправлений:

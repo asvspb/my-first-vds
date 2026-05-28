@@ -6,6 +6,13 @@
 
 set -euo pipefail
 
+LOCK_FILE="/var/run/ztnet-cleanup.lock"
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+    echo "Другой экземпляр очистки уже запущен. Выход."
+    exit 1
+fi
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 

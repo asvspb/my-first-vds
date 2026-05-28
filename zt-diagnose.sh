@@ -17,6 +17,13 @@
 
 set -euo pipefail
 
+LOCK_FILE="/var/run/ztnet-diagnose.lock"
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+    echo "Другой экземпляр диагностики уже запущен (PID $(cat /proc/$(fuser "${LOCK_FILE}" 2>/dev/null | awk '{print $1}')/stat 2>/dev/null | awk '{print $1}' 2>/dev/null || echo '?')). Выход."
+    exit 1
+fi
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; MAGENTA='\033[0;35m'; NC='\033[0m'
 
@@ -347,6 +354,29 @@ for n in nets:
             print(f'     route: {t} via {v}')
 " 2>/dev/null || warn "Не удалось распарсить список сетей"
 
+    DEFAULT_ROUTE_VIAS=$(echo "${NETWORKS_JSON}" | python3 -c "
+import sys, json
+nets = json.load(sys.stdin)
+for n in nets:
+    if n.get('status') != 'OK':
+        continue
+    for r in n.get('routes', []):
+        if r.get('target') == '0.0.0.0/0' and r.get('via'):
+            print(f\"{n['id']} ({n.get('name','?')}) via {r['via']}\")
+" 2>/dev/null || true)
+    DEFAULT_ROUTE_COUNT=$(echo "${DEFAULT_ROUTE_VIAS}" | grep -c 'via' 2>/dev/null) || DEFAULT_ROUTE_COUNT=0
+
+    if [[ "${DEFAULT_ROUTE_COUNT}" -gt 1 ]]; then
+        fail "КОНФЛИКТ: ${DEFAULT_ROUTE_COUNT} сети имеют маршрут 0.0.0.0/0!"
+        echo "${DEFAULT_ROUTE_VIAS}" | while read -r line; do fail "  $line"; done
+        tip "Оставьте 0.0.0.0/0 только в ОДНОЙ сети (Exit-node)"
+        tip "Остальные сети используйте как Transport/Mesh (без default route)"
+        tip "Удалите маршрут 0.0.0.0/0 через ZTNET Panel или Controller API"
+    elif [[ "${DEFAULT_ROUTE_COUNT}" -eq 1 ]]; then
+        log "Default route (0.0.0.0/0): ровно 1 сеть — корректно"
+        echo "${DEFAULT_ROUTE_VIAS}" | while read -r line; do info "  $line"; done
+    fi
+
     if [[ -n "${AUTHTOKEN}" && -n "${ZT_ADDR}" ]]; then
         echo ""
         info "Проверка маршрутов (Controller API)..."
@@ -490,14 +520,10 @@ for addr in raw:
     except: pass
 " 2>/dev/null || true)
         for STUCK_ADDR in ${STUCK_MEMBERS}; do
-            fail "Член ${STUCK_ADDR}: vRev=0 — конфиг сети не доставлен (контроллер крашился при подключении)"
-            tip "Принудительное обновление: deauth → reauth через Controller API"
-            if ask_fix; then
-                controller_api POST "/controller/network/${NWID}/member/${STUCK_ADDR}" '{"authorized":false}' >/dev/null 2>&1
-                sleep 1
-                controller_api POST "/controller/network/${NWID}/member/${STUCK_ADDR}" '{"authorized":true}' >/dev/null 2>&1
-                log "Конфиг для ${STUCK_ADDR} принудительно обновлён"
-            fi
+            warn "Член ${STUCK_ADDR}: vRev=0 — косметический статус (CONFIG_STUCK)"
+            tip "Это НЕ проблема — клиент работает нормально при vRev=0"
+            tip "НЕ делайте deauth/reauth — это вызовет бесконечный цикл revision inflation"
+            inc_warn
         done
     done
 else

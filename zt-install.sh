@@ -13,6 +13,13 @@
 export DEBIAN_FRONTEND=noninteractive
 set -euo pipefail
 
+LOCK_FILE="/var/run/ztnet-install.lock"
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+    echo "Другой экземпляр установки уже запущен. Выход."
+    exit 1
+fi
+
 exec > >(tee /var/log/zt-install.log) 2>&1
 
 # ── Цвета ────────────────────────────────────────────────────────────────────
@@ -824,15 +831,8 @@ else
             "http://localhost:9993/controller/network/${NETWORK_ID}/member/${ZT_ADDR}" 2>/dev/null \
             | python3 -c "import sys,json; print(json.load(sys.stdin).get('vRev',-1))" 2>/dev/null || echo "-1")
         if [[ "${VREV}" -le 0 ]]; then
-            warn "vRev=${VREV} — конфиг сети не доставлен, принудительно обновляем..."
-            curl -s -X POST -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" -H "Content-Type: application/json" \
-                -d '{"authorized":false}' \
-                "http://localhost:9993/controller/network/${NETWORK_ID}/member/${ZT_ADDR}" >/dev/null 2>&1
-            sleep 1
-            curl -s -X POST -H "X-ZT1-Auth: ${ZT_AUTHTOKEN}" -H "Content-Type: application/json" \
-                -d '{"authorized":true}' \
-                "http://localhost:9993/controller/network/${NETWORK_ID}/member/${ZT_ADDR}" >/dev/null 2>&1
-            log "Конфиг обновлён (deauth→reauth)"
+            warn "vRev=${VREV} — конфиг сети пока не доставлен (косметический статус)"
+            info "Клиент работает нормально при vRev=0. Конфиг обновится при следующем запросе клиента."
         fi
     fi
 

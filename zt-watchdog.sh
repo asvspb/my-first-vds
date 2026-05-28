@@ -7,15 +7,29 @@
 #    2. Статус ZT демона (ONLINE/OFFLINE/TUNNELED)
 #    3. Наличие процесса zerotier-one
 #    4. Конфликт порта 9993 с системным zerotier-one
+#    5. Отсутствие NAT правил
+#    6. Stale-members и orphans (ТОЛЬКО МОНИТОРИНГ)
 #
-#  При обнаружении проблем:
-#    - Убивает конфликтующий процесс
-#    - Перезапускает контейнер
-#    - Ждёт восстановления ONLINE
-#    - Логирует все действия
+#  Восстановление (безопасные операции):
+#    - Убивает конфликтующий процесс на порту 9993
+#    - Перезапускает контейнер (максимум 3/час)
+#    - Восстанавливает NAT правила (идемпотентно)
+#
+#  ЗАПРЕЩЕНО (никогда не делает):
+#    - DELETE member записей
+#    - deauth/reauth членов сети
+#    - Прямая запись в /controller.d/
+#    - Изменение маршрутов через Controller API
 # =============================================================================
 
 set -euo pipefail
+
+LOCK_FILE="/var/run/ztnet-watchdog.lock"
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [WATCHDOG] Другой экземпляр уже запущен. Выход." >> "${INSTALL_DIR:-/opt/ztnet}/zt-watchdog.log" 2>/dev/null
+    exit 0
+fi
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/ztnet}"
 LOG_FILE="${INSTALL_DIR}/zt-watchdog.log"
@@ -181,26 +195,30 @@ for SUB in ${RUNTIME_SUBNETS} ${ALL_SUBNETS//,/ }; do
         iptables -C FORWARD -s "${SUB}" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s "${SUB}" -j ACCEPT
         iptables -C FORWARD -d "${SUB}" -j ACCEPT 2>/dev/null || iptables -I FORWARD 2 -d "${SUB}" -j ACCEPT
         if [[ "${IS_OPENVZ:-false}" == "true" && -n "${PUBLIC_IP:-}" ]]; then
-            iptables -t nat -A POSTROUTING -s "${SUB}" -o "${MAIN_IF}" -j SNAT --to-source "${PUBLIC_IP}" 2>/dev/null || true
+            iptables -t nat -C POSTROUTING -s "${SUB}" -o "${MAIN_IF}" -j SNAT --to-source "${PUBLIC_IP}" 2>/dev/null || \
+                iptables -t nat -A POSTROUTING -s "${SUB}" -o "${MAIN_IF}" -j SNAT --to-source "${PUBLIC_IP}" 2>/dev/null || true
         else
-            iptables -t nat -A POSTROUTING -s "${SUB}" -o "${MAIN_IF}" -j MASQUERADE 2>/dev/null || true
+            iptables -t nat -C POSTROUTING -s "${SUB}" -o "${MAIN_IF}" -j MASQUERADE 2>/dev/null || \
+                iptables -t nat -A POSTROUTING -s "${SUB}" -o "${MAIN_IF}" -j MASQUERADE 2>/dev/null || true
         fi
         iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
         log_w "NAT для ${SUB} восстановлен"
     fi
 done
 
-STUCK_HEALED=0
+STUCK_COUNT=0
+ORPHAN_COUNT=0
 AUTHTOKEN=$(docker exec "${CONTAINER}" cat /var/lib/zerotier-one/authtoken.secret 2>/dev/null | tr -d '[:space:]' || true)
 ZT_ADDR=$(echo "${ZT_INFO}" | awk '{print $3}' || true)
 
 if [[ -n "${AUTHTOKEN}" && -n "${ZT_ADDR}" && "${ZT_STATUS}" == "ONLINE" ]]; then
-    HEAL_LOG=$(docker exec "${CONTAINER}" zerotier-cli -j listnetworks 2>/dev/null | python3 -c "
+    MEMBER_REPORT=$(docker exec "${CONTAINER}" zerotier-cli -j listnetworks 2>/dev/null | python3 -c "
 import sys, json, urllib.request
 
 token = '${AUTHTOKEN}'
 zt_addr = '${ZT_ADDR}'
-healed = []
+stuck = 0
+orphan = 0
 
 try:
     nets = json.load(sys.stdin)
@@ -228,36 +246,19 @@ try:
             auth = m.get('authorized', False)
             has_id = bool(m.get('identity', ''))
             ips = m.get('ipAssignments', [])
-            if vrev == 0 and auth and has_id:
-                req3 = urllib.request.Request(
-                    f'http://localhost:9993/controller/network/{nwid}/member/{addr}',
-                    data=json.dumps({'authorized': False}).encode(),
-                    headers={'X-ZT1-Auth': token, 'Content-Type': 'application/json'},
-                    method='POST'
-                )
-                urllib.request.urlopen(req3, timeout=5)
-                import time; time.sleep(1)
-                req4 = urllib.request.Request(
-                    f'http://localhost:9993/controller/network/{nwid}/member/{addr}',
-                    data=json.dumps({'authorized': True, 'ipAssignments': ips}).encode(),
-                    headers={'X-ZT1-Auth': token, 'Content-Type': 'application/json'},
-                    method='POST'
-                )
-                urllib.request.urlopen(req4, timeout=5)
-                healed.append(f'{addr}@{nwid}')
+            rev = m.get('revision', 0)
+            if auth and has_id and vrev == 0 and rev > 5:
+                stuck += 1
+            if auth and not has_id and vrev == -1:
+                orphan += 1
 except Exception:
     pass
 
-if healed:
-    print(f'HEALED:{len(healed)}:' + ','.join(healed))
-" 2>/dev/null || true)
+print(f'{stuck} {orphan}')
+" 2>/dev/null || echo "0 0")
 
-    if [[ "${HEAL_LOG}" == HEAILED:* ]]; then
-        COUNT=$(echo "${HEAL_LOG}" | cut -d: -f2)
-        DETAILS=$(echo "${HEAL_LOG}" | cut -d: -f3)
-        log_w "AUTO-HEAL: ${COUNT} CONFIG_STUCK members восстановлено (${DETAILS})"
-        STUCK_HEALED=${COUNT}
-    fi
+    STUCK_COUNT=$(echo "${MEMBER_REPORT}" | awk '{print $1}')
+    ORPHAN_COUNT=$(echo "${MEMBER_REPORT}" | awk '{print $2}')
 fi
 
 if $PROBLEM; then
@@ -273,6 +274,7 @@ if $PROBLEM; then
 else
     NAT_COUNT=$(iptables -t nat -L POSTROUTING -n 2>/dev/null | grep -cE "10\.121\." || echo "0")
     EXTRA=""
-    [[ ${STUCK_HEALED} -gt 0 ]] && EXTRA=", healed ${STUCK_HEALED} CONFIG_STUCK"
+    [[ ${STUCK_COUNT} -gt 0 ]] && EXTRA="${EXTRA}, ${STUCK_COUNT} stale-members"
+    [[ ${ORPHAN_COUNT} -gt 0 ]] && EXTRA="${EXTRA}, ${ORPHAN_COUNT} orphans"
     log_w "OK — ZT ${ZT_STATUS}, ${BIND_ERRORS} bind errors, ${NAT_COUNT} NAT rules${EXTRA}"
 fi
