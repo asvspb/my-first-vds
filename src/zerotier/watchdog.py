@@ -165,6 +165,23 @@ def check_nat_rules() -> None:
             logger.info(f"NAT для {sub} восстановлен")
 
 
+def cleanup_stale_networks() -> None:
+    result = docker_exec(CONTAINER, "zerotier-cli -j listnetworks")
+    if not result.ok:
+        return
+    try:
+        import json
+        nets = json.loads(result.output)
+        for n in nets:
+            if n.get("status") == "NOT_FOUND":
+                nwid = n.get("id")
+                if nwid:
+                    logger.warning(f"Удаление мертвой сети {nwid} (NOT_FOUND)")
+                    docker_exec(CONTAINER, f"zerotier-cli leave {nwid}")
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+
 def run_watchdog() -> int:
     rotate_log(LOG_FILE)
 
@@ -205,6 +222,7 @@ def run_watchdog() -> int:
             logger.warning("ПРОБЛЕМА: процесс zerotier-one не найден в контейнере")
             problem = True
 
+        cleanup_stale_networks()
         check_nat_rules()
 
         if problem:
