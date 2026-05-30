@@ -236,7 +236,7 @@ def run_install(ztnet_port: int = 3000) -> int:
         # Системные зависимости
         console.print("\n[info]Шаг 1/6: Обновление системы...[/info]")
         run("apt-get update -qq", timeout=120)
-        run("apt-get install -y -qq curl wget ca-certificates gnupg lsb-release openssl iptables-persistent", timeout=300)
+        run("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl wget ca-certificates gnupg lsb-release openssl iptables-persistent", timeout=300)
 
         # ZeroTier на хосте
         console.print("[info]Шаг 2/6: Очистка системы от старого ZeroTier...[/info]")
@@ -311,11 +311,12 @@ def run_install(ztnet_port: int = 3000) -> int:
         zt_subnet = "10.121.15.0/24"
         main_iface = arch["main_iface"]
         server_ip = arch["public_ip"]
+        out_flag = f"-o {main_iface}" if main_iface else ""
 
         if arch["is_openvz"]:
-            run(f"iptables -t nat -C POSTROUTING -s {zt_subnet} -o {main_iface} -j SNAT --to-source {server_ip} 2>/dev/null || iptables -t nat -A POSTROUTING -s {zt_subnet} -o {main_iface} -j SNAT --to-source {server_ip}")
+            run(f"iptables -t nat -C POSTROUTING -s {zt_subnet} {out_flag} -j SNAT --to-source {server_ip} 2>/dev/null || iptables -t nat -A POSTROUTING -s {zt_subnet} {out_flag} -j SNAT --to-source {server_ip}")
         else:
-            run(f"iptables -t nat -C POSTROUTING -s {zt_subnet} -o {main_iface} -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s {zt_subnet} -o {main_iface} -j MASQUERADE")
+            run(f"iptables -t nat -C POSTROUTING -s {zt_subnet} {out_flag} -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s {zt_subnet} {out_flag} -j MASQUERADE")
 
         run(f"iptables -C FORWARD -s {zt_subnet} -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -s {zt_subnet} -j ACCEPT")
         run(f"iptables -C FORWARD -d {zt_subnet} -j ACCEPT 2>/dev/null || iptables -I FORWARD 2 -d {zt_subnet} -j ACCEPT")
@@ -326,8 +327,8 @@ def run_install(ztnet_port: int = 3000) -> int:
 
         # Запуск контейнеров
         console.print("[info]Шаг 6/6: Запуск ZTNET...[/info]")
-        run(f"docker compose -f {compose_file} pull -q", timeout=120)
-        run(f"docker compose -f {compose_file} up -d --wait", timeout=120)
+        run(f"docker compose -f {compose_file} pull -q", timeout=600)
+        run(f"docker compose -f {compose_file} up -d --wait", timeout=300)
 
         # Ожидание ONLINE
         console.print("[info]Ожидание ONLINE статуса...[/info]")
