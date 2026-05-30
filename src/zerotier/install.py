@@ -339,6 +339,21 @@ def run_install(ztnet_port: int = 3000) -> int:
                 break
             time.sleep(5)
 
+        # Установка systemd таймеров
+        console.print("[info]Настройка фоновых задач (watchdog, reconcile)...[/info]")
+        project_dir = os.environ.get("PYTHONPATH", "/opt/my-vds")
+        systemd_dir = os.path.join(project_dir, "systemd")
+        if os.path.exists(systemd_dir):
+            run(f"cp {systemd_dir}/* /etc/systemd/system/")
+            run("systemctl daemon-reload")
+            systemctl("enable", "vds-watchdog.timer")
+            systemctl("start", "vds-watchdog.timer")
+            systemctl("enable", "vds-reconcile.timer")
+            systemctl("start", "vds-reconcile.timer")
+            console.print("[success]Фоновые задачи запущены[/success]")
+        else:
+            console.print("[warning]Папка systemd не найдена — таймеры не установлены[/warning]")
+
         console.print(f"\n[success]═══ Установка завершена ═══[/success]")
         console.print(f"  ZTNET Panel: http://{arch['public_ip']}:{ztnet_port}")
         console.print(f"  Директория: {INSTALL_DIR}")
