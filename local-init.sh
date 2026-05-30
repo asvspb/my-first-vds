@@ -57,10 +57,10 @@ ssh -o StrictHostKeyChecking=accept-new "${SERVER_USER}@${SERVER_IP}" << 'EOF'
     fi
 
     echo -e "\n\033[0;36m--- Запуск preinstall.sh ---\033[0m"
-    curl -fsSL "https://raw.githubusercontent.com/asvspb/my-first-vds/main/preinstall.sh?v=\$(date +%s)" | bash
+    curl -fsSL "https://raw.githubusercontent.com/asvspb/my-first-vds/main/preinstall.sh?v=$(date +%s)" | bash
     
     echo -e "\n\033[0;36m--- Запуск install.sh ---\033[0m"
-    curl -fsSL "https://raw.githubusercontent.com/asvspb/my-first-vds/main/install.sh?v=\$(date +%s)" | bash
+    curl -fsSL "https://raw.githubusercontent.com/asvspb/my-first-vds/main/install.sh?v=$(date +%s)" | bash
 EOF
 
 echo ""
