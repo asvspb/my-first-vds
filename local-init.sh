@@ -52,10 +52,10 @@ echo -e "${CYAN}[->]${NC} Подключаемся по SSH (без пароля
 ssh -o StrictHostKeyChecking=accept-new "${SERVER_USER}@${SERVER_IP}" << 'EOF'
     set -e
     echo -e "\n\033[0;36m--- Запуск preinstall.sh ---\033[0m"
-    curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/preinstall.sh | bash
+    curl -fsSL "https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/preinstall.sh?v=\$(date +%s)" | bash
     
     echo -e "\n\033[0;36m--- Запуск install.sh ---\033[0m"
-    curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/install.sh | bash
+    curl -fsSL "https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/install.sh?v=\$(date +%s)" | bash
 EOF
 
 echo ""
