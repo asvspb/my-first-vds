@@ -225,23 +225,18 @@ def install_ai_cli():
 
 
 def setup_sysinfo():
-    step("11", "📊 Установка системного монитора sysinfo...")
-    sysinfo_src = Path("/root/my-first-vds/sysinfo.sh")
-    dest = Path("/etc/profile.d/sysinfo.sh")
+    step("11", "📊 Настройка вывода системного монитора при входе...")
+    dest = Path("/etc/profile.d/vds-sysinfo.sh")
     
-    if sysinfo_src.exists():
-        run(f"cp {sysinfo_src} {dest}")
-        run(f"chmod +x {dest}")
-        ok("sysinfo.sh установлен в /etc/profile.d/")
-    else:
-        warn("sysinfo.sh не найден локально — скачиваем из GitHub...")
-        url = "https://raw.githubusercontent.com/ASV-SPB/vds/main/sysinfo.sh"
-        run(f"curl -fsSL --connect-timeout 5 {url} -o {dest}")
-        if dest.exists() and dest.stat().st_size > 0:
-            run(f"chmod +x {dest}")
-            ok("sysinfo.sh скачан и установлен в /etc/profile.d/")
-        else:
-            warn("Не удалось скачать sysinfo.sh")
+    # Мы больше не используем старый bash-скрипт. 
+    # Теперь просто вызываем Python-дашборд из нашего CLI
+    content = "#!/bin/bash\n/usr/local/bin/vds sysinfo\n"
+    dest.write_text(content)
+    run(f"chmod +x {dest}")
+    
+    # Удаляем старый скрипт, если остался от предыдущих установок
+    run("rm -f /etc/profile.d/sysinfo.sh")
+    ok("Дашборд (vds sysinfo) добавлен в автозапуск при SSH-входе")
 
 def run_setup():
     if os.geteuid() != 0:
