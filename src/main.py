@@ -33,12 +33,12 @@ def main_menu(ctx: typer.Context):
         choice = questionary.select(
             "Что вы хотите сделать?",
             choices=[
-                questionary.Choice("📊 Системный статус (Dashboard)", "sysinfo"),
-                questionary.Choice("🌐 Управление ZeroTier", "zerotier"),
-                questionary.Choice("🛡️ Управление WireGuard", "wireguard"),
-                questionary.Choice("⚙️  Базовая настройка сервера (Setup)", "server_setup"),
-                questionary.Choice("🧹 Очистка системы (Cleanup)", "cleanup"),
-                questionary.Choice("❌ Выход", "exit"),
+                questionary.Choice("Системный статус (Dashboard)", "sysinfo"),
+                questionary.Choice("Управление ZeroTier", "zerotier"),
+                questionary.Choice("Управление WireGuard", "wireguard"),
+                questionary.Choice("Базовая настройка сервера (Setup)", "server_setup"),
+                questionary.Choice("Очистка системы (Cleanup)", "cleanup"),
+                questionary.Choice("Выход", "exit"),
             ]
         ).ask()
         
@@ -61,10 +61,10 @@ def main_menu(ctx: typer.Context):
             wg_choice = questionary.select(
                 "Меню WireGuard:",
                 choices=[
-                    questionary.Choice("🚀 Установка сервера (install)", "install"),
-                    questionary.Choice("➕ Добавить клиента (add-client)", "add_client"),
-                    questionary.Choice("🗑️ Удалить WireGuard (remove)", "remove"),
-                    questionary.Choice("🔙 Назад", "back"),
+                    questionary.Choice("Установка сервера (install)", "install"),
+                    questionary.Choice("Добавить клиента (add-client)", "add_client"),
+                    questionary.Choice("Удалить WireGuard (remove)", "remove"),
+                    questionary.Choice("Назад", "back"),
                 ]
             ).ask()
             
@@ -94,14 +94,14 @@ def main_menu(ctx: typer.Context):
             zt_choice = questionary.select(
                 "Меню ZeroTier:",
                 choices=[
-                    questionary.Choice("🔍 Диагностика (status/diagnose)", "diagnose"),
-                    questionary.Choice("🛠️ Синхронизация сетей (reconcile)", "reconcile"),
-                    questionary.Choice("➕ Подключить новую сеть (add-network)", "add_network"),
-                    questionary.Choice("🔄 Восстановление NAT (nat)", "nat"),
-                    questionary.Choice("👁️ Запуск Watchdog (watchdog)", "watchdog"),
-                    questionary.Choice("🚀 Установка (install)", "install"),
-                    questionary.Choice("🗑️ Полное удаление (cleanup)", "cleanup"),
-                    questionary.Choice("🔙 Назад", "back"),
+                    questionary.Choice("Диагностика (status/diagnose)", "diagnose"),
+                    questionary.Choice("Синхронизация сетей (reconcile)", "reconcile"),
+                    questionary.Choice("Подключить новую сеть (add-network)", "add_network"),
+                    questionary.Choice("Восстановление NAT (nat)", "nat"),
+                    questionary.Choice("Запуск Watchdog (watchdog)", "watchdog"),
+                    questionary.Choice("Установка (install)", "install"),
+                    questionary.Choice("Полное удаление (cleanup)", "cleanup"),
+                    questionary.Choice("Назад", "back"),
                 ]
             ).ask()
             
