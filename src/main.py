@@ -112,8 +112,34 @@ def main_menu(ctx: typer.Context):
                     pass
                 questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
             elif zt_choice == "reconcile":
+                import os
+                if not os.path.exists("/opt/ztnet/topology.json"):
+                    if questionary.confirm("Файл topology.json не найден. Сгенерировать его сейчас?").ask():
+                        try:
+                            zt_reconcile(apply=False, init=True, validate=False)
+                        except typer.Exit:
+                            pass
+                    else:
+                        questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+                        continue
+                
+                rec_action = questionary.select(
+                    "Действие Reconcile:",
+                    choices=[
+                        questionary.Choice("Проверка (Dry Run)", "dry"),
+                        questionary.Choice("Применить изменения (Apply)", "apply"),
+                        questionary.Choice("Обновить файл из текущего состояния (Init)", "init"),
+                    ]
+                ).ask()
+                
                 try:
-                    zt_reconcile(apply=False, init=False, validate=False)
+                    if rec_action == "dry":
+                        zt_reconcile(apply=False, init=False, validate=False)
+                    elif rec_action == "apply":
+                        zt_reconcile(apply=True, init=False, validate=False)
+                    elif rec_action == "init":
+                        if questionary.confirm("ВНИМАНИЕ: Это перезапишет topology.json. Продолжить?").ask():
+                            zt_reconcile(apply=False, init=True, validate=False)
                 except typer.Exit:
                     pass
                 questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
