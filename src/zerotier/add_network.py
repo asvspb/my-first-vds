@@ -12,7 +12,7 @@ from src.zerotier.api import ZeroTierAPI
 from src.zerotier.nat import get_main_iface, get_public_ip
 
 def zt_cli(cmd: str) -> str:
-    res = run(f"docker exec ztnet_zerotier zerotier-cli {cmd}", hide_output=True)
+    res = run(f"docker exec ztnet_zerotier zerotier-cli {cmd}")
     return res.output.strip() if res.ok else ""
 
 def get_zt_ip(network_id: str) -> str:
@@ -78,7 +78,7 @@ def run_add_network() -> int:
 
     console.print("\n[cyan]=== ZeroTier — Добавление новой сети ===[/cyan]")
     
-    if "ztnet_zerotier" not in run("docker ps --format '{{.Names}}'", hide_output=True).output:
+    if "ztnet_zerotier" not in run("docker ps --format '{{.Names}}'").output:
         console.print("[red]Контейнер ztnet_zerotier не запущен![/red]")
         return 1
 
