@@ -58,9 +58,9 @@ def update_env_info(new_subnet: str, network_id: str):
         else:
             out_lines.append(line)
             
-    if not any(l.startswith("ZT_SUBNETS=") for out_lines in lines):
+    if not any(l.startswith("ZT_SUBNETS=") for l in lines):
         out_lines.append(f"ZT_SUBNETS={','.join(existing_subnets)}")
-    if not any(l.startswith("NETWORK_IDS=") for out_lines in lines):
+    if not any(l.startswith("NETWORK_IDS=") for l in lines):
         out_lines.append(f"NETWORK_IDS={','.join(existing_nids)}")
         
     env_file.write_text("\n".join(out_lines) + "\n")
