@@ -102,7 +102,8 @@ log "Python-библиотеки установлены"
 log "Шаг 5/6: Создание команды vds..."
 cat > /usr/local/bin/vds <<EOF
 #!/bin/bash
-exec ${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/src/main.py "\$@"
+export PYTHONPATH="${INSTALL_DIR}"
+exec ${INSTALL_DIR}/venv/bin/python -m src.main "\$@"
 EOF
 chmod +x /usr/local/bin/vds
 log "Команда vds доступна глобально"
