@@ -12,7 +12,7 @@ from src.core.shell import run
 console = Console()
 
 def step(num: str, title: str):
-    console.print(f"\n[cyan][{num}/12][/cyan] {title}")
+    console.print(f"\n[cyan][{num}/9][/cyan] {title}")
 
 def ok(msg: str):
     console.print(f"[green]✔[/green] {msg}")
@@ -29,7 +29,7 @@ def clean_system():
     step("0", "🩺 Очистка системы от зависших пакетов...")
     run("dpkg --configure -a")
     run("apt-get --fix-broken install -y")
-    run("apt-get remove -y --purge npm nodejs libnode*")
+    run("apt-get remove -y --purge libnode*")
     run("apt-get autoremove -y")
     run("apt-get clean")
     ok("Система очищена")
@@ -207,31 +207,10 @@ def install_docker():
         ok("Docker установлен и запущен")
 
 
-def install_nodejs():
-    step("9", "🟢 Установка Node.js (LTS)...")
-    if run("command -v node").ok:
-        warn("Node.js уже установлен — пропускаем")
-    else:
-        run("curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -")
-        run("apt-get install -y nodejs")
-        ok("Node.js установлен")
-
-
-def install_ai_cli():
-    step("10", "🤖 Установка AI CLI утилит...")
-    packages = ["@google/gemini-cli", "opencode-ai", "@kilocode/cli", "cline"]
-    for pkg in packages:
-        if run(f"npm list -g {pkg}").ok:
-            warn(f"{pkg} уже установлен — пропускаем")
-        else:
-            if run(f"npm install -g {pkg}").ok:
-                ok(f"{pkg} установлен")
-            else:
-                warn(f"Ошибка при установке {pkg}")
 
 
 def setup_sysinfo():
-    step("11", "📊 Настройка вывода системного монитора при входе...")
+    step("9", "📊 Настройка вывода системного монитора при входе...")
     dest = Path("/etc/profile.d/vds-sysinfo.sh")
     
     # Мы больше не используем старый bash-скрипт. 
@@ -261,8 +240,6 @@ def run_setup():
     setup_unattended_upgrades()
     setup_firewall()
     install_docker()
-    install_nodejs()
-    install_ai_cli()
     setup_sysinfo()
     
     console.print("\n=======================================================")
