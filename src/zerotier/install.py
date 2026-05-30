@@ -91,6 +91,7 @@ def generate_docker_compose(
     restart: unless-stopped
     volumes:
       - zerotier:/var/lib/zerotier-one
+      - ./local.conf:/var/lib/zerotier-one/local.conf
     cap_add:
       - NET_ADMIN
       - SYS_ADMIN
@@ -99,8 +100,7 @@ def generate_docker_compose(
       - /dev/net/tun:/dev/net/tun
     network_mode: host
     environment:
-      - ZT_OVERRIDE_LOCAL_CONF=true
-      - ZT_ALLOW_MANAGEMENT_FROM=127.0.0.1,{docker_bridge_subnet}
+      - ZT_OVERRIDE_LOCAL_CONF=false
     healthcheck:
       test: ["CMD", "zerotier-cli", "info"]
       interval: 10s
@@ -299,6 +299,23 @@ def run_install(ztnet_port: int = 3000) -> int:
         compose_file = os.path.join(INSTALL_DIR, "docker-compose.yml")
         Path(compose_file).write_text(compose_content)
         os.chmod(compose_file, 0o600)
+
+        # local.conf для ZeroTier
+        local_conf_content = """{
+    "settings": {
+        "primaryPort": 9993,
+        "portMappingEnabled": true,
+        "softwareUpdate": "disable",
+        "allowManagementFrom": ["127.0.0.1", "172.31.255.0/29"],
+        "allowTcpFallbackRelay": true
+    },
+    "physical": {
+        "::/0": { "blacklist": true }
+    }
+}"""
+        local_conf_file = os.path.join(INSTALL_DIR, "local.conf")
+        Path(local_conf_file).write_text(local_conf_content)
+        os.chmod(local_conf_file, 0o600)
 
         # UFW
         if command_exists("ufw"):

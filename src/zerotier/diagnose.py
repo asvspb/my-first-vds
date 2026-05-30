@@ -31,7 +31,7 @@ def run_diagnose(fix: bool = False, auto_yes: bool = False) -> int:
         env = load_env()
 
         # 1. Конфликт порта 9993
-        console.print("[bold][1/11] Конфликт порта 9993[/bold]")
+        console.print("[bold][1/12] Конфликт порта 9993[/bold]")
         if command_exists("zerotier-one") or run("dpkg -l | grep -q zerotier-one").ok:
             console.print("[error][XX] Обнаружен системный zerotier-one. Возможен конфликт.[/error]")
             critical += 1
@@ -43,7 +43,7 @@ def run_diagnose(fix: bool = False, auto_yes: bool = False) -> int:
             console.print("[success][OK] Системный zerotier-one не установлен (конфликтов нет)[/success]")
 
         # 2. Docker контейнеры
-        console.print("\n[bold][2/11] Docker-контейнеры ZTNET[/bold]")
+        console.print("\n[bold][2/12] Docker-контейнеры ZTNET[/bold]")
         for svc in ["ztnet", "ztnet_postgres", "ztnet_zerotier"]:
             status = docker_inspect(svc, "{{.State.Status}}")
             restarts = docker_inspect(svc, "{{.RestartCount}}")
@@ -60,7 +60,7 @@ def run_diagnose(fix: bool = False, auto_yes: bool = False) -> int:
                 critical += 1
 
         # 3. ZeroTier демон
-        console.print("\n[bold][3/11] ZeroTier демон[/bold]")
+        console.print("\n[bold][3/12] ZeroTier демон[/bold]")
         with ZeroTierAPI() as api:
             status = api.get_status()
             if not status:
@@ -74,7 +74,7 @@ def run_diagnose(fix: bool = False, auto_yes: bool = False) -> int:
                     warnings += 1
 
             # 4. TUN/TAP
-            console.print("\n[bold][4/11] TUN/TAP устройство[/bold]")
+            console.print("\n[bold][4/12] TUN/TAP устройство[/bold]")
             if docker_exec(CONTAINER, "ls -la /dev/net/tun").ok:
                 console.print("[success][OK] /dev/net/tun доступен в контейнере[/success]")
             else:
@@ -88,7 +88,7 @@ def run_diagnose(fix: bool = False, auto_yes: bool = False) -> int:
                 critical += 1
 
             # 5. Сети и маршруты
-            console.print("\n[bold][5/11] Сети и маршруты[/bold]")
+            console.print("\n[bold][5/12] Сети и маршруты[/bold]")
             networks = api.get_networks()
             if not networks:
                 console.print("[warning][!!] Нет подключённых сетей[/warning]")
@@ -108,7 +108,7 @@ def run_diagnose(fix: bool = False, auto_yes: bool = False) -> int:
                     warnings += 1
 
             # 6. Члены сетей (Members)
-            console.print("\n[bold][6/11] Члены сетей (Members)[/bold]")
+            console.print("\n[bold][6/12] Члены сетей (Members)[/bold]")
             zt_addr = api.get_zt_addr()
             for net in networks:
                 nwid = net.get("id")
@@ -143,7 +143,7 @@ def run_diagnose(fix: bool = False, auto_yes: bool = False) -> int:
                             console.print(f"  {addr}: ip={ips_str} vRev={vrev}")
 
             # 7. Пир-соединения (Peers)
-            console.print("\n[bold][7/11] Пир-соединения (Peers)[/bold]")
+            console.print("\n[bold][7/12] Пир-соединения (Peers)[/bold]")
             peers = api.get_peers()
             leaf_count = 0
             planet_count = 0
@@ -160,8 +160,27 @@ def run_diagnose(fix: bool = False, auto_yes: bool = False) -> int:
             
             console.print(f"[success][OK] PLANET-пиров: {planet_count}, LEAF-пиров: {leaf_count}[/success]")
 
-            # 8. NAT / IP Forwarding / Firewall
-            console.print("\n[bold][8/11] NAT / IP Forwarding / Firewall[/bold]")
+            # 8. Доступность Планет
+            console.print("\n[bold][8/12] Доступность корневых серверов (Planets)[/bold]")
+            planet_ip = "103.195.103.66"
+            
+            ping_res = run(f"ping -c 2 -W 2 {planet_ip}")
+            if ping_res.ok:
+                console.print(f"[success][OK] Ping до планеты ({planet_ip}): УСПЕШНО[/success]")
+            else:
+                console.print(f"[error][XX] Ping до планеты ({planet_ip}): ПРОВАЛЕН (Блокировка ICMP?)[/error]")
+                critical += 1
+
+            curl_res = run(f"curl -I -m 3 https://{planet_ip} 2>&1")
+            out_lower = curl_res.output.lower()
+            if "couldn't connect" in out_lower or "timed out" in out_lower or "timeout" in out_lower:
+                console.print(f"[error][XX] TCP/443 к планете ({planet_ip}): ПРОВАЛЕН (Провайдер режет TCP до ZeroTier)[/error]")
+                critical += 1
+            else:
+                console.print(f"[success][OK] TCP/443 к планете ({planet_ip}): УСПЕШНО (TCP Fallback работает)[/success]")
+
+            # 9. NAT / IP Forwarding / Firewall
+            console.print("\n[bold][9/12] NAT / IP Forwarding / Firewall[/bold]")
             ip_fwd = run("sysctl -n net.ipv4.ip_forward 2>/dev/null").output.strip()
             if ip_fwd == "1":
                 console.print("[success][OK] IP forwarding: включён[/success]")
@@ -180,8 +199,8 @@ def run_diagnose(fix: bool = False, auto_yes: bool = False) -> int:
                     console.print("[warning][!!] UFW активен, но порт 9993 НЕ открыт явно[/warning]")
                     warnings += 1
 
-            # 9. Тест связности
-            console.print("\n[bold][9/11] Тест связности[/bold]")
+            # 10. Тест связности
+            console.print("\n[bold][10/12] Тест связности[/bold]")
             for net in networks:
                 nwid = net.get("id")
                 name = net.get("name", "?")
@@ -211,8 +230,8 @@ def run_diagnose(fix: bool = False, auto_yes: bool = False) -> int:
                         console.print(f"[warning][!!] Ping {target_ip} ({addr}): НЕУДАЧА — пир недоступен[/warning]")
                         # It's a warning because peers could simply be offline
             
-        # 10. Персистентность
-        console.print("\n[bold][10/11] Персистентность[/bold]")
+        # 11. Персистентность
+        console.print("\n[bold][11/12] Персистентность[/bold]")
         if os.path.isfile("/etc/iptables/rules.v4"):
             console.print("[success][OK] /etc/iptables/rules.v4 существует[/success]")
         else:
