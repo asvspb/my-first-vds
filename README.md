@@ -23,7 +23,7 @@
 Если вы только что купили сервер и у вас есть только его IP и пароль, скачайте и запустите этот скрипт прямо на **своем ноутбуке/ПК**:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/local-init.sh | bash
+curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/main/local-init.sh | bash
 ```
 
 Скрипт спросит IP сервера, скопирует на него ваш SSH-ключ (спросит пароль 1 раз), сам установит всю систему и автоматически откроет меню `vds`!
@@ -32,10 +32,10 @@ curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main
 Если вы уже находитесь на сервере, выполните одну команду:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/main/install.sh | sudo bash
 ```
 
-*(По желанию, перед этим можно выполнить предварительную базовую подготовку:* `curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/preinstall.sh | sudo bash`*)*
+*(По желанию, перед этим можно выполнить предварительную базовую подготовку:* `curl -fsSL https://raw.githubusercontent.com/asvspb/my-first-vds/main/preinstall.sh | sudo bash`*)*
 
 После установки просто введите команду `vds` в терминале. Откроется главное интерактивное меню!
 
@@ -61,7 +61,7 @@ vds wireguard install         # Установить WireGuard VPN
 - **Системный статус (Dashboard)**: Наглядный вывод метрик сервера (на базе `psutil`).
 - **Управление ZeroTier**: Полный набор инструментов (Установка, Диагностика, Добавление сетей, Синхронизация топологии `reconcile`, Восстановление NAT, Запуск Watchdog, Полное удаление).
 - **Управление WireGuard**: Установка VPN-сервера, добавление новых клиентов с генерацией конфигов, безопасное удаление.
-- **Базовая настройка сервера (Setup)**: Интерактивный мастер настройки VDS (Создание пользователя, SSH-ключи, защита SSH, настройка UFW, выделение Swap, установка Docker, NodeJS, AI CLI).
+- **Базовая настройка сервера (Setup)**: Интерактивный мастер настройки VDS (Создание пользователя, SSH-ключи, защита SSH, настройка UFW, выделение Swap, установка Docker).
 - **Очистка системы (Cleanup)**: Освобождение места на диске (чистка логов, кэшей apt, старых контейнеров Docker, journalctl).
 
 ## Systemd-сервисы (ZeroTier)
