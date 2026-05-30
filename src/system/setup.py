@@ -62,10 +62,16 @@ def create_user():
     step("3", "👤 Создание обычного пользователя (ввод данных)...")
     
     while True:
-        new_user = questionary.text("Введите имя нового пользователя (латиница, без пробелов):").ask()
+        new_user = questionary.text("Введите имя нового пользователя (или Enter для пропуска):").ask()
         if not new_user:
-            warn("Имя не может быть пустым.")
+            warn("Пропуск создания пользователя.")
+            return
+        
+        # Check if contains spaces or invalid characters
+        if not new_user.isalnum() and "_" not in new_user and "-" not in new_user:
+            warn("Имя содержит недопустимые символы. Используйте только латиницу, цифры, - и _")
             continue
+            
         try:
             pwd.getpwnam(new_user)
             warn(f"Пользователь {new_user} уже существует.")
