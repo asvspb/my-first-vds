@@ -9,7 +9,7 @@ import questionary
 from src.core.logger import console
 from src.core.shell import run
 from src.zerotier.api import ZeroTierAPI
-from src.system.sysinfo import get_main_iface, get_public_ip
+from src.zerotier.nat import get_main_iface, get_public_ip
 
 def zt_cli(cmd: str) -> str:
     res = run(f"docker exec ztnet_zerotier zerotier-cli {cmd}", hide_output=True)
