@@ -10,12 +10,146 @@ app = typer.Typer(
     name="vds",
     help="VDS Management & ZeroTier Orchestrator",
     add_completion=False,
+    invoke_without_command=True,
 )
 
 zerotier_app = typer.Typer(help="ZeroTier VPN management")
 wireguard_app = typer.Typer(help="WireGuard VPN management")
 app.add_typer(zerotier_app, name="zerotier")
 app.add_typer(wireguard_app, name="wireguard")
+
+@app.callback(invoke_without_command=True)
+def main_menu(ctx: typer.Context):
+    if ctx.invoked_subcommand is not None:
+        return
+    import questionary
+    from rich.console import Console
+    console = Console()
+    
+    while True:
+        console.clear()
+        console.print("[bold cyan]═══ VDS Management Menu ═══[/bold cyan]\n")
+        
+        choice = questionary.select(
+            "Что вы хотите сделать?",
+            choices=[
+                questionary.Choice("📊 Системный статус (Dashboard)", "sysinfo"),
+                questionary.Choice("🌐 Управление ZeroTier", "zerotier"),
+                questionary.Choice("🛡️ Управление WireGuard", "wireguard"),
+                questionary.Choice("⚙️  Базовая настройка сервера (Setup)", "server_setup"),
+                questionary.Choice("🧹 Очистка системы (Cleanup)", "cleanup"),
+                questionary.Choice("❌ Выход", "exit"),
+            ]
+        ).ask()
+        
+        if choice == "sysinfo":
+            sysinfo()
+            questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+        elif choice == "server_setup":
+            try:
+                server_setup()
+            except typer.Exit:
+                pass
+            questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+        elif choice == "cleanup":
+            try:
+                cleanup(dry_run=False, aggressive=False)
+            except typer.Exit:
+                pass
+            questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+        elif choice == "wireguard":
+            wg_choice = questionary.select(
+                "Меню WireGuard:",
+                choices=[
+                    questionary.Choice("🚀 Установка сервера (install)", "install"),
+                    questionary.Choice("➕ Добавить клиента (add-client)", "add_client"),
+                    questionary.Choice("🗑️ Удалить WireGuard (remove)", "remove"),
+                    questionary.Choice("🔙 Назад", "back"),
+                ]
+            ).ask()
+            
+            if wg_choice == "install":
+                try:
+                    wg_install(port=51820, client="client", dns="8.8.8.8, 8.8.4.4")
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif wg_choice == "add_client":
+                name = questionary.text("Имя нового клиента:", default="client2").ask()
+                if name:
+                    try:
+                        wg_add_client(name=name)
+                    except typer.Exit:
+                        pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif wg_choice == "remove":
+                if questionary.confirm("Удалить WireGuard?").ask():
+                    try:
+                        wg_remove()
+                    except typer.Exit:
+                        pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+
+        elif choice == "zerotier":
+            zt_choice = questionary.select(
+                "Меню ZeroTier:",
+                choices=[
+                    questionary.Choice("🔍 Диагностика (status/diagnose)", "diagnose"),
+                    questionary.Choice("🛠️ Синхронизация сетей (reconcile)", "reconcile"),
+                    questionary.Choice("➕ Подключить новую сеть (add-network)", "add_network"),
+                    questionary.Choice("🔄 Восстановление NAT (nat)", "nat"),
+                    questionary.Choice("👁️ Запуск Watchdog (watchdog)", "watchdog"),
+                    questionary.Choice("🚀 Установка (install)", "install"),
+                    questionary.Choice("🗑️ Полное удаление (cleanup)", "cleanup"),
+                    questionary.Choice("🔙 Назад", "back"),
+                ]
+            ).ask()
+            
+            if zt_choice == "diagnose":
+                try:
+                    zt_diagnose(fix=False, yes=False)
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif zt_choice == "reconcile":
+                try:
+                    zt_reconcile(apply=False, init=False, validate=False)
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif zt_choice == "add_network":
+                try:
+                    zt_add_network()
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif zt_choice == "nat":
+                try:
+                    zt_nat()
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif zt_choice == "watchdog":
+                try:
+                    zt_watchdog()
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif zt_choice == "install":
+                try:
+                    zt_install(port=3000)
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif zt_choice == "cleanup":
+                if questionary.confirm("Удалить ZeroTier?").ask():
+                    try:
+                        zt_cleanup()
+                    except typer.Exit:
+                        pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+        elif choice == "exit" or choice is None:
+            break
 
 
 @app.command()
@@ -33,6 +167,13 @@ def cleanup(
     """Системная очистка сервера (apt, Docker, логи, /tmp)"""
     from src.system.cleanup import run_cleanup
     raise typer.Exit(run_cleanup(dry_run=dry_run, safe_docker=not aggressive))
+
+
+@app.command()
+def server_setup():
+    """Базовая первичная настройка сервера (Python)"""
+    from src.system.setup import run_setup
+    raise typer.Exit(run_setup())
 
 
 @zerotier_app.command("install")
@@ -84,6 +225,13 @@ def zt_nat():
     """Восстановить NAT правила для всех ZeroTier сетей"""
     from src.zerotier.nat import setup_nat_all
     raise typer.Exit(setup_nat_all())
+
+
+@zerotier_app.command("add-network")
+def zt_add_network():
+    """Добавление новой сети к существующей установке ZTNET"""
+    from src.zerotier.add_network import run_add_network
+    raise typer.Exit(run_add_network())
 
 
 @zerotier_app.command("cleanup")

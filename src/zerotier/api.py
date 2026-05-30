@@ -28,6 +28,9 @@ class ZeroTierAPI:
         self._session = requests.Session()
         if self._token:
             self._session.headers.update({"X-ZT1-Auth": self._token})
+        else:
+            # Force fetching the token so headers are populated
+            _ = self.token
 
     def __enter__(self):
         return self
@@ -54,7 +57,7 @@ class ZeroTierAPI:
             "cat /var/lib/zerotier-one/authtoken.secret",
             timeout=10,
         )
-        return result.output if result.ok else ""
+        return result.output.strip() if result.ok else ""
 
     def healthcheck(self) -> bool:
         try:
@@ -155,6 +158,14 @@ class ZeroTierAPI:
             "POST",
             f"/controller/network/{nwid}/member/{addr}",
             {"ipAssignments": ips},
+        )
+        return result is not None
+
+    def set_member_name(self, nwid: str, addr: str, name: str) -> bool:
+        result = self.controller_request(
+            "POST",
+            f"/controller/network/{nwid}/member/{addr}",
+            {"name": name},
         )
         return result is not None
 

@@ -1,5 +1,7 @@
 import platform
-import subprocess
+import socket
+import time
+import requests
 from typing import Optional
 
 import psutil
@@ -7,8 +9,6 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
-from rich.columns import Columns
-from rich.progress_bar import ProgressBar
 
 from src.core.shell import run
 
@@ -16,8 +16,13 @@ console = Console()
 
 
 def get_public_ip() -> str:
-    result = run("curl -s --connect-timeout 2 --max-time 4 ifconfig.me 2>/dev/null")
-    return result.output if result.ok else "N/A"
+    try:
+        resp = requests.get("https://ifconfig.me", timeout=3)
+        if resp.status_code == 200:
+            return resp.text.strip()
+    except requests.RequestException:
+        pass
+    return "N/A"
 
 
 def get_docker_status() -> tuple[int, int]:
@@ -38,9 +43,37 @@ def make_bar(percent: float, width: int = 20) -> Text:
         color = "yellow"
     else:
         color = "green"
-    text.append("#" * filled, style=color)
-    text.append("." * empty, style="dim")
+    text.append("█" * filled, style=color)
+    text.append("░" * empty, style="dim")
     return text
+
+
+def get_uptime_str() -> str:
+    boot_time = psutil.boot_time()
+    uptime_seconds = time.time() - boot_time
+    days = int(uptime_seconds // 86400)
+    hours = int((uptime_seconds % 86400) // 3600)
+    mins = int((uptime_seconds % 3600) // 60)
+    if days > 0:
+        return f"{days} days, {hours} hours, {mins} mins"
+    elif hours > 0:
+        return f"{hours} hours, {mins} mins"
+    else:
+        return f"{mins} mins"
+
+
+def get_local_ip() -> str:
+    local_ip = ""
+    net_if_addrs = psutil.net_if_addrs()
+    for iface, addrs in net_if_addrs.items():
+        if iface != "lo" and not iface.startswith("docker") and not iface.startswith("br-") and not iface.startswith("veth") and not iface.startswith("zt"):
+            for addr in addrs:
+                if addr.family == socket.AF_INET and not addr.address.startswith("127."):
+                    local_ip = addr.address
+                    break
+        if local_ip:
+            break
+    return local_ip
 
 
 def show_dashboard() -> None:
@@ -73,23 +106,19 @@ def show_dashboard() -> None:
     load_avg = psutil.getloadavg()
     cpu_percent = psutil.cpu_percent(interval=1)
 
-    uptime_result = run("uptime -p 2>/dev/null | sed 's/up //'")
-    uptime_str = uptime_result.output if uptime_result.ok else ""
+    uptime_str = get_uptime_str()
 
     ram = psutil.virtual_memory()
     swap = psutil.swap_memory()
 
     public_ip = get_public_ip()
-    local_ip = ""
-    hostname_i = run("hostname -I 2>/dev/null")
-    if hostname_i.ok:
-        local_ip = hostname_i.output.split()[0] if hostname_i.output else ""
+    local_ip = get_local_ip()
 
     docker_running, docker_total = get_docker_status()
 
     console.print()
     console.print(Panel.fit(
-        f"[bold]{hostname}[/bold]  [dim]{os_name} | {kernel} ({arch})[/dim]",
+        f"[bold cyan]{hostname}[/bold cyan]  [dim]{os_name} | {kernel} ({arch})[/dim]",
         border_style="cyan",
     ))
 
@@ -116,19 +145,38 @@ def show_dashboard() -> None:
         console.print(f"  [dim]SWP:[/dim] {swap_used_mb}M/{swap_total_mb}M {swap_bar}")
 
     console.print()
-    console.print("  [bold cyan]─── Disk ───────────────────────────────────────────────[/bold cyan]")
+    
+    table = Table(show_header=True, header_style="bold cyan", border_style="dim", box=None)
+    table.add_column("Mount", style="dim")
+    table.add_column("Type", justify="right")
+    table.add_column("Used", justify="right")
+    table.add_column("Avail", justify="right")
+    table.add_column("Use%", justify="right", style="green")
+    table.add_column("Total", justify="right")
 
-    disk_result = run("df -h --type=ext4 --type=xfs --type=btrfs --type=zfs 2>/dev/null")
-    if disk_result.ok:
-        for line in disk_result.output.splitlines()[1:]:
-            parts = line.split()
-            if len(parts) >= 6 and not parts[0].startswith("tmpfs"):
-                mount = parts[5]
-                used = parts[2]
-                avail = parts[3]
-                use_pct = parts[4]
-                size = parts[1]
-                console.print(f"  {mount:<14} {used:>5} {avail:>5} {use_pct:>5} {size}")
+    partitions = psutil.disk_partitions(all=False)
+    for part in partitions:
+        if part.fstype in ("ext4", "xfs", "btrfs", "zfs", "vfat"):
+            try:
+                usage = psutil.disk_usage(part.mountpoint)
+                used_gb = usage.used / (1024**3)
+                avail_gb = usage.free / (1024**3)
+                total_gb = usage.total / (1024**3)
+                
+                pct_style = "red" if usage.percent > 90 else "yellow" if usage.percent > 75 else "green"
+                
+                table.add_row(
+                    part.mountpoint,
+                    part.fstype,
+                    f"{used_gb:.1f}G",
+                    f"{avail_gb:.1f}G",
+                    f"[{pct_style}]{usage.percent:.1f}%[/{pct_style}]",
+                    f"{total_gb:.1f}G"
+                )
+            except PermissionError:
+                continue
+                
+    console.print(table)
 
     console.print()
     console.print("  [bold cyan]─── Network & Docker ───────────────────────────────────[/bold cyan]")

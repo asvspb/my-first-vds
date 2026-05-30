@@ -239,48 +239,21 @@ def run_install(ztnet_port: int = 3000) -> int:
         run("apt-get install -y -qq curl wget ca-certificates gnupg lsb-release openssl iptables-persistent", timeout=300)
 
         # ZeroTier на хосте
-        console.print("[info]Шаг 2/6: Установка ZeroTier...[/info]")
-        if not command_exists("zerotier-one"):
-            # Безопасная установка: загрузка, верификация, выполнение
-            import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as tmp:
-                tmp_path = tmp.name
-            
-            try:
-                # Загрузка скрипта
-                result = run(f"curl -fsSL https://install.zerotier.com -o {tmp_path}")
-                if not result.ok:
-                    console.print("[error]Не удалось загрузить скрипт установки ZeroTier[/error]")
-                    return 1
-                
-                # Верификация: проверка что файл не пустой и начинается с shebang
-                with open(tmp_path, 'r') as f:
-                    first_line = f.readline().strip()
-                    if not first_line or not first_line.startswith('#!/'):
-                        console.print("[error]Загруженный скрипт невалиден[/error]")
-                        return 1
-                
-                # Установка прав выполнения и запуск
-                os.chmod(tmp_path, 0o755)
-                result = run(f"bash {tmp_path}")
-                if not result.ok:
-                    console.print("[error]Ошибка установки ZeroTier[/error]")
-                    return 1
-            finally:
-                # Очистка временного файла
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            
-            systemctl("enable", "zerotier-one")
-            systemctl("start", "zerotier-one")
-
-        # Освобождаем порт 9993
-        if run("ss -tuln | grep -q ':9993 '").ok or systemctl("is-active", "zerotier-one").ok:
+        console.print("[info]Шаг 2/6: Очистка системы от старого ZeroTier...[/info]")
+        if command_exists("zerotier-one") or run("dpkg -l | grep -q zerotier-one").ok:
+            console.print("[warning]Обнаружен системный zerotier-one, удаляем для избежания конфликта портов с Docker...[/warning]")
             systemctl("stop", "zerotier-one")
             systemctl("disable", "zerotier-one")
+            run("apt-get purge -y -qq zerotier-one 2>/dev/null")
             run("pkill -9 -x zerotier-one 2>/dev/null")
+            console.print("[success]Системный ZeroTier удален.[/success]")
+
+        # Освобождаем порт 9993 если все еще занят
+        if run("ss -tuln | grep -q ':9993 '").ok:
+            console.print("[warning]Порт 9993 занят — освобождаем...[/warning]")
+            run("fuser -k 9993/tcp 9993/udp 2>/dev/null")
             time.sleep(2)
-            systemctl("mask", "zerotier-one")
+        console.print("[success]Порт 9993 свободен для Docker-контейнера[/success]")
 
         # Docker
         console.print("[info]Шаг 3/6: Установка Docker...[/info]")

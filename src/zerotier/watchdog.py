@@ -109,7 +109,9 @@ def restart_container() -> bool:
     logger.info(f"Рестарт #{recent + 1}/{MAX_RESTARTS_PER_HOUR} за последний час")
     record_restart()
 
-    run(f"docker restart {CONTAINER}")
+    run(f"docker stop {CONTAINER} >/dev/null 2>&1")
+    time.sleep(3)
+    run(f"docker start {CONTAINER} >/dev/null 2>&1")
     logger.info("Контейнер перезапущен, ожидаем ONLINE...")
 
     for i in range(12):

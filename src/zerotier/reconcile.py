@@ -112,7 +112,7 @@ def validate_topology(topology: Topology) -> tuple[list[str], list[str]]:
                 warnings.append(f"{nwid}/{addr}: member not authorized")
 
     if len(exit_nodes) > 1:
-        errors.append(f"MULTIPLE exit-nodes: {exit_nodes}. Only ONE network should have role=exit-node")
+        warnings.append(f"MULTIPLE exit-nodes: {exit_nodes}. Ensure clients don't join multiple exit-node networks at once to avoid routing loops.")
 
     return errors, warnings
 
@@ -229,6 +229,17 @@ def reconcile(api: ZeroTierAPI, topology: Topology, dry_run: bool = True) -> int
                         console.print(f"[success]  {addr}: IPs updated[/success]")
                     else:
                         console.print(f"[error]  {addr}: failed to update IPs[/error]")
+                changes += 1
+
+            desired_name = desired_member.name
+            actual_name = actual.get("name", "")
+            if desired_name and desired_name != actual_name:
+                console.print(f"[change][APPLY] {nwid}/{addr}: update name '{actual_name}' -> '{desired_name}'[/change]")
+                if not dry_run:
+                    if api.set_member_name(nwid, addr, desired_name):
+                        console.print(f"[success]  {addr}: Name updated[/success]")
+                    else:
+                        console.print(f"[error]  {addr}: failed to update name[/error]")
                 changes += 1
 
         for addr in actual_members:
