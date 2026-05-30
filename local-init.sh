@@ -51,11 +51,16 @@ echo ""
 echo -e "${CYAN}[->]${NC} Подключаемся по SSH (без пароля) и запускаем установку..."
 ssh -o StrictHostKeyChecking=accept-new "${SERVER_USER}@${SERVER_IP}" << 'EOF'
     set -e
+    if ! command -v curl >/dev/null 2>&1; then
+        echo -e "\n\033[0;36m--- Установка базовых утилит (curl) ---\033[0m"
+        apt-get update -qq && apt-get install -y -qq curl
+    fi
+
     echo -e "\n\033[0;36m--- Запуск preinstall.sh ---\033[0m"
-    curl -fsSL "https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/preinstall.sh?v=\$(date +%s)" | bash
+    curl -fsSL "https://raw.githubusercontent.com/asvspb/my-first-vds/main/preinstall.sh?v=\$(date +%s)" | bash
     
     echo -e "\n\033[0;36m--- Запуск install.sh ---\033[0m"
-    curl -fsSL "https://raw.githubusercontent.com/asvspb/my-first-vds/refs/heads/main/install.sh?v=\$(date +%s)" | bash
+    curl -fsSL "https://raw.githubusercontent.com/asvspb/my-first-vds/main/install.sh?v=\$(date +%s)" | bash
 EOF
 
 echo ""

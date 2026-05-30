@@ -64,7 +64,11 @@ log "Системные зависимости установлены"
 log "Шаг 2/6: Создание директории проекта..."
 mkdir -p "${INSTALL_DIR}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+    SCRIPT_DIR="$PWD"
+fi
 if [[ -f "${SCRIPT_DIR}/requirements.txt" ]]; then
     log "Копирование файлов из ${SCRIPT_DIR}..."
     cp -r "${SCRIPT_DIR}/"* "${INSTALL_DIR}/"
