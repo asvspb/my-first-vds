@@ -112,12 +112,15 @@ def run_install(
 listening-port={port}
 external-ip={external_ip}
 user={username}:{password}
-realm={realm}
+realm={external_ip}
 min-port={min_port}
 max-port={max_port}
 fingerprint
 lt-cred-mech
+no-tls
+no-dtls
 no-cli
+no-loopback-peers
 no-multicast-peers
 """
     Path(TURN_CONF).write_text(turn_conf)
