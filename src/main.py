@@ -15,8 +15,10 @@ app = typer.Typer(
 
 zerotier_app = typer.Typer(help="ZeroTier VPN management")
 wireguard_app = typer.Typer(help="WireGuard VPN management")
+coturn_app = typer.Typer(help="Coturn TURN server management")
 app.add_typer(zerotier_app, name="zerotier")
 app.add_typer(wireguard_app, name="wireguard")
+app.add_typer(coturn_app, name="coturn")
 
 @app.callback(invoke_without_command=True)
 def main_menu(ctx: typer.Context):
@@ -36,6 +38,7 @@ def main_menu(ctx: typer.Context):
                 questionary.Choice("Системный статус (Dashboard)", "sysinfo"),
                 questionary.Choice("Управление ZeroTier", "zerotier"),
                 questionary.Choice("Управление WireGuard", "wireguard"),
+                questionary.Choice("Управление Coturn (TURN)", "coturn"),
                 questionary.Choice("Базовая настройка сервера (Setup)", "server_setup"),
                 questionary.Choice("Очистка системы (Cleanup)", "cleanup"),
                 questionary.Choice("Выход", "exit"),
@@ -86,6 +89,39 @@ def main_menu(ctx: typer.Context):
                 if questionary.confirm("Удалить WireGuard?").ask():
                     try:
                         wg_remove()
+                    except typer.Exit:
+                        pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+
+        elif choice == "coturn":
+            ct_choice = questionary.select(
+                "Меню Coturn:",
+                choices=[
+                    questionary.Choice("Установка TURN-сервера (install)", "install"),
+                    questionary.Choice("Статус и конфигурация (status)", "status"),
+                    questionary.Choice("Удалить Coturn (remove)", "remove"),
+                    questionary.Choice("Назад", "back"),
+                ]
+            ).ask()
+
+            if ct_choice == "install":
+                user = questionary.text("Логин для TURN:", default="admin").ask() or "admin"
+                pwd = questionary.text("Пароль (пусто = автогенерация):", default="").ask()
+                try:
+                    coturn_install(username=user, password=pwd)
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif ct_choice == "status":
+                try:
+                    coturn_status()
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif ct_choice == "remove":
+                if questionary.confirm("Удалить Coturn?").ask():
+                    try:
+                        coturn_remove()
                     except typer.Exit:
                         pass
                 questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
@@ -292,6 +328,32 @@ def wg_remove():
     """Удалить WireGuard"""
     from src.wireguard.install import remove
     raise typer.Exit(remove())
+
+
+@coturn_app.command("install")
+def coturn_install(
+    username: str = typer.Option("admin", "--user", "-u", help="Логин для TURN"),
+    password: str = typer.Option("", "--password", "-p", help="Пароль (пусто = автогенерация)"),
+    realm: str = typer.Option("private-cinema.local", "--realm", help="Realm"),
+    port: int = typer.Option(3478, "--port", help="Порт TURN"),
+):
+    """Установить Coturn TURN сервер"""
+    from src.coturn.install import run_install
+    raise typer.Exit(run_install(username=username, password=password, realm=realm, port=port))
+
+
+@coturn_app.command("status")
+def coturn_status():
+    """Показать статус и конфигурацию Coturn"""
+    from src.coturn.install import run_status
+    raise typer.Exit(run_status())
+
+
+@coturn_app.command("remove")
+def coturn_remove():
+    """Удалить Coturn"""
+    from src.coturn.install import run_remove
+    raise typer.Exit(run_remove())
 
 
 if __name__ == "__main__":
