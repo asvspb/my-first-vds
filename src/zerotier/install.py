@@ -55,9 +55,9 @@ def generate_docker_compose(
     nextauth_secret: str,
     server_ip: str,
     ztnet_port: int = 3000,
+    docker_bridge_subnet: str = "172.31.255.0/29",
+    docker_bridge_gw: str = "172.31.255.1"
 ) -> str:
-    docker_bridge_subnet = "172.31.255.0/29"
-    docker_bridge_gw = "172.31.255.1"
 
     if server_ip and ":" in server_ip:
         server_ip_url = f"[{server_ip}]"
@@ -165,6 +165,8 @@ def save_env_info(
     ztnet_port: int = 3000,
     zt_subnet: str = "10.121.15.0/24",
     network_id: str = "",
+    docker_bridge_subnet: str = "172.31.255.0/29",
+    docker_bridge_gw: str = "172.31.255.1"
 ) -> None:
     env_file = os.path.join(install_dir, ".env.info")
     server_ip = arch["public_ip"]
@@ -185,8 +187,8 @@ ZTNET_URL={nextauth_url}
 POSTGRES_PASSWORD={postgres_password}
 NEXTAUTH_SECRET={nextauth_secret}
 INSTALL_DIR={install_dir}
-DOCKER_BRIDGE_SUBNET=172.31.255.0/29
-DOCKER_BRIDGE_GW=172.31.255.1
+DOCKER_BRIDGE_SUBNET={docker_bridge_subnet}
+DOCKER_BRIDGE_GW={docker_bridge_gw}
 ZT_SUBNET={zt_subnet}
 """
     if network_id:
@@ -196,7 +198,12 @@ ZT_SUBNET={zt_subnet}
     os.chmod(env_file, 0o600)
 
 
-def run_install(ztnet_port: int = 3000) -> int:
+def run_install(
+    ztnet_port: int = 3000,
+    docker_bridge_subnet: str = "172.31.255.0/29",
+    docker_bridge_gw: str = "172.31.255.1",
+    zt_subnet: str = "10.121.15.0/24"
+) -> int:
     lock = FileLock(LOCK_FILE)
     if not lock.acquire():
         console.print("[error]Другой экземпляр установки уже запущен[/error]")
@@ -235,8 +242,15 @@ def run_install(ztnet_port: int = 3000) -> int:
 
         # Системные зависимости
         console.print("\n[info]Шаг 1/6: Обновление системы...[/info]")
-        run("apt-get update -qq", timeout=120)
-        run("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl wget ca-certificates gnupg lsb-release openssl iptables-persistent", timeout=300)
+        res_update = run("apt-get update -qq", timeout=300)
+        if not res_update.ok:
+            console.print("[error]Ошибка при обновлении списка пакетов (apt-get update)[/error]")
+            return 1
+
+        res_install = run("DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl wget ca-certificates gnupg lsb-release openssl iptables-persistent", timeout=600)
+        if not res_install.ok:
+            console.print("[error]Ошибка при установке системных зависимостей[/error]")
+            return 1
 
         # ZeroTier на хосте
         console.print("[info]Шаг 2/6: Очистка системы от старого ZeroTier...[/info]")
@@ -294,25 +308,26 @@ def run_install(ztnet_port: int = 3000) -> int:
         Path(INSTALL_DIR).mkdir(parents=True, exist_ok=True)
 
         compose_content = generate_docker_compose(
-            INSTALL_DIR, postgres_password, nextauth_secret, arch["public_ip"], ztnet_port
+            INSTALL_DIR, postgres_password, nextauth_secret, arch["public_ip"], ztnet_port,
+            docker_bridge_subnet, docker_bridge_gw
         )
         compose_file = os.path.join(INSTALL_DIR, "docker-compose.yml")
         Path(compose_file).write_text(compose_content)
         os.chmod(compose_file, 0o600)
 
         # local.conf для ZeroTier
-        local_conf_content = """{
-    "settings": {
+        local_conf_content = f"""{{
+    "settings": {{
         "primaryPort": 9993,
         "portMappingEnabled": true,
         "softwareUpdate": "disable",
-        "allowManagementFrom": ["127.0.0.1", "172.31.255.0/29"],
+        "allowManagementFrom": ["127.0.0.1", "{docker_bridge_subnet}"],
         "allowTcpFallbackRelay": true
-    },
-    "physical": {
-        "::/0": { "blacklist": true }
-    }
-}"""
+    }},
+    "physical": {{
+        "::/0": {{ "blacklist": true }}
+    }}
+}}"""
         local_conf_file = os.path.join(INSTALL_DIR, "local.conf")
         Path(local_conf_file).write_text(local_conf_content)
         os.chmod(local_conf_file, 0o600)
@@ -325,7 +340,6 @@ def run_install(ztnet_port: int = 3000) -> int:
             run("ufw default allow routed")
 
         # iptables NAT
-        zt_subnet = "10.121.15.0/24"
         main_iface = arch["main_iface"]
         server_ip = arch["public_ip"]
         out_flag = f"-o {main_iface}" if main_iface else ""
@@ -340,7 +354,7 @@ def run_install(ztnet_port: int = 3000) -> int:
 
         run("netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables/rules.v4 2>/dev/null")
 
-        save_env_info(INSTALL_DIR, arch, postgres_password, nextauth_secret, ztnet_port, zt_subnet)
+        save_env_info(INSTALL_DIR, arch, postgres_password, nextauth_secret, ztnet_port, zt_subnet, "", docker_bridge_subnet, docker_bridge_gw)
 
         # Запуск контейнеров
         console.print("[info]Шаг 6/6: Запуск ZTNET...[/info]")
