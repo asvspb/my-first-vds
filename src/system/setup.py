@@ -51,7 +51,7 @@ def update_system():
     run("DEBIAN_FRONTEND=noninteractive apt-get upgrade -y")
     packages = [
         "git", "python3", "python3-pip", "python3-venv",
-        "nginx", "curl", "wget", "ca-certificates",
+        "curl", "wget", "ca-certificates",
         "build-essential", "qrencode", "iptables", "iproute2", "ufw"
     ]
     run(f"DEBIAN_FRONTEND=noninteractive apt-get install -y {' '.join(packages)}")
