@@ -7,6 +7,7 @@ Requires=docker.service
 Type=oneshot
 WorkingDirectory=/opt/my-vds
 Environment=PYTHONPATH=/opt/my-vds
+Environment=INSTALL_DIR=/opt/ztnet
 ExecStart=/opt/my-vds/venv/bin/python -m src.main zerotier watchdog
 StandardOutput=journal
 StandardError=journal

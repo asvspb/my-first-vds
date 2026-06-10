@@ -289,9 +289,14 @@ def run_reconcile(apply: bool = False, init: bool = False, validate: bool = Fals
 
         topology = load_topology()
         if not topology:
-            console.print(f"[error]Topology file not found: {TOPOLOGY_FILE}[/error]")
-            console.print("[error]Run: vds zerotier reconcile --init[/error]")
-            return 1
+            console.print(f"[warning]Topology not configured: {TOPOLOGY_FILE}[/warning]")
+            console.print("[warning]Run: vds zerotier reconcile --init to generate[/warning]")
+            return 0  # exit 0 so systemd timer does not mark service as failed
+
+        if not topology.networks:
+            console.print("[warning]No networks in topology.json — skipping reconcile[/warning]")
+            console.print("[warning]Run: vds zerotier reconcile --init to populate[/warning]")
+            return 0  # exit 0 so systemd timer does not mark service as failed
 
         return reconcile(api, topology, dry_run=not apply)
     finally:
