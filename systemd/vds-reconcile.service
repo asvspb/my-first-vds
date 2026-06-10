@@ -5,6 +5,8 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/my-vds/venv/bin/python /opt/my-vds/src/main.py zerotier reconcile
+WorkingDirectory=/opt/my-vds
+Environment=PYTHONPATH=/opt/my-vds
+ExecStart=/opt/my-vds/venv/bin/python -m src.main zerotier reconcile
 StandardOutput=journal
 StandardError=journal

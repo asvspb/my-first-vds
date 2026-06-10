@@ -5,7 +5,9 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/my-vds/venv/bin/python /opt/my-vds/src/main.py zerotier watchdog
+WorkingDirectory=/opt/my-vds
+Environment=PYTHONPATH=/opt/my-vds
+ExecStart=/opt/my-vds/venv/bin/python -m src.main zerotier watchdog
 StandardOutput=journal
 StandardError=journal
 IOSchedulingClass=idle
