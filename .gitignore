@@ -1,5 +1,8 @@
 .kilo/
-docs/
+.v2c/
+.zcode/plans/
+.zcode/workflow-drafts/
+.zcode/workflow-runs/
 __pycache__/
 venv/
 *.pyc

@@ -28,6 +28,13 @@ vds/
 ├── systemd/            # Systemd unit-файлы
 │   ├── vds-watchdog.service/.timer
 │   └── vds-reconcile.service/.timer
+├── AGENTS.md           # Контекст проекта для ИИ-агентов
+├── TECHDEBT.md         # Бэклог техдолга
+├── .zcode/agents/      # Определения ролей ИИ-команды (8 агентов)
+├── docs/
+│   ├── TEAM.md              # Ролевая модель и процесс (гейты G0–G6)
+│   ├── VPN-PROTOCOLS.md     # Обзор протоколов (VLESS Reality, Hysteria2, XHTTP) и план модулей
+│   └── CENSORSHIP-ROADMAP.md # Roadmap внедрения практик обхода блокировок
 └── src/
     ├── main.py         # Точка входа CLI (typer + questionary)
     ├── core/           # Ядро: логгер, shell-утилиты, блокировки
@@ -75,6 +82,24 @@ vds wireguard install        # Установить WireGuard VPN
 vds server-setup             # Мастер первичной настройки
 vds cleanup                  # Очистка системы (логи, кэши, Docker)
 ```
+
+## Роли ИИ-команды
+
+Проект ведётся восемью агентами (`.zcode/agents/`); процесс с гейтами — [docs/TEAM.md](docs/TEAM.md), контекст — [AGENTS.md](AGENTS.md).
+
+| Роль | Агент | Ответственность |
+|---|---|---|
+| Владелец | `vds-owner` | Идеи, ценность, приоритет, границы |
+| Аналитик | `vds-analyst` | Идея → требования (REQ) и критерии приёмки |
+| Архитектор | `vds-architect` | ТЗ/SPEC, архитектура, ADR, work packages |
+| Кодер | `vds-coder` | Реализация WP по ТЗ с доказательствами |
+| Дебагер | `vds-debugger` | Воспроизведение, root cause, регрессионный тест |
+| Тестировщик | `vds-tester` | Независимая верификация по AC |
+| Документатор | `vds-docs` | README/docs/CHANGELOG в синхроне с кодом |
+| Оркестратор | `vds-orchestrator` | Поток, гейты G0–G6, трассируемость |
+
+Типовой поток: `owner → analyst → architect → coders → tester → [debugger] → docs → close`.
+Модели: архитектор и тестировщик — `glm-5.3`, дебагер — `deepseek-flash`, остальные — `glm-5.3-flash`.
 
 ## Systemd-таймеры
 
