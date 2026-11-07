@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 from src.core.lock import FileLock
 from src.core.logger import console, rotate_log
+from src.core.shell import load_env
 from src.zerotier.api import ZeroTierAPI
 
 logger = logging.getLogger(__name__)
@@ -53,18 +54,6 @@ class Topology(BaseModel):
     meta: TopologyMeta = Field(default_factory=TopologyMeta, alias="_meta")
     server: ServerConfig = Field(default_factory=ServerConfig)
     networks: dict[str, NetworkDesired] = Field(default_factory=dict)
-
-
-def load_env() -> dict[str, str]:
-    env = {}
-    if os.path.isfile(ENV_FILE):
-        with open(ENV_FILE) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, _, val = line.partition("=")
-                    env[key.strip()] = val.strip()
-    return env
 
 
 def load_topology() -> Optional[Topology]:
@@ -123,7 +112,7 @@ def init_topology(api: ZeroTierAPI) -> int:
         return 1
 
     zt_addr = api.get_zt_addr()
-    env = load_env()
+    env = load_env(ENV_FILE)
     networks = api.get_networks()
 
     console.print("[info]Generating topology.json from current state...[/info]")

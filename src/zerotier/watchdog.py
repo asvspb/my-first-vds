@@ -6,13 +6,14 @@ from pathlib import Path
 from typing import Optional
 
 from src.core.lock import FileLock
-from src.core.shell import run, docker_exec, docker_inspect, systemctl
+from src.core.shell import run, docker_exec, docker_inspect, systemctl, load_env
 from src.core.logger import console, rotate_log
-from src.zerotier.nat import setup_nat_for_subnet, setup_forward_for_subnet, save_iptables, load_env, get_main_iface, get_public_ip
+from src.zerotier.nat import setup_nat_for_subnet, setup_forward_for_subnet, save_iptables, get_main_iface, get_public_ip
 
 logger = logging.getLogger(__name__)
 
 INSTALL_DIR = os.environ.get("INSTALL_DIR", "/opt/ztnet")
+ENV_FILE = os.path.join(INSTALL_DIR, ".env.info")
 LOG_FILE = os.path.join(INSTALL_DIR, "zt-watchdog.log")
 LOCK_FILE = "/var/run/ztnet-watchdog.lock"
 CONTAINER = "ztnet_zerotier"
@@ -120,7 +121,7 @@ def restart_container() -> bool:
 
     for i in range(12):
         time.sleep(5)
-        info = docker_exec(CONTAINER, "zerotier-cli info").output
+        info = docker_exec(CONTAINER, ["zerotier-cli", "info"]).output
         if "ONLINE" in info or "TUNNELED" in info:
             logger.info(f"Восстановлен: {info}")
             return True
@@ -131,13 +132,13 @@ def restart_container() -> bool:
 
 
 def check_nat_rules() -> None:
-    env = load_env()
+    env = load_env(ENV_FILE)
     all_subnets = env.get("ZT_SUBNETS") or env.get("ZT_SUBNET", "")
     main_iface = env.get("MAIN_IFACE") or get_main_iface()
     server_ip = env.get("PUBLIC_IP") or get_public_ip()
     is_openvz = env.get("IS_OPENVZ", "false") == "true"
 
-    runtime_result = docker_exec(CONTAINER, "zerotier-cli -j listnetworks")
+    runtime_result = docker_exec(CONTAINER, ["zerotier-cli", "-j", "listnetworks"])
     runtime_subnets = []
     if runtime_result.ok:
         try:
@@ -170,7 +171,7 @@ def check_nat_rules() -> None:
 
 
 def cleanup_stale_networks() -> None:
-    result = docker_exec(CONTAINER, "zerotier-cli -j listnetworks")
+    result = docker_exec(CONTAINER, ["zerotier-cli", "-j", "listnetworks"])
     if not result.ok:
         return
     try:
@@ -181,7 +182,7 @@ def cleanup_stale_networks() -> None:
                 nwid = n.get("id")
                 if nwid:
                     logger.warning(f"Удаление мертвой сети {nwid} (NOT_FOUND)")
-                    docker_exec(CONTAINER, f"zerotier-cli leave {nwid}")
+                    docker_exec(CONTAINER, ["zerotier-cli", "leave", nwid])
     except (json.JSONDecodeError, ValueError):
         pass
 
@@ -198,7 +199,7 @@ def run_watchdog() -> int:
         bind_result = run(f"docker logs {CONTAINER} --since {CHECK_WINDOW} 2>&1 | grep -cE 'Could not bind|fatal error.*9993'", timeout=30)
         bind_errors = int(bind_result.output) if bind_result.ok and bind_result.output.isdigit() else 0
 
-        zt_info = docker_exec(CONTAINER, "zerotier-cli info").output
+        zt_info = docker_exec(CONTAINER, ["zerotier-cli", "info"]).output
         zt_status = ""
         for word in zt_info.split():
             if word in ("ONLINE", "OFFLINE", "TUNNELED", "DEGRADED"):
@@ -221,7 +222,7 @@ def run_watchdog() -> int:
             logger.warning(f"ПРОБЛЕМА: ZT статус={zt_status or 'NO_RESPONSE'}")
             problem = True
 
-        pgrep_result = docker_exec(CONTAINER, "pgrep -x zerotier-one")
+        pgrep_result = docker_exec(CONTAINER, ["pgrep", "-x", "zerotier-one"])
         if not pgrep_result.ok:
             logger.warning("ПРОБЛЕМА: процесс zerotier-one не найден в контейнере")
             problem = True

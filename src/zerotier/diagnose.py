@@ -4,11 +4,11 @@ import os
 import time
 from typing import Optional
 
-from src.core.shell import run, docker_exec, docker_inspect, systemctl, command_exists
+from src.core.shell import run, docker_exec, docker_inspect, systemctl, command_exists, load_env
 from src.core.lock import FileLock
 from src.core.logger import console
 from src.zerotier.api import ZeroTierAPI
-from src.zerotier.nat import load_env, get_main_iface
+from src.zerotier.nat import get_main_iface
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ def run_diagnose(fix: bool = False, auto_yes: bool = False) -> int:
         warnings = 0
 
         console.print("\n[info]═══ ZeroTier + ZTNET — Диагностика ═══[/info]\n")
-        env = load_env()
+        env = load_env(ENV_FILE)
 
         # 1. Конфликт порта 9993
         console.print("[bold][1/12] Конфликт порта 9993[/bold]")
@@ -75,7 +75,7 @@ def run_diagnose(fix: bool = False, auto_yes: bool = False) -> int:
 
             # 4. TUN/TAP
             console.print("\n[bold][4/12] TUN/TAP устройство[/bold]")
-            if docker_exec(CONTAINER, "ls -la /dev/net/tun").ok:
+            if docker_exec(CONTAINER, ["ls", "-la", "/dev/net/tun"]).ok:
                 console.print("[success][OK] /dev/net/tun доступен в контейнере[/success]")
             else:
                 console.print("[error][XX] /dev/net/tun НЕ доступен в контейнере[/error]")

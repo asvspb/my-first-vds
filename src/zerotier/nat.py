@@ -2,25 +2,13 @@ import logging
 import os
 from typing import Optional
 
-from src.core.shell import run, command_exists
+from src.core.shell import run, command_exists, load_env
 from src.core.logger import console
 
 logger = logging.getLogger(__name__)
 
 INSTALL_DIR = os.environ.get("INSTALL_DIR", "/opt/ztnet")
 ENV_FILE = os.path.join(INSTALL_DIR, ".env.info")
-
-
-def load_env() -> dict[str, str]:
-    env = {}
-    if os.path.isfile(ENV_FILE):
-        with open(ENV_FILE) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, _, val = line.partition("=")
-                    env[key.strip()] = val.strip()
-    return env
 
 
 def get_main_iface() -> str:
@@ -89,7 +77,7 @@ def save_iptables() -> bool:
 
 
 def setup_nat_all() -> int:
-    env = load_env()
+    env = load_env(ENV_FILE)
     main_iface = env.get("MAIN_IFACE") or get_main_iface()
     server_ip = env.get("PUBLIC_IP") or get_public_ip()
     is_openvz = env.get("IS_OPENVZ", "false") == "true"
@@ -117,7 +105,7 @@ def setup_nat_all() -> int:
 
 
 def cleanup_nat(subnets: list[str]) -> int:
-    env = load_env()
+    env = load_env(ENV_FILE)
     main_iface = env.get("MAIN_IFACE") or get_main_iface()
     server_ip = env.get("PUBLIC_IP") or get_public_ip()
     is_openvz = env.get("IS_OPENVZ", "false") == "true"

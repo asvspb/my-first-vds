@@ -54,7 +54,7 @@ class ZeroTierAPI:
     def _get_authtoken(self) -> str:
         result = docker_exec(
             CONTAINER,
-            "cat /var/lib/zerotier-one/authtoken.secret",
+            ["cat", "/var/lib/zerotier-one/authtoken.secret"],
             timeout=10,
         )
         return result.output.strip() if result.ok else ""
@@ -81,7 +81,7 @@ class ZeroTierAPI:
             return None
 
     def get_zt_addr(self) -> str:
-        result = docker_exec(CONTAINER, "zerotier-cli info", timeout=10)
+        result = docker_exec(CONTAINER, ["zerotier-cli", "info"], timeout=10)
         if result.ok:
             parts = result.output.split()
             return parts[2] if len(parts) >= 3 else ""
@@ -109,7 +109,7 @@ class ZeroTierAPI:
             return None
 
     def get_networks(self) -> list[dict]:
-        result = docker_exec(CONTAINER, "zerotier-cli -j listnetworks", timeout=10)
+        result = docker_exec(CONTAINER, ["zerotier-cli", "-j", "listnetworks"], timeout=10)
         if result.ok:
             try:
                 return json.loads(result.output)
@@ -170,11 +170,11 @@ class ZeroTierAPI:
         return result is not None
 
     def join_network(self, nwid: str) -> bool:
-        result = docker_exec(CONTAINER, f"zerotier-cli join {nwid}", timeout=10)
+        result = docker_exec(CONTAINER, ["zerotier-cli", "join", nwid], timeout=10)
         return result.ok
 
     def get_peers(self) -> list[dict]:
-        result = docker_exec(CONTAINER, "zerotier-cli -j listpeers", timeout=10)
+        result = docker_exec(CONTAINER, ["zerotier-cli", "-j", "listpeers"], timeout=10)
         if result.ok:
             try:
                 return json.loads(result.output)

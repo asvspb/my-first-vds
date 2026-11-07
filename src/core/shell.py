@@ -1,5 +1,7 @@
-import subprocess
+import os
+import shlex
 import shutil
+import subprocess
 from typing import Optional, Tuple
 from dataclasses import dataclass
 
@@ -82,8 +84,39 @@ def command_exists(name: str) -> bool:
     return shutil.which(name) is not None
 
 
-def docker_exec(container: str, command: str, timeout: int = 10) -> ShellResult:
-    return run_list(["docker", "exec", container] + command.split(), timeout=timeout)
+def load_env(path: str) -> dict[str, str]:
+    """Parse a KEY=VALUE env file into a dict.
+
+    Skips blank lines and full-line comments; lines without '=' are ignored.
+    Surrounding matching quotes (single or double) are stripped from values.
+    Returns an empty dict if the file does not exist.
+    """
+    env: dict[str, str] = {}
+    if not os.path.isfile(path):
+        return env
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+                val = val[1:-1]
+            if key:
+                env[key] = val
+    return env
+
+
+def docker_exec(container: str, command: str | list[str], timeout: int = 10) -> ShellResult:
+    """Run a command inside a docker container.
+
+    `command` as a list is passed through as-is; as a string it is parsed
+    with shlex.split so quoted arguments survive intact.
+    """
+    args = shlex.split(command) if isinstance(command, str) else list(command)
+    return run_list(["docker", "exec", container] + args, timeout=timeout)
 
 
 def docker_inspect(container: str, format_str: str) -> str:

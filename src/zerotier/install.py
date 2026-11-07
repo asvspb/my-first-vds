@@ -223,8 +223,8 @@ def run_install(
         # Пароли
         env_file = os.path.join(INSTALL_DIR, ".env.info")
         if os.path.isfile(env_file):
-            from src.zerotier.nat import load_env
-            existing = load_env()
+            from src.core.shell import load_env
+            existing = load_env(env_file)
             postgres_password = existing.get("POSTGRES_PASSWORD", secrets.token_hex(16))
             nextauth_secret = existing.get("NEXTAUTH_SECRET", secrets.token_hex(32))
             console.print("[warning]Обнаружен существующий .env.info — используем сохранённые пароли[/warning]")
@@ -364,7 +364,7 @@ def run_install(
         # Ожидание ONLINE
         console.print("[info]Ожидание ONLINE статуса...[/info]")
         for i in range(12):
-            info = docker_exec(CONTAINER, "zerotier-cli info").output
+            info = docker_exec(CONTAINER, ["zerotier-cli", "info"]).output
             if "ONLINE" in info or "TUNNELED" in info:
                 console.print(f"[success]Контроллер {info}[/success]")
                 break

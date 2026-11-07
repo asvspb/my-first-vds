@@ -4,14 +4,15 @@ from pathlib import Path
 
 import typer
 
-from src.core.shell import run, docker_exec, systemctl, command_exists
+from src.core.shell import run, docker_exec, systemctl, command_exists, load_env
 from src.core.lock import FileLock
 from src.core.logger import console
-from src.zerotier.nat import load_env, cleanup_nat, get_main_iface
+from src.zerotier.nat import cleanup_nat, get_main_iface
 
 logger = logging.getLogger(__name__)
 
 INSTALL_DIR = os.environ.get("INSTALL_DIR", "/opt/ztnet")
+ENV_FILE = os.path.join(INSTALL_DIR, ".env.info")
 LOCK_FILE = "/var/run/ztnet-cleanup.lock"
 
 
@@ -50,7 +51,7 @@ def run_cleanup() -> int:
             console.print("[info]Очистка отменена[/info]")
             return 0
 
-        env = load_env()
+        env = load_env(ENV_FILE)
         all_subnets = env.get("ZT_SUBNETS") or env.get("ZT_SUBNET", "10.121.15.0/24")
         subnets = [s.strip() for s in all_subnets.split(",") if s.strip()]
 
