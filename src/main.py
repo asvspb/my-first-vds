@@ -16,9 +16,15 @@ app = typer.Typer(
 zerotier_app = typer.Typer(help="ZeroTier VPN management")
 wireguard_app = typer.Typer(help="WireGuard VPN management")
 coturn_app = typer.Typer(help="Coturn TURN server management")
+gateway_app = typer.Typer(help="Gateway state management")
+xray_app = typer.Typer(help="Xray VLESS Reality gateway (TCP 443)")
+hysteria2_app = typer.Typer(help="Hysteria2 QUIC gateway (UDP 443)")
 app.add_typer(zerotier_app, name="zerotier")
 app.add_typer(wireguard_app, name="wireguard")
 app.add_typer(coturn_app, name="coturn")
+app.add_typer(gateway_app, name="gateway")
+app.add_typer(xray_app, name="xray")
+app.add_typer(hysteria2_app, name="hysteria2")
 
 @app.callback(invoke_without_command=True)
 def main_menu(ctx: typer.Context):
@@ -39,6 +45,8 @@ def main_menu(ctx: typer.Context):
                 questionary.Choice("Управление ZeroTier", "zerotier"),
                 questionary.Choice("Управление WireGuard", "wireguard"),
                 questionary.Choice("Управление Coturn (TURN)", "coturn"),
+                questionary.Choice("Управление Xray (VLESS Reality)", "xray"),
+                questionary.Choice("Управление Hysteria2 (QUIC, UDP 443)", "hysteria2"),
                 questionary.Choice("Базовая настройка сервера (Setup)", "server_setup"),
                 questionary.Choice("Очистка системы (Cleanup)", "cleanup"),
                 questionary.Choice("Выход", "exit"),
@@ -122,6 +130,87 @@ def main_menu(ctx: typer.Context):
                 if questionary.confirm("Удалить Coturn?").ask():
                     try:
                         coturn_remove()
+                    except typer.Exit:
+                        pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+
+        elif choice == "xray":
+            xray_choice = questionary.select(
+                "Меню Xray:",
+                choices=[
+                    questionary.Choice("Установка (install)", "install"),
+                    questionary.Choice("Добавить клиента (add-client)", "add_client"),
+                    questionary.Choice("Статус (status)", "status"),
+                    questionary.Choice("Удалить Xray (remove)", "remove"),
+                    questionary.Choice("Назад", "back"),
+                ]
+            ).ask()
+
+            if xray_choice == "install":
+                sni = questionary.text("SNI для Reality:", default="www.google.com").ask()
+                try:
+                    xray_install(sni=sni or "www.google.com")
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif xray_choice == "add_client":
+                name = questionary.text("Имя нового клиента:").ask()
+                if name:
+                    try:
+                        xray_add_client(name=name)
+                    except typer.Exit:
+                        pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif xray_choice == "status":
+                try:
+                    xray_status()
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif xray_choice == "remove":
+                if questionary.confirm("Удалить Xray полностью?").ask():
+                    try:
+                        xray_remove(apply=True)
+                    except typer.Exit:
+                        pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+
+        elif choice == "hysteria2":
+            hy_choice = questionary.select(
+                "Меню Hysteria2:",
+                choices=[
+                    questionary.Choice("Установка (install)", "install"),
+                    questionary.Choice("Добавить клиента (add-client)", "add_client"),
+                    questionary.Choice("Статус (status)", "status"),
+                    questionary.Choice("Удалить Hysteria2 (remove)", "remove"),
+                    questionary.Choice("Назад", "back"),
+                ]
+            ).ask()
+
+            if hy_choice == "install":
+                try:
+                    hysteria2_install()
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif hy_choice == "add_client":
+                name = questionary.text("Имя нового клиента:").ask()
+                if name:
+                    try:
+                        hysteria2_add_client(name=name)
+                    except typer.Exit:
+                        pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif hy_choice == "status":
+                try:
+                    hysteria2_status()
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif hy_choice == "remove":
+                if questionary.confirm("Удалить Hysteria2 полностью?").ask():
+                    try:
+                        hysteria2_remove(apply=True)
                     except typer.Exit:
                         pass
                 questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
@@ -236,6 +325,124 @@ def server_setup():
     """Базовая первичная настройка сервера (Python)"""
     from src.system.setup import run_setup
     raise typer.Exit(run_setup())
+
+
+@gateway_app.command("status")
+def gateway_status():
+    """Показать состояние gateway (файл state.json, клиенты, протоколы)"""
+    from src.core.logger import console
+    from src.gateway.paths import STATE_PATH
+    from src.gateway.store import StoreError, load_state
+
+    console.print(f"[info][gateway][/info] Файл состояния: {STATE_PATH}")
+    try:
+        state = load_state()
+    except StoreError as exc:
+        console.print(f"[error][gateway] {exc}[/error]")
+        raise typer.Exit(1)
+
+    if not state.clients and not state.protocols:
+        console.print("[warning][gateway] Состояние пусто: протоколы не установлены.[/warning]")
+        return
+
+    console.print(
+        f"[info] Версия:[/info] {state.version}  "
+        f"[info]Домен:[/info] {state.domain or '—'}"
+    )
+    for client in state.clients:
+        console.print(
+            f"  [change]-[/change] {client.name} ({client.protocol}, port {client.port})"
+        )
+    for proto, meta in state.protocols.items():
+        installed = meta.get("installed", False)
+        console.print(
+            f"  [info]*[/info] {proto}: "
+            f"{'[success]installed[/success]' if installed else '[warning]not installed[/warning]'}"
+        )
+
+
+@xray_app.command("install")
+def xray_install(
+    sni: str = typer.Option("www.google.com", "--sni", help="SNI для Reality (dest/serverNames)"),
+):
+    """Установить Xray VLESS Reality (TCP 443)"""
+    from src.xray.install import run_install
+    raise typer.Exit(run_install(sni=sni))
+
+
+@xray_app.command("add-client")
+def xray_add_client(
+    name: str = typer.Argument(..., help="Имя нового клиента"),
+):
+    """Добавить клиента и показать share-link VLESS Reality"""
+    from src.core.logger import console
+    from src.gateway.store import StoreError
+    from src.xray.clients import XrayError, add_client
+
+    try:
+        result = add_client(name)
+    except (StoreError, XrayError) as exc:
+        console.print(f"[error][xray] {exc}[/error]")
+        raise typer.Exit(1)
+    raise typer.Exit(0 if result else 1)
+
+
+@xray_app.command("status")
+def xray_status():
+    """Статус Xray: юнит, валидность конфига, порт, ошибки journal"""
+    from src.xray.status import run_status
+    raise typer.Exit(run_status())
+
+
+@xray_app.command("remove")
+def xray_remove(
+    apply: bool = typer.Option(False, "--apply", help="Применить удаление (по умолчанию dry-run)"),
+):
+    """Удалить Xray (юнит, конфиг, бинарь+geodata, клиенты из store)"""
+    from src.xray.remove import run_remove
+    raise typer.Exit(run_remove(apply=apply))
+
+
+@hysteria2_app.command("install")
+def hysteria2_install(
+    port: int = typer.Option(443, "--port", help="UDP-порт QUIC"),
+):
+    """Установить Hysteria2 (QUIC, UDP 443, self-signed без домена)"""
+    from src.hysteria2.install import run_install
+    raise typer.Exit(run_install(port=port))
+
+
+@hysteria2_app.command("add-client")
+def hysteria2_add_client(
+    name: str = typer.Argument(..., help="Имя нового клиента"),
+):
+    """Добавить клиента и показать share-link Hysteria2"""
+    from src.core.logger import console
+    from src.gateway.store import StoreError
+    from src.hysteria2.clients import Hysteria2Error, add_client
+
+    try:
+        result = add_client(name)
+    except (StoreError, Hysteria2Error) as exc:
+        console.print(f"[error][hysteria2] {exc}[/error]")
+        raise typer.Exit(1)
+    raise typer.Exit(0 if result else 1)
+
+
+@hysteria2_app.command("status")
+def hysteria2_status():
+    """Статус Hysteria2: юнит, UDP-порт, сертификат, ошибки journal"""
+    from src.hysteria2.status import run_status
+    raise typer.Exit(run_status())
+
+
+@hysteria2_app.command("remove")
+def hysteria2_remove(
+    apply: bool = typer.Option(False, "--apply", help="Применить удаление (по умолчанию dry-run)"),
+):
+    """Удалить Hysteria2 (юнит, конфиг, сертификаты, бинарь, клиенты из store)"""
+    from src.hysteria2.remove import run_remove
+    raise typer.Exit(run_remove(apply=apply))
 
 
 @zerotier_app.command("install")

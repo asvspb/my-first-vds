@@ -1,8 +1,13 @@
 # Roadmap: внедрение лучших мировых практик обхода блокировок в VDS Orchestrator
 
-> Дата: 2026-11-07. Статус: план, не реализовано.
+> Дата: 2026-11-07. Статус: **фазы 0–2 реализованы 2026-11-07**
+> (см. [SPEC-20261107-gateway-mvp](team/specs/SPEC-20261107-gateway-mvp.md),
+> [TEST-20261107-gateway-mvp](team/reports/TEST-20261107-gateway-mvp.md));
+> XHTTP/AmneziaWG/подписки/SNI-мультиплексор — **не реализованы**.
 > Связанные документы: [VPN-PROTOCOLS.md](VPN-PROTOCOLS.md), [../TECHDEBT.md](../TECHDEBT.md).
-> Текущее состояние проекта: ZeroTier/ZTNET, WireGuard (классический), Coturn. Xray/Hysteria2/AmneziaWG отсутствуют.
+> Текущее состояние проекта: ZeroTier/ZTNET, WireGuard (классический), Coturn;
+> Xray VLESS Reality (TCP 443) и Hysteria2 (UDP 443, self-signed тестовый режим)
+> — реализованы в MVP; AmneziaWG отсутствует.
 
 ---
 

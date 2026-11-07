@@ -13,6 +13,8 @@ VDS Orchestrator — единый инструмент инициализаци�
 - Управление ZeroTier + ZTNET Panel (Docker)
 - Watchdog и декларативный reconciler топологии сетей
 - WireGuard VPN, Coturn TURN-сервер
+- Gateway-протоколы против блокировок: Xray VLESS Reality (TCP 443) и
+  Hysteria2 (QUIC, UDP 443), общее хранилище клиентов (`vds gateway`)
 - Системный dashboard: CPU, RAM, диск, Docker
 - Первичная настройка сервера: пользователь, SSH, UFW, Docker, Swap
 
@@ -27,7 +29,10 @@ vds/
 ├── pyproject.toml      # Метаданные пакета
 ├── systemd/            # Systemd unit-файлы
 │   ├── vds-watchdog.service/.timer
-│   └── vds-reconcile.service/.timer
+│   ├── vds-reconcile.service/.timer
+│   ├── vds-xray.service.tpl
+│   ├── vds-hysteria2.service.tpl
+│   └── sysctl/99-vds-gateway.conf.tpl
 ├── AGENTS.md           # Контекст проекта для ИИ-агентов
 ├── TECHDEBT.md         # Бэклог техдолга
 ├── .zcode/agents/      # Определения ролей ИИ-команды (8 агентов)
@@ -41,9 +46,14 @@ vds/
     ├── zerotier/       # ZeroTier: установка, watchdog, reconcile, NAT, диагностика
     ├── wireguard/      # WireGuard VPN
     ├── coturn/         # TURN-сервер для WebRTC
+    ├── xray/           # Xray VLESS Reality (TCP 443)
+    ├── hysteria2/      # Hysteria2 QUIC (UDP 443)
+    ├── gateway/        # Общее состояние клиентов gateway (state.json)
     ├── sysinfo/        # Dashboard метрик сервера
     └── system/         # Базовая настройка, cleanup
 ```
+
+Тесты: `tests/` (unit, без root/сети — `pytest -q`).
 
 ## Быстрый старт
 
@@ -82,6 +92,42 @@ vds wireguard install        # Установить WireGuard VPN
 vds server-setup             # Мастер первичной настройки
 vds cleanup                  # Очистка системы (логи, кэши, Docker)
 ```
+
+### Gateway: Xray / Hysteria2 (MVP, фазы 0–2)
+
+Два транспорта против блокировок + общее хранилище клиентов. Не конфликтуют
+между собой: Xray — TCP 443, Hysteria2 — UDP 443. Все команды требуют root;
+`remove` без `--apply` показывает только план (dry-run).
+
+```bash
+vds gateway status                  # Состояние gateway: state.json, клиенты, протоколы
+
+vds xray install                    # Установить Xray VLESS Reality (TCP 443)
+vds xray install --sni www.cloudflare.com   # Сайт-маска (по умолчанию www.google.com)
+vds xray add-client phone           # Клиент + share-link vless://... (в stdout)
+vds xray status                     # Юнит, валидность конфига, порт, journal
+vds xray remove                     # План удаления (dry-run)
+vds xray remove --apply             # Удалить (юнит, конфиг, бинарь, клиенты из store)
+
+vds hysteria2 install               # Установить Hysteria2 (QUIC, UDP 443)
+vds hysteria2 add-client mob        # Клиент + share-link hysteria2://...
+vds hysteria2 status                # Юнит, UDP-порт, сертификат, journal
+vds hysteria2 remove --apply        # Удалить (sysctl-тюнинг НЕ откатывается)
+```
+
+Ссылки импортируются в v2rayNG / NekoRay / Hiddify / sing-box. Состояние
+клиентов — `$INSTALL_DIR/gateway/state.json` (0600); приватные ключи — только
+в конфигах сервера, никогда в share-link и логах. Порты TCP/UDP 443 должны
+быть открыты в UFW. Обзор протоколов — [docs/VPN-PROTOCOLS.md](docs/VPN-PROTOCOLS.md),
+план развития — [docs/CENSORSHIP-ROADMAP.md](docs/CENSORSHIP-ROADMAP.md).
+
+> **Hysteria2 в MVP — тестовый режим:** self-signed сертификат + `insecure=1`
+> в клиентской ссылке. ACME-сертификат (Let's Encrypt по домену) — фаза 6
+> roadmap.
+
+> **Дисклеймер:** VPN-функциональность — исключительно для легального
+> использования в соответствии с местальным законодательством (подробнее —
+> [docs/VPN-PROTOCOLS.md](docs/VPN-PROTOCOLS.md), раздел «Важно»).
 
 ## Роли ИИ-команды
 
@@ -143,6 +189,9 @@ journalctl -u vds-watchdog -n 20
 | `/opt/my-vds/` | Исходники и venv |
 | `/opt/my-vds/venv/` | Python виртуальное окружение |
 | `/opt/ztnet/topology.json` | Конфиг топологии ZeroTier |
+| `/opt/my-vds/gateway/state.json` | Состояние gateway: клиенты Xray/Hysteria2 (0600) |
+| `/usr/local/etc/xray/config.json` | Конфиг Xray (0600) |
+| `/etc/hysteria/config.yaml` | Конфиг Hysteria2 (0600) |
 | `/usr/local/bin/vds` | Симлинк команды `vds` |
 | `/etc/systemd/system/vds-*.service` | Systemd-сервисы |
 

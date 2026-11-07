@@ -130,7 +130,34 @@ QUIC (UDP:443); TLS-сертификат через ACME (Let's Encrypt) или 
 
 ## 3. План добавления в VDS Orchestrator
 
-По образцу существующих `src/wireguard/install.py` и `src/coturn/install.py`.
+> **Статус: MVP реализовано 2026-11-07 (фазы 0–2), команды фактические.**
+> Xray VLESS Reality (TCP 443) и Hysteria2 (UDP 443, self-signed + `insecure=1`,
+> masquerade, sysctl BBR) установлены в оркестратор; общие примитивы —
+> `src/core/protocol.py|netcheck.py|secrets.py|units.py`, состояние —
+> `src/gateway/store.py` (`$INSTALL_DIR/gateway/state.json`, 0600).
+> Нереализованное из плана ниже: XHTTP (фаза 3), ACME-сертификат (фаза 6,
+> сейчас тестовый self-signed), подписки, SNI-мультиплексор, dashboard-карточки.
+> См. [SPEC-20261107-gateway-mvp](team/specs/SPEC-20261107-gateway-mvp.md),
+> [ADR-001](adr/ADR-001-xray-install-mechanism.md),
+> [ADR-002](adr/ADR-002-gateway-paths-units-state.md).
+
+Фактические команды (все требуют root; `remove` без `--apply` — dry-run):
+
+```bash
+vds gateway status                  # состояние gateway (state.json, клиенты, протоколы)
+
+vds xray install [--sni MASK]       # Xray-core (пин версии + SHA256), Reality, Vision
+vds xray add-client NAME            # профиль + share-link vless://...
+vds xray status                     # юнит, xray -test, порт TCP 443, journal (маскируется)
+vds xray remove [--apply]           # удаление: юнит, конфиг, бинарь+geodata, клиенты
+
+vds hysteria2 install               # бинарь, self-signed TLS (CN=<ip>, 10 лет), masquerade, BBR
+vds hysteria2 add-client NAME       # пароль + share-link hysteria2://...?insecure=1
+vds hysteria2 status                # юнит, UDP 443, срок сертификата, journal
+vds hysteria2 remove [--apply]      # удаление (sysctl-тюнинг не откатывается — ADR-002)
+```
+
+Изначальный план (частично выполнен, оставлен для контекста фаз 3+):
 
 1. **`src/xray/`**
    - `install.py`: установка Xray-core, генерация uuid + x25519, конфиг с Reality

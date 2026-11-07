@@ -19,7 +19,7 @@ ZeroTier + ZTNET Panel (Docker), WireGuard, Coturn, системный dashboard
 | Конфиги/модели | pydantic 2.x |
 | HTTP | requests |
 | Метрики | psutil |
-| Тесты | pytest (планируется, см. TECHDEBT P6) |
+| Тесты | pytest (`tests/`: core, gateway, xray, hysteria2) |
 | Инфраструктура | Docker (ZTNET), systemd, iptables, UFW |
 | ОС | Ubuntu 24.04 LTS |
 
@@ -28,14 +28,18 @@ ZeroTier + ZTNET Panel (Docker), WireGuard, Coturn, системный dashboard
 ```
 src/
 ├── main.py              # typer-app, все команды; импорты модулей — ЛЕНИВО внутри команд
-├── core/                # logger, shell, lock
+├── core/                # logger, shell, lock + protocol (ProtocolAdapter), netcheck, secrets, units
 ├── zerotier/            # install, api, watchdog, reconcile, nat, diagnose, add_network, cleanup
 ├── wireguard/           # install, add-client, remove
 ├── coturn/              # TURN-сервер
+├── xray/                # Xray VLESS Reality (TCP 443): adapter, install, clients, config, status, remove
+├── hysteria2/           # Hysteria2 QUIC (UDP 443): adapter, install, clients, config, status, sysctl, remove
+├── gateway/             # paths, store (state.json: клиенты/протоколы, 0600) + `gateway status`
 ├── sysinfo/             # dashboard
 └── system/              # setup, cleanup
-systemd/                 # unit-файлы таймеров/сервисов
-docs/                    # TEAM.md, VPN-PROTOCOLS.md, CENSORSHIP-ROADMAP.md
+systemd/                 # unit-файлы таймеров/сервисов; vds-xray/vds-hysteria2 .service.tpl; sysctl/99-vds-gateway.conf.tpl
+tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/
+docs/                    # TEAM.md, VPN-PROTOCOLS.md, CENSORSHIP-ROADMAP.md, adr/, team/
 install.sh, preinstall.sh, local-init.sh, myhelp.sh
 ```
 
@@ -47,7 +51,7 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 | `python -m src.main` | TUI-меню |
 | `python -m src.main sysinfo` | Dashboard |
 | `python -m compileall -q src` | Синтаксическая проверка |
-| `pytest -q` | Тесты (когда появятся `tests/`) |
+| `pytest -q` | Юнит-тесты (`tests/`, без root/сети/docker) |
 | `bash install.sh` | Установка (root, на сервере) |
 
 ## 5. Конвенции кода
@@ -77,7 +81,7 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 ## 7. Тестовая стратегия
 
 - **Unit** (без root/сети/docker): генераторы конфигов, `reconcile`, `store`,
-  `netcheck`, rate-limit watchdog.
+  `netcheck`, `secrets`, `units`, rate-limit watchdog (см. `tests/`).
 - **E2E** (Docker): сервер↔клиент через loopback (Xray/sing-box).
 - **Приёмка протоколов** — на живом VDS по чеклисту (локально не воспроизвести).
 
