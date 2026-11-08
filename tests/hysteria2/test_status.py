@@ -27,13 +27,13 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     cert_path.write_text("CERT", encoding="utf-8")
     config_path = tmp_path / "etc" / "hysteria" / "config.yaml"
     config_path.write_text(
-        'auth:\n  type: password\n  password: "SECRETPW123"\n', encoding="utf-8"
+        'auth:\n  type: password\n  password: "FIXTURE_PW_Masked"\n', encoding="utf-8"
     )
 
     state_path = str(tmp_path / "state.json")
     state = GatewayState()
     state.protocols["hysteria2"] = {
-        "installed": True, "port": 443, "auth_password": "SECRETPW123"
+        "installed": True, "port": 443, "auth_password": "FIXTURE_PW_Masked"
     }
     save_state(state, state_path)
 
@@ -54,7 +54,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
             )
         if args[:1] == ["journalctl"]:
             return ShellResult(
-                stdout="bad line with SECRETPW123 and password: SECRETPW123\n",
+                stdout="bad line with FIXTURE_PW_Masked and password: FIXTURE_PW_Masked\n",
                 stderr="", returncode=0,
             )
         return ShellResult(stdout="", stderr="", returncode=0)
@@ -100,18 +100,18 @@ class TestMasking:
         monkeypatch.setattr(status_mod, "console", recorder)
         status_mod.run_status()
         # пароль не появился в выводе ни разу
-        assert not any("SECRETPW123" in line for line in recorder.lines)
+        assert not any("FIXTURE_PW_Masked" in line for line in recorder.lines)
         assert any("***" in line for line in recorder.lines)
 
     def test_mask_secrets_masks_known_values(self) -> None:
         masked = status_mod._mask_secrets(
-            "connect pw=SECRETPW123 ok password: SECRETPW123", ["SECRETPW123"]
+            "connect pw=FIXTURE_PW_Masked ok password: FIXTURE_PW_Masked", ["FIXTURE_PW_Masked"]
         )
-        assert "SECRETPW123" not in masked
+        assert "FIXTURE_PW_Masked" not in masked
         assert masked.count("***") == 2
 
     def test_mask_secrets_masks_yaml_password_line(self) -> None:
         masked = status_mod._mask_secrets(
-            'auth:\n  password: "UNKNOWNPW999"\n', ["UNKNOWNPW999"]
+            'auth:\n  password: "FIXTURE_PW_Unknown"\n', ["FIXTURE_PW_Unknown"]
         )
-        assert "UNKNOWNPW999" not in masked
+        assert "FIXTURE_PW_Unknown" not in masked

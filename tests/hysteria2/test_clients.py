@@ -13,7 +13,7 @@ from src.gateway.store import (
     save_state,
 )
 
-PASSWORD = "SharedPass123"
+PASSWORD = "FIXTURE_PW_Hysteria123"
 IP = "203.0.113.10"
 
 

@@ -2,7 +2,7 @@
 
 from src.hysteria2.config import Hysteria2ConfigParams, render_config
 
-PASSWORD = "s3cretpass"
+PASSWORD = "FIXTURE_PW_Config"
 
 
 def _params(**overrides) -> Hysteria2ConfigParams:
