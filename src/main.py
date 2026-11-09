@@ -384,8 +384,11 @@ def gateway_links(
         console.print("[warning][gateway] Состояние пусто: клиентов нет.[/warning]")
         return
 
+    # Машиночитаемый вывод для `vpn profile pull`: каждая запись `name: link`
+    # — ровно одна физическая строка. rich (console.print) переносит строки
+    # по ширине терминала и ломает парсер на клиенте — поэтому print().
     for name, proto, link in links:
-        console.print(f"{name}: {link}")
+        print(f"{name}: {link}")
 
 
 @xray_app.command("install")

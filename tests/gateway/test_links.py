@@ -211,3 +211,34 @@ class TestEmptyState:
     def test_empty_clients_returns_empty(self, state_path: str) -> None:
         _save(GatewayState(), state_path)
         assert render_all_links(state_path) == []
+
+
+class TestCliOutputNoWrap:
+    """Blocker D1: `vds gateway links` печатает машиночитаемые строки через
+    rich, который переносит их по ширине терминала; клиент парсит построчно.
+    Регрессия: каждая запись `name: link` — ровно одна физическая строка."""
+
+    def test_long_link_is_one_physical_line(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        long_link = (
+            "vless://11111111-2222-3333-4444-555555555555@203.0.113.10:443"
+            "?security=reality&sni=www.google.com&fp=chrome"
+            "&pbk=" + "P" * 200 + "&sid=abcd1234&flow=xtls-rprx-vision#phone"
+        )
+        assert len(long_link) > 200
+
+        def fake_render(state_path: "str | None" = None,
+                        protocol: "str | None" = None):
+            return [("phone", "xray", long_link)]
+
+        monkeypatch.setattr("src.gateway.links.render_all_links", fake_render)
+
+        from src.main import gateway_links  # локальный импорт: CLI-модуль
+
+        gateway_links()
+        out = capsys.readouterr().out
+        lines = out.splitlines()
+        matching = [line for line in lines if line.startswith("phone: ")]
+        assert len(matching) == 1
+        assert matching[0] == f"phone: {long_link}"  # нет переноса внутри ссылки
