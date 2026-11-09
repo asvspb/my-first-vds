@@ -3,11 +3,11 @@
 > Обновляет оркестратор после каждого гейта. Единый источник правды о текущем цикле.
 > Шаблон: [templates/STATUS.md](templates/STATUS.md).
 
-## Активный цикл: Gateway MVP (фазы 0–2)
+## Активный цикл: Gateway MVP (фазы 0–2) — ЗАВЕРШЁН 2026-11-09
 - **IDEA:** скоуп утверждён владельцем в чате 2026-11-07 (MVP 0–2, без домена)
 - **REQ:** [REQ-20261107-gateway-mvp](requirements/REQ-20261107-gateway-mvp.md)
 - **SPEC:** [SPEC-20261107-gateway-mvp](specs/SPEC-20261107-gateway-mvp.md) + [ADR-001](../adr/ADR-001-xray-install-mechanism.md) + [ADR-002](../adr/ADR-002-gateway-paths-units-state.md)
-- **Этап:** G6 Close (ждёт commit + [VDS]-приёмку)
+- **Этап:** ✅ G6 Close — [VDS]-приёмка PASS 2026-11-09 ([ACCEPT-20261109](reports/ACCEPT-20261109-vds-asv1.md)): оба протокола на asv1, e2e подтверждён с внешней машины; по пути закрыты P7–P12 + VDS_GITHUB_MIRROR (коммиты c1e7886..e5ececb)
 - **Владелец гейта:** orchestrator / владелец
 
 ## Work packages
@@ -28,14 +28,12 @@
 | G3 Build | ✅ | 2026-11-07 | vds-coder ×4 → vds-architect |
 | G4 Verify | ✅ PASS | 2026-11-07 | vds-tester |
 | G5 Docs | ✅ | 2026-11-07 | vds-docs |
-| G6 Close | ⏳ | — | ожидает: commit, [VDS]-приёмка |
+| G6 Close | ✅ | 2026-11-09 | [ACCEPT-20261109](reports/ACCEPT-20261109-vds-asv1.md) PASS |
 
 ## Открытые пункты
-1. **[VDS]-приёмка** — чеклист 28 пунктов в [TEST-отчёт §8](reports/TEST-20261107-gateway-mvp.md):
-   живая установка обоих протоколов, probe-resistance (FR-X.1), одновременный TCP/UDP 443
-   (FR-X.2), идемпотентность, docker_exec smoke на ZTNET.
-2. Minor-дефекты tester: `run_remove(yes=...)` не экспонирован в CLI; FR-0.2 проверен
-   статически (чистый venv-прогон не делался).
+1. ~~[VDS]-приёмка~~ — ✅ выполнена 2026-11-09 (ACCEPT-20261109, PASS).
+2. Minor-дефекты tester: `run_remove(yes=...)` не экспонирован в CLI (блокировал пункты
+   25–26 приёмки в не-TTY); FR-0.2 проверен статически.
 3. Глобальный фильтр маскирования логов → фаза 6 (hardening).
 4. `HYSTERIA2_BIN_PATH` вынести в `gateway/paths.py` при следующем ADR.
 5. **Баг install.sh:74** — `cp -r` на самого себя при `SCRIPT_DIR == INSTALL_DIR` убивает
