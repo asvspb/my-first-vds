@@ -38,6 +38,12 @@
    статически (чистый venv-прогон не делался).
 3. Глобальный фильтр маскирования логов → фаза 6 (hardening).
 4. `HYSTERIA2_BIN_PATH` вынести в `gateway/paths.py` при следующем ADR.
+5. **Баг install.sh:74** — `cp -r` на самого себя при `SCRIPT_DIR == INSTALL_DIR` убивает
+   скрипт под `set -e` (найдено при развёртывании на asv1, см.
+   [ORCH-20261109](reports/ORCH-20261109-vds-deploy-install.md) §4).
+6. pytest отсутствует в requirements — нужен requirements-dev.txt / extra (ORCH-20261109 §5.2).
+7. [VDS]-приёмка готова к запуску на asv1 (103.45.247.172) — CLI установлен, порты 443
+   свободны (ORCH-20261109 §5.3).
 
 ## Трассируемость
 | IDEA | REQ | SPEC | Коммиты | TEST | DOC |
