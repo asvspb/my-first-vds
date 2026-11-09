@@ -160,7 +160,7 @@ def _ensure_certificate(ip: str) -> None:
     result = run_list(
         [
             "openssl", "req", "-x509", "-newkey", "ec",
-            "-pkeyopt", "ec_param_gen_curve:prime256v1",
+            "-pkeyopt", "ec_paramgen_curve:P-256",
             "-keyout", str(HYSTERIA2_KEY_PATH),
             "-out", str(HYSTERIA2_CERT_PATH),
             "-days", str(CERT_DAYS), "-nodes",

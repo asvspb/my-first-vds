@@ -160,6 +160,10 @@ class TestFullInstall:
         openssl_args = env.openssl_calls[0]
         assert f"/CN=203.0.113.10" in openssl_args
         assert "3650" in openssl_args
+        # Регрессия (asv1, OpenSSL 3.0.13): alias ec_param_gen_curve:prime256v1
+        # отвергается ("command not supported"); каноничная форма — ec_paramgen_curve:P-256
+        assert "ec_paramgen_curve:P-256" in openssl_args
+        assert "ec_param_gen_curve" not in openssl_args
         assert os.stat(install.HYSTERIA2_KEY_PATH).st_mode & 0o777 == 0o600
 
         # sysctl применён, юнит из нашего шаблона

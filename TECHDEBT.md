@@ -149,6 +149,27 @@ itself» с тем же эффектом. Побочно: glob `"${SCRIPT_DIR}/"
 
 ---
 
+## P9. `hysteria2/install.py` — openssl pkeyopt alias `ec_param_gen_curve:prime256v1` отвергается OpenSSL 3.x — ✅ ВЫПОЛНЕНО 2026-11-09
+
+> Закрыто WP-микро (vds-coder, 2026-11-09). Найдено на живой приёмке `asv1`
+> (Ubuntu 24.04.5, OpenSSL 3.0.13): установка Hysteria2 падала на генерации
+> self-signed сертификата.
+
+**Проблема:** `_ensure_certificate()` вызывала `openssl req -newkey ec -pkeyopt
+ec_param_gen_curve:prime256v1`. OpenSSL 3.0.13 отвергает этот alias
+(`digital envelope routines … name=ec_param_gen_curve, value=prime256v1 …
+command not supported`) — установка падала с InstallError.
+
+**Действия:** 1) pkeyopt заменён на каноничную форму
+`ec_paramgen_curve:P-256` (проверена на целевом сервере, exit=0);
+2) регрессионный тест в `tests/hysteria2/test_install.py::TestFullInstall` —
+аргументы содержат `ec_paramgen_curve:P-256` и не содержат `ec_param_gen_curve`.
+
+**Критерий:** `pytest tests/hysteria2/` зелёный; вербатим: список аргументов
+команды генерации содержит `ec_paramgen_curve:P-256`.
+
+---
+
 ## Порядок работ
 
 | Этап | Пункты | Суммарно | Почему сначала |
