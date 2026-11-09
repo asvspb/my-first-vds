@@ -114,6 +114,7 @@ class TestAddTransportXHTTP:
 
         meta = load_state(state_path).protocols["xhttp"]
         assert meta == {
+            "installed": True,
             "port": 8443,
             "mode": "fallback",
             "domain": DOMAIN,
@@ -221,6 +222,30 @@ class TestRemoveTransportXHTTP:
         assert remove_mod.remove_transport_xhttp(
             state_path=state_path, apply=True, yes=True
         ) == 0
+
+    def test_re_add_after_remove_writes_installed_true(
+        self, xray_env: Path
+    ) -> None:
+        """Регрессия TECHDEBT P13 (asv1): remove вычищает весь ключ
+        protocols['xhttp'], повторный add должен вернуть meta с
+        installed=True — иначе gateway status показывает «not installed».
+        """
+        from src.gateway.store import load_state
+
+        state_path = str(xray_env / "state.json")
+        install.add_transport_xhttp(DOMAIN, state_path=state_path, apply=True)
+        remove_mod.remove_transport_xhttp(
+            state_path=state_path, apply=True, yes=True
+        )
+        assert "xhttp" not in load_state(state_path).protocols
+        info = install.add_transport_xhttp(
+            DOMAIN, state_path=state_path, apply=True
+        )
+        assert info["dry_run"] is False
+        meta = load_state(state_path).protocols["xhttp"]
+        assert meta["installed"] is True
+        assert meta["port"] == 8443
+        assert meta["domain"] == DOMAIN
 
     def test_restart_fail_rolls_back(self, xray_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         state_path = self._installed(xray_env)

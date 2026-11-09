@@ -499,7 +499,11 @@ def add_transport_xhttp(
                 f"{restart.stderr.strip() or restart.stdout.strip()}"
             )
 
+        # "installed": True обязателен — remove-transport вычищает весь ключ,
+        # без флага `vds gateway status` показывает «not installed» на живом
+        # транспорте (TECHDEBT P13, найдено на asv1).
         state.protocols["xhttp"] = {
+            "installed": True,
             "port": XHTTP_INTERNAL_PORT,
             "mode": mode,
             "domain": domain,

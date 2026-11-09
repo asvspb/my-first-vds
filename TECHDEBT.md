@@ -238,6 +238,33 @@ e80ca67 (go1.23.4 linux/amd64)») → True.
 
 ---
 
+## P13. `xray/install.py::add_transport_xhttp` — state-meta без `installed: True` после remove→re-add — ✅ ВЫПОЛНЕНО 2026-11-09
+
+> Закрыто WP-микро (vds-coder, 2026-11-09). Найдено на живой приёмке `asv1`:
+> после `xray remove-transport --apply` → `xray add-transport --mode port
+> --apply` живой транспорт показывался в `vds gateway status` как
+> «xhttp: not installed». На сервере исправлено ops-фиксом; ниже — кодовый.
+
+**Проблема:** `remove_transport_xhttp` вычищает весь ключ
+`protocols.pop("xhttp", None)`, а `add_transport_xhttp` при записи meta
+(`state.protocols["xhttp"] = {...}`) выставлял только port/mode/domain/extra —
+без `"installed": True`. `main.py::gateway status` читает
+`meta.get("installed", False)` → ложное «not installed» при живом транспорте.
+Первый add_transport перед remove не ловил дефект, потому что… расхождение
+проявилось только после re-add: любой последующий add перезаписывал ключ
+без флага.
+
+**Действия:** 1) `add_transport_xhttp` пишет `"installed": True` в meta
+(вслед за `protocols["xray"]` из `_save_state_meta`); 2) регрессионный тест
+`tests/xray/test_links_xhttp.py::TestRemoveTransportXHTTP::
+test_re_add_after_remove_writes_installed_true` — remove → add →
+`state.protocols["xhttp"]["installed"] is True`; существующий
+`test_apply_writes_fallbacks_and_state` обновлён на новый точный состав meta.
+
+**Критерий:** `pytest -q` зелёный (226 тестов); verbatim-прогон нового теста.
+
+---
+
 ## Порядок работ
 
 | Этап | Пункты | Суммарно | Почему сначала |
