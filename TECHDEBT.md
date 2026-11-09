@@ -170,6 +170,48 @@ command not supported`) — установка падала с InstallError.
 
 ---
 
+## P10. `systemd/vds-hysteria2.service.tpl` — ExecStart без subcommand `server` — ✅ ВЫПОЛНЕНО 2026-11-09
+
+> Закрыто WP-микро (vds-coder, 2026-11-09). Найдено на живой приёмке `asv1`:
+> юнит crash-loop'ился с FATAL «failed to parse client config» в client mode;
+> ручной запуск `hysteria server -c /etc/hysteria/config.yaml` — «server up
+> and running».
+
+**Проблема:** `ExecStart={bin_path} -c {config_path}` — hysteria v2 без
+subcommand стартует в client mode (Xray-шаблон корректен: `run -config`).
+
+**Действия:** 1) ExecStart заменён на `{bin_path} server -c {config_path}`;
+2) регрессионные тесты `tests/hysteria2/test_install.py::TestUnitTemplate` —
+рендер шаблона содержит `server -c`, ctx из `_install_locked` рендерится
+без KeyError.
+
+**Критерий:** `pytest tests/hysteria2/` зелёный; вербатим: рендер содержит
+`ExecStart=<bin> server -c <config>`.
+
+---
+
+## P11. `run_install` обоих протоколов — port-чек раньше проверки «уже установлен» — ✅ ВЫПОЛНЕНО 2026-11-09
+
+> Закрыто WP-микро (vds-coder, 2026-11-09). Найдено на живой приёмке `asv1`:
+> повторный `vds xray install` при активном сервисе (сам владеет 443)
+> отвечал «Порт 443/tcp занят (владелец: xray)» вместо «уже установлен».
+
+**Проблема:** в `src/xray/install.py` и `src/hysteria2/install.py` проверка
+`port_free` шла ДО `_installed()` — ломала идемпотентность (AC E4) и
+блокировала восстановление state.
+
+**Действия:** 1) в обоих `run_install` проверка `_installed()` перенесена
+выше port-чека (у xray — та же единая функция `_installed()`, логика не
+дублируется); 2) поведение «не установлен + порт занят» сохранено (ошибка
+порта); 3) регрессионные тесты `test_already_installed_wins_over_busy_port`
+в обоих test_install.py: установлен + порт занят → exit 0 и port_free/
+port_owner не вызываются.
+
+**Критерий:** `pytest tests/xray/ tests/hysteria2/` зелёный; вербатим-прогон:
+при занятом порте и установленном сервисе run_install возвращает 0.
+
+---
+
 ## Порядок работ
 
 | Этап | Пункты | Суммарно | Почему сначала |

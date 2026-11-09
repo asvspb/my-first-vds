@@ -107,6 +107,39 @@ class TestPreconditions:
         assert not install.XRAY_BIN_PATH.exists()
         assert not install.XRAY_CONFIG_PATH.exists()
 
+    def test_already_installed_wins_over_busy_port(
+        self, env: Env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Регрессия P11: активный сервис сам владеет 443 — «уже установлен»,
+        а не «порт занят»; порт-чек не выполняется вовсе."""
+        install.XRAY_BIN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        install.XRAY_BIN_PATH.write_text("fake", encoding="utf-8")
+        install.XRAY_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        install.XRAY_CONFIG_PATH.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(
+            install, "run_list",
+            lambda args, timeout=10: ShellResult(
+                stdout=f"Xray {install.XRAY_VERSION} (custom)\n", stderr="", returncode=0
+            ),
+        )
+
+        port_checks: list[tuple[int, str]] = []
+
+        def _port_free(port: int, proto: str = "tcp") -> bool:
+            port_checks.append((port, proto))
+            return False  # порт «занят» — но установленный сервис обязан пройти
+
+        monkeypatch.setattr(install, "port_free", _port_free)
+        owner_calls: list[tuple[int, str]] = []
+        monkeypatch.setattr(
+            install, "port_owner",
+            lambda port, proto="tcp": owner_calls.append((port, proto)) or "xray",
+        )
+
+        assert install.run_install(state_path=str(env.root / "state.json")) == 0
+        assert port_checks == []  # порядок проверок: installed раньше порта
+        assert owner_calls == []
+
     def test_already_installed_no_download(
         self, env: Env, monkeypatch: pytest.MonkeyPatch
     ) -> None:

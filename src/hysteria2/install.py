@@ -1,6 +1,7 @@
 """Установка Hysteria2 (ADR-001, вариант B: пин версии + SHA256 из hashes.txt).
 
-Поток: root-check -> port_free(443/udp) ДО любых изменений -> FileLock ->
+Поток: root-check -> already-installed (идемпотентность) -> port_free(443/udp)
+ДО любых изменений -> FileLock ->
 загрузка бинаря + hashes.txt из GitHub release -> проверка SHA256 -> установка
 бинаря в /usr/local/bin/hysteria -> self-signed сертификат (openssl req -x509,
 CN=<public_ip>, 10 лет, 0600) -> auth-пароль (core.secrets.gen_password) ->
@@ -317,6 +318,16 @@ def run_install(
         console.print("[error][hysteria2] Требуется root (запустите через sudo).[/error]")
         return 1
 
+    # Идемпотентность (ADR-001): пиннутая версия на месте — не перекачиваем.
+    # ДО проверки порта: активный сервис владеет udp/443 сам, «порт занят»
+    # на повторном install — ложный отказ и блокировка восстановления state.
+    if _installed():
+        console.print(
+            f"[success][hysteria2] Hysteria2 {HYSTERIA2_VERSION} уже установлен "
+            "(бинарь и конфиг на месте) — повторная установка не требуется.[/success]"
+        )
+        return 0
+
     # Проверка порта — ДО любых изменений (SPEC §5, AC E1); QUIC = UDP.
     if not port_free(port, "udp"):
         owner = port_owner(port, "udp")
@@ -326,14 +337,6 @@ def run_install(
             "Освободите порт или остановите сервис и повторите.[/error]"
         )
         return 1
-
-    # Идемпотентность (ADR-001): пиннутая версия на месте — не перекачиваем.
-    if _installed():
-        console.print(
-            f"[success][hysteria2] Hysteria2 {HYSTERIA2_VERSION} уже установлен "
-            "(бинарь и конфиг на месте) — повторная установка не требуется.[/success]"
-        )
-        return 0
 
     ip = public_ip()
     if not ip:

@@ -1,6 +1,7 @@
 """Установка Xray-core (ADR-001, вариант B: пин версии + SHA256 из .dgst).
 
-Поток: root-check -> port_free(443) ДО любых изменений -> FileLock ->
+Поток: root-check -> already-installed (идемпотентность) -> port_free(443)
+ДО любых изменений -> FileLock ->
 загрузка release zip + .dgst из GitHub -> проверка SHA256 -> распаковка во
 временный каталог -> установка бинаря и geodata -> генерация ключей
 (uuid/secrets, x25519 вызовом установленного бинаря) -> рендер и запись
@@ -277,6 +278,16 @@ def run_install(
         console.print("[error][xray] Требуется root (запустите через sudo).[/error]")
         return 1
 
+    # Идемпотентность (ADR-001): пиннутая версия на месте — не перекачиваем.
+    # ДО проверки порта: активный сервис владеет 443 сам, «порт занят (xray)»
+    # на повторном install — ложный отказ и блокировка восстановления state.
+    if _installed():
+        console.print(
+            f"[success][xray] Xray {XRAY_VERSION} уже установлен "
+            f"(бинарь и конфиг на месте) — повторная установка не требуется.[/success]"
+        )
+        return 0
+
     # Проверка порта — ДО любых изменений (SPEC §5, AC E1).
     if not port_free(port, "tcp"):
         owner = port_owner(port, "tcp")
@@ -286,14 +297,6 @@ def run_install(
             "Освободите порт или остановите сервис и повторите.[/error]"
         )
         return 1
-
-    # Идемпотентность (ADR-001): пиннутая версия на месте — не перекачиваем.
-    if _installed():
-        console.print(
-            f"[success][xray] Xray {XRAY_VERSION} уже установлен "
-            f"(бинарь и конфиг на месте) — повторная установка не требуется.[/success]"
-        )
-        return 0
 
     with FileLock(LOCK_FILE):
         return _install_locked(sni, port, state_path)

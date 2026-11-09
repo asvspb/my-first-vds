@@ -131,6 +131,39 @@ class TestPreconditions:
         assert not install.HYSTERIA2_CERT_PATH.exists()
         assert env.openssl_calls == []
 
+    def test_already_installed_wins_over_busy_port(
+        self, env: Env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Регрессия P11: активный сервис сам владеет udp/443 — «уже установлен»,
+        а не «порт занят»; порт-чек не выполняется вовсе."""
+        install.HYSTERIA2_BIN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        install.HYSTERIA2_BIN_PATH.write_text("fake", encoding="utf-8")
+        install.HYSTERIA2_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        install.HYSTERIA2_CONFIG_PATH.write_text("listen: :443\n", encoding="utf-8")
+        monkeypatch.setattr(
+            install, "run_list",
+            lambda args, timeout=10: ShellResult(
+                stdout=f"hysteria version {install._VERSIONplain}\n", stderr="", returncode=0
+            ),
+        )
+
+        port_checks: list[tuple[int, str]] = []
+
+        def _port_free(port: int, proto: str = "udp") -> bool:
+            port_checks.append((port, proto))
+            return False  # порт «занят» — но установленный сервис обязан пройти
+
+        monkeypatch.setattr(install, "port_free", _port_free)
+        owner_calls: list[tuple[int, str]] = []
+        monkeypatch.setattr(
+            install, "port_owner",
+            lambda port, proto="udp": owner_calls.append((port, proto)) or "hysteria",
+        )
+
+        assert install.run_install(state_path=str(env.root / "state.json")) == 0
+        assert port_checks == []  # порядок проверок: installed раньше порта
+        assert owner_calls == []
+
     def test_no_public_ip_refused(
         self, env: Env, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -255,6 +288,44 @@ class TestIdempotency:
         match = re.search(r'^\s*password:\s*"?([A-Za-z0-9]+)"?\s*$', config_text, re.M)
         assert match is not None
         assert match.group(1) == _auth_password(state_path)
+
+
+class TestUnitTemplate:
+    """Регрессия P10: hysteria v2 без subcommand стартует в client mode
+    (crash-loop «failed to parse client config» на asv1) — юнит обязан
+    запускать `hysteria server -c config.yaml`."""
+
+    def test_execstart_has_server_subcommand(self) -> None:
+        from src.core.units import SYSTEMD_DIR
+
+        tpl = SYSTEMD_DIR / "vds-hysteria2.service.tpl"
+        rendered = tpl.read_text(encoding="utf-8").format(
+            name="QUIC masquerade",
+            bin_path="/usr/local/bin/hysteria",
+            config_path="/etc/hysteria/config.yaml",
+        )
+        exec_start = [
+            line for line in rendered.splitlines()
+            if line.startswith("ExecStart=")
+        ]
+        assert exec_start == [
+            "ExecStart=/usr/local/bin/hysteria server "
+            "-c /etc/hysteria/config.yaml"
+        ]
+
+    def test_ctx_from_install_module_renders(self) -> None:
+        """Ctx из `_install_locked` рендерится без KeyError (поля совпадают)."""
+        from src.core.units import SYSTEMD_DIR
+
+        tpl_text = (SYSTEMD_DIR / "vds-hysteria2.service.tpl").read_text(
+            encoding="utf-8"
+        )
+        rendered = tpl_text.format(**{
+            "name": "QUIC masquerade",
+            "bin_path": str(install.HYSTERIA2_BIN_PATH),
+            "config_path": str(install.HYSTERIA2_CONFIG_PATH),
+        })
+        assert "server -c" in rendered
 
 
 class TestReleaseUrlsMirror:

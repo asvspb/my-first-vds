@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart={bin_path} -c {config_path}
+ExecStart={bin_path} server -c {config_path}
 Restart=always
 RestartSec=3
 LimitNOFILE=65535
