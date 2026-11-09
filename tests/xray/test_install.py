@@ -181,3 +181,32 @@ class TestFullInstall:
         reality = config["inbounds"][0]["streamSettings"]["realitySettings"]
         assert reality["dest"] == "example.org:443"
         assert reality["serverNames"] == ["example.org"]
+
+
+# Фикстура — verbatim-содержимое upstream-ассета
+# XTLS/Xray-core v25.1.1 `Xray-linux-64.zip.dgst` (публичные значения релиза,
+# не секреты; последняя строка сокращена в WP до многоточия — дополнена нулями,
+# длина сохранена).
+_DGST_UPSTREAM = (
+    "MD5= e0d3ebb576ac291dfd24afeb3f4023a0\n"
+    "SHA1= 0454e0541adee5e729665ff44b83cbe8cd5dc5bf\n"
+    "SHA2-256= c80979e097aa304fab7d749bc371e8329f453a4c6a8c5d8f71dc12ab0e653fb3\n"
+    "SHA2-512= " + "4f4ea9e1f1f4741c" * 8 + "\n"
+)
+
+
+class TestSha256FromDgst:
+    def test_upstream_sha2_256_label(self) -> None:
+        # Реальный формат ассета v25.1.1: метка SHA2-256=, а не SHA256=
+        assert install._sha256_from_dgst(_DGST_UPSTREAM) == (
+            "c80979e097aa304fab7d749bc371e8329f453a4c6a8c5d8f71dc12ab0e653fb3"
+        )
+
+    def test_legacy_sha256_label(self) -> None:
+        dgst = "MD5= abcd\nSHA256= " + "a" * 64 + "\n"
+        assert install._sha256_from_dgst(dgst) == "a" * 64
+
+    def test_no_sha256_raises(self) -> None:
+        dgst = "MD5= abcd\nSHA1= " + "b" * 40 + "\nSHA512= " + "c" * 128 + "\n"
+        with pytest.raises(install.InstallError, match="SHA256 не найден"):
+            install._sha256_from_dgst(dgst)

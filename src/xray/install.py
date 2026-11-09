@@ -94,7 +94,12 @@ def _sha256_from_dgst(dgst_text: str) -> str:
     """Извлечь SHA256 из содержимого .dgst-ассета (подписан апстримом)."""
     for line in dgst_text.splitlines():
         parts = line.split("=", 1)
-        if len(parts) == 2 and parts[0].strip().upper() == "SHA256":
+        if len(parts) != 2:
+            continue
+        # Апстрим метит SHA256 как `SHA2-256=`, исторически ожидаем и `SHA256=`;
+        # сравниваем без пробелов, регистр не важен.
+        label = parts[0].strip().upper().replace(" ", "")
+        if label in ("SHA256", "SHA2-256"):
             return parts[1].strip().lower()
     raise InstallError("SHA256 не найден в .dgst-ассете release.")
 
