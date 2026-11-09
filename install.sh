@@ -70,8 +70,17 @@ else
     SCRIPT_DIR="$PWD"
 fi
 if [[ -f "${SCRIPT_DIR}/requirements.txt" ]]; then
-    log "Копирование файлов из ${SCRIPT_DIR}..."
-    cp -r "${SCRIPT_DIR}/"* "${INSTALL_DIR}/"
+    # Guard: cp -r падает под set -e, если каталоги совпадают или вложены друг в друга
+    # (TECHDEBT P7). В этих геометриях копирование не нужно/невозможно — пропускаем.
+    SCRIPT_REAL="$(realpath "${SCRIPT_DIR}")"
+    INSTALL_REAL="$(realpath "${INSTALL_DIR}")"
+    if [[ "${SCRIPT_REAL}" == "${INSTALL_REAL}" || "${INSTALL_REAL}" == "${SCRIPT_REAL}"/* || "${SCRIPT_REAL}" == "${INSTALL_REAL}"/* ]]; then
+        log "Файлы уже в ${INSTALL_DIR} — копирование пропущено"
+    else
+        log "Копирование файлов из ${SCRIPT_DIR}..."
+        # find вместо glob "*": переносит скрытые файлы и не тащит venv/ из источника.
+        find "${SCRIPT_DIR}" -mindepth 1 -maxdepth 1 ! -name venv ! -name .git -exec cp -r -t "${INSTALL_DIR}" -- {} +
+    fi
 else
     log "Клонирование репозитория ${REPO_URL}..."
     if [[ -d "${INSTALL_DIR}/.git" ]]; then
@@ -101,6 +110,16 @@ log "Шаг 4/6: Установка Python-зависимостей..."
 "${INSTALL_DIR}/venv/bin/pip" install --upgrade pip --quiet
 "${INSTALL_DIR}/venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt" --quiet
 log "Python-библиотеки установлены"
+
+# Dev-зависимости (pytest) — только если requirements-dev.txt присутствует в репо.
+# Неудача не валит установку: dev-депы не критичны для прод-работы CLI.
+if [[ -f "${INSTALL_DIR}/requirements-dev.txt" ]]; then
+    if "${INSTALL_DIR}/venv/bin/pip" install -r "${INSTALL_DIR}/requirements-dev.txt" --quiet; then
+        log "Dev-зависимости установлены (requirements-dev.txt)"
+    else
+        warn "Не удалось установить dev-зависимости — продолжаем без них"
+    fi
+fi
 
 # ── 5. Создание симлинка `vds` ────────────────────────────────────────────────
 log "Шаг 5/6: Создание команды vds..."

@@ -25,7 +25,9 @@ vds/
 ├── install.sh          # Bootstrap-установщик (запускать на сервере)
 ├── preinstall.sh       # Базовая подготовка сервера
 ├── local-init.sh       # Устарел — используй scripts/8_vds-server.sh
+├── upload-ssh-cert.sh  # Загрузка SSH-ключа на сервер (пароль root → authorized_keys)
 ├── requirements.txt    # Python-зависимости
+├── requirements-dev.txt # Dev-зависимости (pytest; ставятся install.sh при наличии)
 ├── pyproject.toml      # Метаданные пакета
 ├── systemd/            # Systemd unit-файлы
 │   ├── vds-watchdog.service/.timer
@@ -212,6 +214,8 @@ journalctl -u vds-watchdog -n 20
 1. Создать модуль в `src/<category>/<module>.py`
 2. Зарегистрировать в `src/main.py` через `@app.command()` или `@<category>_app.command()`
 3. При необходимости добавить пункт в `main_menu()`
+
+Для запуска тестов: `pip install -r requirements-dev.txt` (или `pip install -e '.[dev]'`), затем `pytest -q`.
 
 ## Требования
 

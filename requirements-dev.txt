@@ -1,0 +1,2 @@
+# Dev-зависимости (зеркало pyproject [project.optional-dependencies].dev)
+pytest>=8.0
