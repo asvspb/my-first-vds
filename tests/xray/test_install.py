@@ -269,3 +269,49 @@ class TestReleaseUrlsMirror:
         zip_url, dgst_url = install._release_urls()
         assert zip_url.startswith("https://ghfast.top/https://github.com/")
         assert "//https" not in zip_url
+
+
+class TestInstalledVersionFormat:
+    """P12: `_installed()` сверяет версию с реальным форматом вывода
+    `xray version` («Xray 25.1.1 ...» — без ведущего «v», в отличие от пина)."""
+
+    def _setup_installed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stdout: str
+    ) -> None:
+        monkeypatch.setattr(install, "XRAY_BIN_PATH", tmp_path / "bin" / "xray")
+        monkeypatch.setattr(install, "XRAY_CONFIG_PATH", tmp_path / "etc" / "xray" / "config.json")
+        install.XRAY_BIN_PATH.parent.mkdir(parents=True)
+        install.XRAY_CONFIG_PATH.parent.mkdir(parents=True)
+        install.XRAY_BIN_PATH.write_text("fake", encoding="utf-8")
+        install.XRAY_CONFIG_PATH.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(
+            install, "run_list",
+            lambda args, timeout=10: ShellResult(stdout=stdout, stderr="", returncode=0),
+        )
+
+    def test_real_version_output_matches(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Реальный формат `xray version` v25.1.1 → True (было False из-за «v»)."""
+        self._setup_installed(
+            tmp_path,
+            monkeypatch,
+            "Xray 25.1.1 (Xray, Penetrates Everything.) e80ca67 (go1.23.4 linux/amd64)\n",
+        )
+        assert install._installed() is True
+
+    def test_full_pin_also_matches(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Если вывод содержит полный пин с «v» — тоже True."""
+        self._setup_installed(
+            tmp_path, monkeypatch, f"Xray {install.XRAY_VERSION} (custom)\n"
+        )
+        assert install._installed() is True
+
+    def test_other_version_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Другая версия → False."""
+        self._setup_installed(tmp_path, monkeypatch, "Xray 24.9.30 (Xray) abc (go1.23)\n")
+        assert install._installed() is False

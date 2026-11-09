@@ -131,7 +131,9 @@ def _installed() -> bool:
     if not (XRAY_BIN_PATH.is_file() and XRAY_CONFIG_PATH.is_file()):
         return False
     result = run_list([str(XRAY_BIN_PATH), "version"], timeout=15)
-    return result.ok and XRAY_VERSION in result.stdout
+    # Реальный вывод `xray version` — «Xray 25.1.1 ...» без ведущего «v»;
+    # пин хранится как «v25.1.1» (тег release). Сравниваем без «v».
+    return result.ok and XRAY_VERSION.lstrip("v") in result.stdout
 
 
 def _gen_x25519() -> tuple[str, str]:

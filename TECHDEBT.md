@@ -212,6 +212,32 @@ port_owner не вызываются.
 
 ---
 
+## P12. `xray/install.py::_installed()` — сверка версии падала на реальном формате вывода — ✅ ВЫПОЛНЕНО 2026-11-09
+
+> Закрыто WP-микро (vds-coder, 2026-11-09). Найдено на живой приёмке `asv1`:
+> `_installed()` всегда False на установленном Xray — идемпотентность P11
+> не срабатывала, повторный install падал на port-чеке.
+
+**Проблема:** `_installed()` сравнивал `XRAY_VERSION in result.stdout`, где
+`XRAY_VERSION = "v25.1.1"` (тег release), а реальный вывод
+`/usr/local/bin/xray version` — «Xray 25.1.1 ...» без ведущего «v».
+В юнит-тестах проходило, потому что мок возвращал точный пин с «v».
+
+**Действия:** 1) сравнение без учёта ведущего «v» —
+`XRAY_VERSION.lstrip("v") in result.stdout` (покрывает и «Xray 25.1.1», и
+гипотетический полный пин); 2) регрессионные тесты
+`tests/xray/test_install.py::TestInstalledVersionFormat` — реальный формат
+вывода → True, полный пин → True, другая версия («Xray 24.9.30») → False.
+Аналог в `hysteria2/install.py::_installed()` НЕ тронут: там сверка по
+`_VERSIONplain = "v2.13.0"`, и живой вывод `hysteria version` содержит
+«app/v2.13.0» — совпадает (подтверждено на asv1).
+
+**Критерий:** `pytest tests/xray/` зелёный; вербатим-прогон `_installed()`
+на реальном формате вывода («Xray 25.1.1 (Xray, Penetrates Everything.)
+e80ca67 (go1.23.4 linux/amd64)») → True.
+
+---
+
 ## Порядок работ
 
 | Этап | Пункты | Суммарно | Почему сначала |
