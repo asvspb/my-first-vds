@@ -103,6 +103,7 @@ vds cleanup                  # Очистка системы (логи, кэши
 
 ```bash
 vds gateway status                  # Состояние gateway: state.json, клиенты, протоколы
+vds gateway links                   # Share-links всех клиентов (фильтр: --protocol xray|hysteria2)
 
 vds xray install                    # Установить Xray VLESS Reality (TCP 443)
 vds xray install --sni www.cloudflare.com   # Сайт-маска (по умолчанию www.google.com)

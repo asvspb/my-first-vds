@@ -148,6 +148,7 @@ QUIC (UDP:443); TLS-сертификат через ACME (Let's Encrypt) или 
 
 ```bash
 vds gateway status                  # состояние gateway (state.json, клиенты, протоколы)
+vds gateway links [--protocol P]    # share-links всех клиентов (P: xray | hysteria2)
 
 vds xray install [--sni MASK]       # Xray-core (пин версии + SHA256), Reality, Vision
 vds xray add-client NAME            # профиль + share-link vless://...

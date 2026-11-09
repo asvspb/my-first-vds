@@ -363,6 +363,31 @@ def gateway_status():
         )
 
 
+@gateway_app.command("links")
+def gateway_links(
+    protocol: str = typer.Option(
+        None, "--protocol", help="Фильтр: xray | hysteria2 (по умолчанию все)"
+    ),
+):
+    """Share-links всех клиентов из state (для `vpn profile pull` по ssh)"""
+    from src.core.logger import console
+    from src.gateway.links import render_all_links
+    from src.gateway.store import StoreError
+
+    try:
+        links = render_all_links(protocol=protocol)
+    except (StoreError, ValueError) as exc:
+        console.print(f"[error][gateway] {exc}[/error]")
+        raise typer.Exit(1)
+
+    if not links:
+        console.print("[warning][gateway] Состояние пусто: клиентов нет.[/warning]")
+        return
+
+    for name, proto, link in links:
+        console.print(f"{name}: {link}")
+
+
 @xray_app.command("install")
 def xray_install(
     sni: str = typer.Option("www.google.com", "--sni", help="SNI для Reality (dest/serverNames)"),
