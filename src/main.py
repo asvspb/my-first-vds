@@ -19,12 +19,14 @@ coturn_app = typer.Typer(help="Coturn TURN server management")
 gateway_app = typer.Typer(help="Gateway state management")
 xray_app = typer.Typer(help="Xray VLESS Reality gateway (TCP 443)")
 hysteria2_app = typer.Typer(help="Hysteria2 QUIC gateway (UDP 443)")
+acme_app = typer.Typer(help="ACME / Let's Encrypt certificates (certbot, HTTP-01)")
 app.add_typer(zerotier_app, name="zerotier")
 app.add_typer(wireguard_app, name="wireguard")
 app.add_typer(coturn_app, name="coturn")
 app.add_typer(gateway_app, name="gateway")
 app.add_typer(xray_app, name="xray")
 app.add_typer(hysteria2_app, name="hysteria2")
+app.add_typer(acme_app, name="acme")
 
 @app.callback(invoke_without_command=True)
 def main_menu(ctx: typer.Context):
@@ -373,14 +375,17 @@ def xray_install(
 @xray_app.command("add-client")
 def xray_add_client(
     name: str = typer.Argument(..., help="Имя нового клиента"),
+    transport: str = typer.Option(
+        "reality", "--transport", help="reality (по умолчанию) или xhttp"
+    ),
 ):
-    """Добавить клиента и показать share-link VLESS Reality"""
+    """Добавить клиента и показать share-link (Reality или XHTTP)"""
     from src.core.logger import console
     from src.gateway.store import StoreError
     from src.xray.clients import XrayError, add_client
 
     try:
-        result = add_client(name)
+        result = add_client(name, transport=transport)
     except (StoreError, XrayError) as exc:
         console.print(f"[error][xray] {exc}[/error]")
         raise typer.Exit(1)
@@ -401,6 +406,63 @@ def xray_remove(
     """Удалить Xray (юнит, конфиг, бинарь+geodata, клиенты из store)"""
     from src.xray.remove import run_remove
     raise typer.Exit(run_remove(apply=apply))
+
+
+@xray_app.command("add-transport")
+def xray_add_transport(
+    transport: str = typer.Argument(..., help="Транспорт: xhttp"),
+    domain: str = typer.Option(..., "--domain", help="Домен с LE-сертификатом (`vds acme issue`)"),
+    mode: str = typer.Option(
+        "fallback",
+        "--mode",
+        help="fallback: SNI-разделение за Reality на 443; port: публичный 8443",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Применить (по умолчанию dry-run)"),
+    yes: bool = typer.Option(False, "--yes", help="Без интерактивного подтверждения"),
+):
+    """Добавить XHTTP-транспорт к живому Xray (ADR-003, SPEC WP-3)"""
+    from src.xray.install import run_add_transport_xhttp
+    raise typer.Exit(
+        run_add_transport_xhttp(transport, domain, mode=mode, apply=apply, yes=yes)
+    )
+
+
+@xray_app.command("remove-transport")
+def xray_remove_transport(
+    transport: str = typer.Argument(..., help="Транспорт: xhttp"),
+    apply: bool = typer.Option(False, "--apply", help="Применить (по умолчанию dry-run)"),
+    yes: bool = typer.Option(False, "--yes", help="Без интерактивного подтверждения"),
+):
+    """Снять XHTTP-транспорт (fallbacks + инблэнд + XHTTP-клиенты, ADR-003)"""
+    from src.core.logger import console
+    from src.xray.remove import remove_transport_xhttp
+
+    if transport != "xhttp":
+        console.print(
+            f"[error][xray] Неизвестный транспорт {transport!r} "
+            "(поддерживается: xhttp).[/error]"
+        )
+        raise typer.Exit(1)
+    raise typer.Exit(remove_transport_xhttp(apply=apply, yes=yes))
+
+
+@xray_app.command("use-domain")
+def xray_use_domain(
+    domain: str = typer.Option(
+        ..., "--domain", help="Домен, A-запись которого резолвится в публичный IP сервера"
+    ),
+):
+    """Адрес Reality share-links = домен (state.domain); dest/serverNames не меняются (SPEC WP-4)"""
+    from src.core.logger import console
+    from src.gateway.store import StoreError
+    from src.xray.clients import XrayError, use_domain
+
+    try:
+        use_domain(domain)
+    except (StoreError, XrayError) as exc:
+        console.print(f"[error][xray] {exc}[/error]")
+        raise typer.Exit(1)
+    raise typer.Exit(0)
 
 
 @hysteria2_app.command("install")
@@ -436,6 +498,16 @@ def hysteria2_status():
     raise typer.Exit(run_status())
 
 
+@hysteria2_app.command("apply-cert")
+def hysteria2_apply_cert(
+    apply: bool = typer.Option(False, "--apply", help="Применить LE-сертификат (по умолчанию dry-run)"),
+    restore: bool = typer.Option(False, "--restore", help="Откат к self-signed из бэкапа .bak-pre-le"),
+):
+    """Подменить self-signed сертификат Hysteria2 на LE (dry-run по умолчанию)"""
+    from src.acme.apply_cert import run_apply
+    raise typer.Exit(run_apply(apply=apply, restore=restore))
+
+
 @hysteria2_app.command("remove")
 def hysteria2_remove(
     apply: bool = typer.Option(False, "--apply", help="Применить удаление (по умолчанию dry-run)"),
@@ -443,6 +515,17 @@ def hysteria2_remove(
     """Удалить Hysteria2 (юнит, конфиг, сертификаты, бинарь, клиенты из store)"""
     from src.hysteria2.remove import run_remove
     raise typer.Exit(run_remove(apply=apply))
+
+
+@acme_app.command("issue")
+def acme_issue(
+    domain: str = typer.Option(..., "--domain", help="Домен, резолвящийся в публичный IP сервера"),
+    email: str = typer.Option(..., "--email", help="Email для аккаунта Let's Encrypt"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Показать план без изменений"),
+):
+    """Выпустить LE-сертификат на домен (HTTP-01, порт 80) + deploy-hook"""
+    from src.acme.install import run_issue
+    raise typer.Exit(run_issue(domain=domain, email=email, dry_run=dry_run))
 
 
 @zerotier_app.command("install")

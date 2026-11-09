@@ -78,13 +78,35 @@ def collect_status() -> dict:
     port_listening = not port_free(port, "tcp")
     owner = port_owner(port, "tcp")
     client_names: list[str] = []
+    xhttp_client_names: list[str] = []
     state_error: str | None = None
+    state = None
     try:
-        client_names = [
-            c.name for c in load_state().clients if c.protocol == "xray"
+        state = load_state()
+        client_names = [c.name for c in state.clients if c.protocol == "xray"]
+        xhttp_client_names = [
+            c.name
+            for c in state.clients
+            if c.protocol == "xray" and c.extra.get("transport") == "xhttp"
         ]
     except StoreError as exc:
         state_error = str(exc)
+
+    # XHTTP (SPEC WP-3): transport-мета из state + факт инблэнда в config.json.
+    xhttp_meta: dict | None = None
+    xhttp_inbound: bool = False
+    if state is not None:
+        xhttp_meta = state.protocols.get("xhttp")
+    if installed and XRAY_CONFIG_PATH.is_file():
+        try:
+            config = json.loads(XRAY_CONFIG_PATH.read_text(encoding="utf-8"))
+            xhttp_inbound = any(
+                ib.get("streamSettings", {}).get("network") == "xhttp"
+                for ib in config.get("inbounds", [])
+            )
+        except (json.JSONDecodeError, OSError):
+            xhttp_inbound = False
+
     return {
         "installed": installed,
         "unit_active": active,
@@ -95,6 +117,11 @@ def collect_status() -> dict:
         "port_owner": owner,
         "clients": client_names,
         "state_error": state_error,
+        "xhttp": {
+            "meta": xhttp_meta,
+            "inbound_in_config": xhttp_inbound,
+            "clients": xhttp_client_names,
+        },
     }
 
 
@@ -137,6 +164,31 @@ def run_status() -> int:
         console.print(f"[info][xray] Клиенты ({len(info['clients'])}):[/info] {names}")
     else:
         console.print("[info][xray] Клиентов нет (`vds xray add-client NAME`).[/info]")
+
+    # XHTTP (SPEC WP-3): port/mode/сертификат и факт инблэнда в конфиге.
+    xhttp = info.get("xhttp", {})
+    meta = xhttp.get("meta")
+    if meta:
+        mode = meta.get("mode", "?")
+        domain = meta.get("domain", "?")
+        xport = meta.get("port", "?")
+        inflag = "[success]инблэнд в конфиге[/success]" if xhttp.get("inbound_in_config") else "[error]инблэнда нет в конфиге[/error]"
+        console.print(
+            f"[info][xray] XHTTP:[/info] mode={mode}, домен={domain}, "
+            f"порт {xport} (127.0.0.1 при fallback), {inflag}"
+        )
+        if xhttp.get("clients"):
+            console.print(
+                f"[info][xray] XHTTP-клиенты ({len(xhttp['clients'])}):[/info] "
+                + ", ".join(xhttp["clients"])
+            )
+    elif xhttp.get("inbound_in_config"):
+        console.print(
+            "[warning][xray] В конфиге есть XHTTP-инблэнд, но в state нет "
+            "записи protocols['xhttp'] — рассинхрон, перезапустите "
+            "`vds xray add-transport xhttp --domain <домен> --apply` или "
+            "проверьте state.json.[/warning]"
+        )
 
     journal = run_list(
         ["journalctl", "-u", XRAY_UNIT, "-n", "20", "--no-pager", "-p", "warning"],

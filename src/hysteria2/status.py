@@ -56,24 +56,37 @@ def _known_secrets() -> list[str]:
     return [v for v in values if v]
 
 
-def _cert_days_left() -> int | None:
-    """Остаток срока сертификата в днях (openssl x509 -enddate); None — сбой."""
+def _cert_info() -> dict:
+    """Тип и срок сертификата из одного вызова openssl (WP-2, E10).
+
+    Тип: "le" — издатель Let's Encrypt (сертификат подменён apply-cert),
+    "self-signed" — издатель не LE (исходный openssl req -x509),
+    None — сертификат не прочитан. days_left — остаток дней или None.
+    """
     result = run_list(
-        ["openssl", "x509", "-enddate", "-noout", "-in", str(HYSTERIA2_CERT_PATH)],
+        [
+            "openssl", "x509", "-issuer", "-enddate", "-noout",
+            "-in", str(HYSTERIA2_CERT_PATH),
+        ],
         timeout=10,
     )
     if not result.ok:
-        return None
-    line = result.stdout.strip()  # notAfter=Nov  7 12:00:00 2036 GMT
-    if not line.startswith("notAfter="):
-        return None
-    try:
-        not_after = datetime.strptime(
-            line.split("=", 1)[1].strip(), _OPENSSL_DATE_FMT
-        ).replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
-    return (not_after - datetime.now(timezone.utc)).days
+        return {"cert_type": None, "days_left": None}
+    cert_type: str | None = None
+    days_left: int | None = None
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("issuer="):
+            cert_type = "le" if "Let's Encrypt" in line else "self-signed"
+        elif line.startswith("notAfter="):
+            try:
+                not_after = datetime.strptime(
+                    line.split("=", 1)[1].strip(), _OPENSSL_DATE_FMT
+                ).replace(tzinfo=timezone.utc)
+                days_left = (not_after - datetime.now(timezone.utc)).days
+            except ValueError:
+                days_left = None
+    return {"cert_type": cert_type, "days_left": days_left}
 
 
 def collect_status() -> dict:
@@ -83,17 +96,25 @@ def collect_status() -> dict:
     port = 443
     port_listening = not port_free(port, "udp")
     owner = port_owner(port, "udp")
+    cert_type: str | None = None
     cert_days: int | None = None
     if HYSTERIA2_CERT_PATH.is_file():
-        cert_days = _cert_days_left()
+        info = _cert_info()
+        cert_type = info["cert_type"]
+        cert_days = info["days_left"]
     client_names: list[str] = []
+    acme_domain = ""
     state_error: str | None = None
     try:
-        client_names = [
-            c.name for c in load_state().clients if c.protocol == "hysteria2"
-        ]
+        state = load_state()
+        client_names = [c.name for c in state.clients if c.protocol == "hysteria2"]
+        acme_meta = state.protocols.get("acme") or {}
+        acme_domain = str(acme_meta.get("domain") or "")
     except StoreError as exc:
         state_error = str(exc)
+    # E10: домен выдан (LE в state), но у Hysteria2 всё ещё self-signed —
+    # смешанное состояние: новые ссылки без insecure=1 не проходят валидацию.
+    domain_mismatch = bool(acme_domain) and cert_type is not None and cert_type != "le"
     return {
         "installed": installed,
         "unit_active": active,
@@ -102,6 +123,9 @@ def collect_status() -> dict:
         "port_listening": port_listening,
         "port_owner": owner,
         "cert_days_left": cert_days,
+        "cert_type": cert_type,
+        "acme_domain": acme_domain,
+        "domain_mismatch": domain_mismatch,
         "clients": client_names,
         "state_error": state_error,
     }
@@ -130,8 +154,25 @@ def run_status() -> int:
     else:
         days = info["cert_days_left"]
         tag = "success" if days > 30 else "warning"
+        cert_label = {
+            "le": "LE (Let's Encrypt)",
+            "self-signed": "self-signed",
+            None: "тип не определён",
+        }[info["cert_type"]]
         console.print(
-            f"[{tag}][hysteria2] Сертификат: осталось {days} дн.[/{tag}]"
+            f"[{tag}][hysteria2] Сертификат ({cert_label}): осталось {days} дн.[/{tag}]"
+        )
+        if info["cert_type"] == "le" and info["acme_domain"]:
+            console.print(
+                f"[info][hysteria2] Домен: {info['acme_domain']} "
+                "(автопродление certbot.timer + deploy-hook).[/info]"
+            )
+
+    if info.get("domain_mismatch"):
+        console.print(
+            f"[warning][hysteria2] E10: домен {info['acme_domain']} выдан, но "
+            "у Hysteria2 ещё self-signed — LE-сертификат не применён. "
+            "Выполните `vds hysteria2 apply-cert --apply`.[/warning]"
         )
 
     if info["port_listening"]:

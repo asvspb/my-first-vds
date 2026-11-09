@@ -39,20 +39,30 @@ def render_share_link(
     password: str,
     name: str,
     port: int = 443,
+    insecure: bool = True,
 ) -> str:
     """Клиентская ссылка Hysteria2 (SPEC §3, VPN-PROTOCOLS §2.3).
 
-    Формат:
+    Формат self-signed (insecure=True, по умолчанию — прежнее поведение):
       hysteria2://<password>@<ip>:443/?sni=<ip>&insecure=1#<name>
 
-    `insecure=1` — self-signed сертификат без домена (тестовый режим,
-    задокументирован в SPEC §8). Пароль — буквенно-цифровой (gen_password),
-    URL-экранирование не требуется.
+    Формат LE (SPEC WP-2, FR-2.2): при домене + подменённом LE-сертификате
+    ссылка рендерится без `insecure=1`, sni=домен:
+      hysteria2://<password>@<домен>:443/?sni=<домен>#<name>
+
+    Пароль — буквенно-цифровой (gen_password), URL-экранирование не требуется.
     """
+    insecure_part = "&insecure=1" if insecure else ""
     return (
         f"hysteria2://{password}@{host}:{port}/"
-        f"?sni={host}&insecure=1#{quote(name)}"
+        f"?sni={host}{insecure_part}#{quote(name)}"
     )
+
+
+def _le_domain(state) -> str:
+    """Домен с выданным LE-сертификатом из state (WP-1); пусто — его нет."""
+    meta = state.protocols.get("acme") or {}
+    return str(meta.get("domain") or "")
 
 
 def _hysteria2_meta(state) -> dict:
@@ -79,19 +89,28 @@ def add_client(name: str, state_path: str | None = None) -> dict:
             "`vds hysteria2 install`."
         )
 
-    host = public_ip() or meta.get("cert_cn") or "SERVER_IP"
+    le_domain = _le_domain(state)
+    if le_domain:
+        # LE-сертификат выдан (WP-1): адрес — домен, sni=домен, без insecure=1
+        # (SPEC WP-2). Самоподменённый сертификат: подмена через apply-cert.
+        host = le_domain
+        insecure = False
+    else:
+        host = public_ip() or meta.get("cert_cn") or "SERVER_IP"
+        insecure = True
     profile = ClientProfile(
         name=name,
         protocol="hysteria2",
         port=port,
         password=password,  # общий пароль инбаунда (см. docstring модуля)
-        sni=host,           # sni = IP: сертификат self-signed CN=<ip>
+        sni=host,           # sni = IP (self-signed) или домен (LE)
+        extra={"tls": "le"} if le_domain else {},
     )
     new_state = store_add_client(state, profile)  # StoreError: дубликат имени
     save_state(new_state, state_path)
 
     share_link = render_share_link(
-        host=host, password=password, name=name, port=port
+        host=host, password=password, name=name, port=port, insecure=insecure
     )
     console.print(f"[success][hysteria2] Клиент '{name}' добавлен.[/success]")
     console.print(f"[change]{share_link}[/change]")

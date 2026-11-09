@@ -29,3 +29,18 @@ HYSTERIA2_KEY_PATH = Path("/etc/hysteria/key.pem")
 
 # sysctl-тюнинг (не откатывается при remove — ADR-002).
 SYSCTL_CONF_PATH = Path("/etc/sysctl.d/99-vds-gateway.conf")
+
+# ACME / Let's Encrypt (SPEC-20261109-domain-xhttp-acme, ADR-004).
+# certbot.timer — пакетный, своих юнитов не добавляем (SPEC §3 «systemd: без изменений»).
+ACME_HOOKS_DEPLOY_DIR = Path("/etc/letsencrypt/renewal-hooks/deploy")
+ACME_HYSTERIA2_HOOK_NAME = "vds-hysteria2-cert.sh"
+
+# XHTTP: внутренний инблэнд Xray за SNI-фолбэком Reality (ADR-003); внешних
+# портов не добавляет — слушает только на loopback.
+XHTTP_INTERNAL_PORT = 8443
+XRAY_HTTP_BIND = "127.0.0.1"
+
+
+def ACME_LETSENCRYPT_LIVE(domain: str) -> Path:
+    """Каталог live-сертификата LE для домена (ADR-004, пути локализованы в acme)."""
+    return Path("/etc/letsencrypt/live") / domain
