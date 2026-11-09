@@ -69,9 +69,22 @@ def _asset_arch() -> str:
 
 
 def _release_urls() -> tuple[str, str]:
+    """URL zip-ассета и .dgst-файла релиза Xray.
+
+    Env-переопределение `VDS_GITHUB_MIRROR` (gh-proxy-конвенция: зеркало
+    префиксует оригинальный URL целиком), применяется в конце ко всем
+    возвращённым URL, чтобы производные (.dgst) не разошлись. При заданном
+    зеркале доверие смещается на зеркало для обоих ассетов (хеш-файл и
+    бинарь идут через один и тот же mirror; GPG-проверки в коде нет);
+    env-флаг — сознательный trade-off оператора, по умолчанию выключен.
+    """
     asset = f"Xray-linux-{_asset_arch()}.zip"
     base = f"{GITHUB_BASE}/{XRAY_VERSION}/{asset}"
-    return base, base + ".dgst"
+    urls = (base, base + ".dgst")
+    mirror = os.environ.get("VDS_GITHUB_MIRROR", "").strip().rstrip("/")
+    if not mirror:
+        return urls
+    return tuple(f"{mirror}/{url}" for url in urls)
 
 
 def _download_to(url: str, dest: Path) -> None:

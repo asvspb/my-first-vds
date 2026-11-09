@@ -210,3 +210,29 @@ class TestSha256FromDgst:
         dgst = "MD5= abcd\nSHA1= " + "b" * 40 + "\nSHA512= " + "c" * 128 + "\n"
         with pytest.raises(install.InstallError, match="SHA256 не найден"):
             install._sha256_from_dgst(dgst)
+
+
+class TestReleaseUrlsMirror:
+    """VDS_GITHUB_MIRROR: env-переопределение базового URL релиза (off by default)."""
+
+    def test_no_env_official_urls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Env не задан — официальные URL, поведение прежнее байт-в-байт."""
+        monkeypatch.delenv("VDS_GITHUB_MIRROR", raising=False)
+        zip_url, dgst_url = install._release_urls()
+        assert zip_url.startswith("https://github.com/")
+        assert dgst_url == zip_url + ".dgst"
+
+    def test_env_set_prefixes_both(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Env задан — оба URL с gh-proxy-префиксом (и .dgst производный)."""
+        monkeypatch.setenv("VDS_GITHUB_MIRROR", "https://ghfast.top")
+        zip_url, dgst_url = install._release_urls()
+        assert zip_url.startswith("https://ghfast.top/https://github.com/")
+        assert dgst_url.startswith("https://ghfast.top/https://github.com/")
+        assert dgst_url == zip_url + ".dgst"
+
+    def test_env_trailing_slash_normalized(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Хвостовой `/` в значении env нормализуется."""
+        monkeypatch.setenv("VDS_GITHUB_MIRROR", "https://ghfast.top/")
+        zip_url, dgst_url = install._release_urls()
+        assert zip_url.startswith("https://ghfast.top/https://github.com/")
+        assert "//https" not in zip_url

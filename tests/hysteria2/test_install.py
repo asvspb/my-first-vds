@@ -255,3 +255,28 @@ class TestIdempotency:
         match = re.search(r'^\s*password:\s*"?([A-Za-z0-9]+)"?\s*$', config_text, re.M)
         assert match is not None
         assert match.group(1) == _auth_password(state_path)
+
+
+class TestReleaseUrlsMirror:
+    """VDS_GITHUB_MIRROR: env-переопределение базового URL релиза (off by default)."""
+
+    def test_no_env_official_urls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Env не задан — официальные URL, поведение прежнее байт-в-байт."""
+        monkeypatch.delenv("VDS_GITHUB_MIRROR", raising=False)
+        bin_url, hashes_url = install._release_urls()
+        assert bin_url.startswith("https://github.com/")
+        assert hashes_url.startswith("https://github.com/")
+
+    def test_env_set_prefixes_both(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Env задан — оба URL с gh-proxy-префиксом."""
+        monkeypatch.setenv("VDS_GITHUB_MIRROR", "https://ghfast.top")
+        bin_url, hashes_url = install._release_urls()
+        assert bin_url.startswith("https://ghfast.top/https://github.com/")
+        assert hashes_url.startswith("https://ghfast.top/https://github.com/")
+
+    def test_env_trailing_slash_normalized(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Хвостовой `/` в значении env нормализуется."""
+        monkeypatch.setenv("VDS_GITHUB_MIRROR", "https://ghfast.top/")
+        bin_url, hashes_url = install._release_urls()
+        assert bin_url.startswith("https://ghfast.top/https://github.com/")
+        assert "//https" not in hashes_url

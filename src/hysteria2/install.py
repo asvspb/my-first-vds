@@ -77,8 +77,20 @@ def _asset_name() -> str:
 
 
 def _release_urls() -> tuple[str, str]:
+    """URL бинаря и hashes.txt релиза Hysteria2.
+
+    Env-переопределение `VDS_GITHUB_MIRROR` (gh-proxy-конвенция: зеркало
+    префиксует оригинальный URL целиком). При заданном зеркале доверие
+    смещается на зеркало для обоих ассетов (хеш-файл и бинарь идут через
+    один и тот же mirror; GPG-проверки в коде нет); env-флаг — сознательный
+    trade-off оператора, по умолчанию выключен.
+    """
     base = f"{GITHUB_BASE}/{HYSTERIA2_VERSION}/{_asset_name()}"
-    return base, f"{GITHUB_BASE}/{HYSTERIA2_VERSION}/hashes.txt"
+    urls = (base, f"{GITHUB_BASE}/{HYSTERIA2_VERSION}/hashes.txt")
+    mirror = os.environ.get("VDS_GITHUB_MIRROR", "").strip().rstrip("/")
+    if not mirror:
+        return urls
+    return tuple(f"{mirror}/{url}" for url in urls)
 
 
 def _download_to(url: str, dest: Path) -> None:

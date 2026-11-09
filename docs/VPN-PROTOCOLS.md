@@ -131,6 +131,9 @@ QUIC (UDP:443); TLS-сертификат через ACME (Let's Encrypt) или 
 ## 3. План добавления в VDS Orchestrator
 
 > **Статус: MVP реализовано 2026-11-07 (фазы 0–2), команды фактические.**
+> Установщики Xray/Hysteria2 скачивают релизы с GitHub; при DPI-блокировке
+> можно задать `VDS_GITHUB_MIRROR` (gh-proxy-префикс, напр.
+> `https://ghfast.top`) — реверсивно, off by default (см. ADR-001).
 > Xray VLESS Reality (TCP 443) и Hysteria2 (UDP 443, self-signed + `insecure=1`,
 > masquerade, sysctl BBR) установлены в оркестратор; общие примитивы —
 > `src/core/protocol.py|netcheck.py|secrets.py|units.py`, состояние —
