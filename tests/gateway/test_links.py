@@ -204,6 +204,87 @@ class TestAllAndFilter:
             render_all_links(state_path, protocol="wireguard")
 
 
+class TestAmneziawgPlaceholder:
+    """SPEC-20261110 WP-3: amneziawg-клиент в links — строка-плейсхолдер
+    с путём к .conf (без секретов)."""
+
+    def _awg_state(self) -> GatewayState:
+        state = GatewayState()
+        state.protocols["amneziawg"] = {
+            "installed": True, "port": 51825, "iface": "awg0",
+            "public_key": "PUBKEYXYZ", "psk_required": True,
+        }
+        state.clients = [
+            ClientProfile(
+                name="mob-awg", protocol="amneziawg", port=51825,
+                extra={"conf_path": "/opt/my-vds/gateway/clients/amneziawg/mob-awg.conf",
+                       "address": "10.9.0.2/32"},
+            ),
+        ]
+        return state
+
+    def test_placeholder_exact_format(self, state_path: str) -> None:
+        _save(self._awg_state(), state_path)
+        result = render_all_links(state_path)
+        assert result == [
+            (
+                "mob-awg",
+                "amneziawg",
+                "amneziawg client 'mob-awg': conf "
+                "/opt/my-vds/gateway/clients/amneziawg/mob-awg.conf",
+            )
+        ]
+
+    def test_filter_protocol_amneziawg(self, state_path: str) -> None:
+        _save(self._awg_state(), state_path)
+        result = render_all_links(state_path, protocol="amneziawg")
+        assert [(n, p) for n, p, _ in result] == [("mob-awg", "amneziawg")]
+
+    def test_golden_xray_hysteria2_output_unchanged_with_awg_present(
+        self, state_path: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Золотой инвариант SPEC WP-3: прежний вывод (phone/mob) не изменился,
+        AWG добавляется отдельной строкой-плейсхолдером."""
+        monkeypatch.setattr("src.core.netcheck.public_ip", lambda: IP)
+        state = _full_state()
+        state.clients.append(self._awg_state().clients[0])
+        _save(state, state_path)
+
+        result = render_all_links(state_path)
+        assert [
+            (n, p, l) for n, p, l in result if p != "amneziawg"
+        ] == [
+            (
+                "phone",
+                "xray",
+                f"vless://{UUID}@{IP}:443?security=reality&sni={SNI}&fp=chrome"
+                f"&pbk={PBK}&sid={SID}&flow=xtls-rprx-vision#phone",
+            ),
+            ("mob", "hysteria2", f"hysteria2://{PASSWORD}@{IP}:443/?sni={IP}&insecure=1#mob"),
+            (
+                "xhttp-web",
+                "xray",
+                f"vless://{UUID_XHTTP}@{DOMAIN}:443"
+                f"?security=tls&network=xhttp&sni={DOMAIN}&fp=chrome"
+                f"&path=/xhttp&type=xhttp#xhttp-web",
+            ),
+        ]
+        assert result[3][2].startswith("amneziawg client 'mob-awg': conf ")
+
+    def test_missing_conf_path_skipped(self, state_path: str) -> None:
+        state = self._awg_state()
+        state.clients[0].extra.pop("conf_path")
+        _save(state, state_path)
+        assert render_all_links(state_path) == []
+
+    def test_no_secrets_in_placeholder(self, state_path: str) -> None:
+        state = self._awg_state()
+        state.clients[0].extra["private_key"] = "FIXTURE_PW_SECRET="
+        _save(state, state_path)
+        result = render_all_links(state_path)
+        assert "FIXTURE_PW_SECRET" not in result[0][2]
+
+
 class TestEmptyState:
     def test_missing_file_returns_empty(self, tmp_path) -> None:
         assert render_all_links(str(tmp_path / "nope.json")) == []

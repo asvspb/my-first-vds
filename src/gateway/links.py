@@ -36,9 +36,10 @@ def render_all_links(
     from src.xray.clients import render_xhttp_share_link
 
     state: GatewayState = load_state(state_path)
-    if protocol is not None and protocol not in ("xray", "hysteria2"):
+    if protocol is not None and protocol not in ("xray", "hysteria2", "amneziawg"):
         raise ValueError(
-            f"Неизвестный протокол {protocol!r} (поддерживаются: xray, hysteria2)."
+            f"Неизвестный протокол {protocol!r} "
+            "(поддерживаются: xray, hysteria2, amneziawg)."
         )
 
     result: list[tuple[str, str, str]] = []
@@ -100,5 +101,18 @@ def render_all_links(
                     port=port, insecure=True,
                 )
             result.append((client.name, "hysteria2", link))
+        elif client.protocol == "amneziawg":
+            # AWG не имеет share-link-формата (SPEC FR-5): строка-плейсхолдер
+            # с путём к .conf, без секретов (ключи — только в .conf/state).
+            conf_path = str(client.extra.get("conf_path", ""))
+            if not conf_path:
+                continue
+            result.append(
+                (
+                    client.name,
+                    "amneziawg",
+                    f"amneziawg client '{client.name}': conf {conf_path}",
+                )
+            )
         # прочие протоколы: рендеры не определены — пропускаем
     return result

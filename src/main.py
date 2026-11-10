@@ -386,7 +386,7 @@ def gateway_status():
 @gateway_app.command("links")
 def gateway_links(
     protocol: str = typer.Option(
-        None, "--protocol", help="Фильтр: xray | hysteria2 (по умолчанию все)"
+        None, "--protocol", help="Фильтр: xray | hysteria2 | amneziawg (по умолчанию все)"
     ),
 ):
     """Share-links всех клиентов из state (для `vpn profile pull` по ssh)"""
@@ -572,6 +572,44 @@ def amneziawg_install(
     """Установить AmneziaWG (PPA ppa:amnezia/ppa, UDP 51825, obfuscated WireGuard)"""
     from src.amneziawg.install import run_install
     raise typer.Exit(run_install(port=port))
+
+
+@amneziawg_app.command("add-client")
+def amneziawg_add_client(
+    name: str = typer.Argument(..., help="Имя нового клиента"),
+    no_psk: bool = typer.Option(False, "--no-psk", help="Без preshared key"),
+):
+    """Добавить клиента AmneziaWG: .conf (0600) для импорта в AmneziaVPN"""
+    from src.amneziawg.clients import AWGClientError, add_client
+    from src.core.logger import console
+    from src.gateway.store import StoreError
+
+    try:
+        add_client(name, no_psk=no_psk)
+    except (StoreError, AWGClientError) as exc:
+        console.print(f"[error][amneziawg] {exc}[/error]")
+        raise typer.Exit(1)
+
+
+@amneziawg_app.command("remove-client")
+def amneziawg_remove_client(
+    name: str = typer.Argument(..., help="Имя клиента"),
+    apply: bool = typer.Option(False, "--apply", help="Применить удаление (по умолчанию dry-run)"),
+):
+    """Удалить клиента AmneziaWG (dry-run по умолчанию, --apply применяет)"""
+    from src.amneziawg.clients import AWGClientError, remove_client
+    from src.core.logger import console
+    from src.gateway.store import StoreError
+
+    try:
+        plan = remove_client(name, apply=apply)
+    except (StoreError, AWGClientError) as exc:
+        console.print(f"[error][amneziawg] {exc}[/error]")
+        raise typer.Exit(1)
+    if plan.get("dry_run"):
+        console.print("[warning][amneziawg] Dry-run — план удаления (без --apply):[/warning]")
+        for step in plan.get("plan", []):
+            console.print(f"  - {step}")
 
 
 @acme_app.command("issue")
