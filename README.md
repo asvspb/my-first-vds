@@ -57,6 +57,19 @@ vds/
 
 Тесты: `tests/` (unit, без root/сети — `pytest -q`).
 
+## Быстрый деплой на новый сервер
+
+Деплой VDS (Xray Reality + Hysteria2, опционально домен + ACME + XHTTP) одной командой
+с локальной машины, без ИИ и ручных швов:
+
+```bash
+bash ~/Dev/ubuntuInstaller/scripts/11_vds-deploy.sh
+```
+
+Скрипт: SSH-ключ → rsync репо на сервер → install.sh → протоколы →
+авто-детект GitHub (при блокировке — зеркало) → демо-клиенты → печать share-links.
+Полная инструкция (включая ручной вариант и чеклист проверки) — [docs/DEPLOY.md](docs/DEPLOY.md).
+
 ## Быстрый старт
 
 ### С локальной машины (через ubuntuInstaller)
