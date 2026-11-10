@@ -612,6 +612,24 @@ def amneziawg_remove_client(
             console.print(f"  - {step}")
 
 
+@amneziawg_app.command("status")
+def amneziawg_status():
+    """Статус AmneziaWG: юнит, DKMS-версия, UDP-порт, peers (секреты маскированы)"""
+    from src.amneziawg.status import run_status
+
+    raise typer.Exit(run_status())
+
+
+@amneziawg_app.command("remove")
+def amneziawg_remove(
+    apply: bool = typer.Option(False, "--apply", help="Применить удаление (по умолчанию dry-run)"),
+):
+    """Удалить AmneziaWG (юнит, ufw, конфиги, клиенты из store; пакеты PPA — вручную)"""
+    from src.amneziawg.remove import run_remove
+
+    raise typer.Exit(run_remove(apply=apply))
+
+
 @acme_app.command("issue")
 def acme_issue(
     domain: str = typer.Option(..., "--domain", help="Домен, резолвящийся в публичный IP сервера"),
