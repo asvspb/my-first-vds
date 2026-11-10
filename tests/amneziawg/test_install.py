@@ -94,6 +94,8 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
         return True
 
     monkeypatch.setattr(install, "install_unit", _install_unit)
+    # A-2: _installed() проверяет юнит active — по умолчанию активен.
+    monkeypatch.setattr(install, "unit_active", lambda name: True)
     return e
 
 
@@ -228,16 +230,58 @@ class TestFailures:
         assert env.ufw_calls == []
 
 
+NAT_ARGS_IDEMP = ["-s", "10.9.0.0/24", "-o", "eth0", "-j", "MASQUERADE"]
+
+
 class TestIdempotency:
     def test_second_run_no_apt_no_regen(self, env: Env) -> None:
         assert install.run_install(state_path=env.state_path) == 0
         conf_before = env.awg_config.read_bytes()
+        before_rules_before = env.before_rules.read_bytes()
         calls_first = len(env.calls)
 
         assert install.run_install(state_path=env.state_path) == 0
-        # Ничего после первого прогона: ни apt, ни ключей, ни systemctl
-        assert len(env.calls) == calls_first
+        # A-1: idempotent-ветка дотягивает P15-маршрутизацию — только
+        # sysctl/route/iptables-вызовы, ни apt, ни ключей, ни systemctl.
+        delta = env.calls[calls_first:]
+        assert delta == [
+            ["sysctl", "-w", "net.ipv4.ip_forward=1"],
+            ["ip", "route", "get", "1.1.1.1"],
+            ["iptables", "-t", "nat", "-C", "POSTROUTING", *NAT_ARGS_IDEMP],
+            ["iptables", "-t", "nat", "-A", "POSTROUTING", *NAT_ARGS_IDEMP],
+        ]
         assert env.awg_config.read_bytes() == conf_before  # ключи не перегенерированы (E7)
+        assert env.before_rules.read_bytes() == before_rules_before  # NAT persist идемпотентен
+
+    def test_second_install_pulls_routing_when_nat_missing(
+        self, env: Env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A-1 регресс: installed-фикстура без NAT → второй install дотягивает P15."""
+        env.awg_config.parent.mkdir(parents=True, exist_ok=True)
+        env.awg_config.write_text("[Interface]\nPrivateKey = FIXTURE_PW_X\n", encoding="utf-8")
+        # NAT persist-строки нет в before.rules, runtime-правила нет (мок -C падает).
+        assert install.run_install(state_path=env.state_path) == 0
+        assert ["sysctl", "-w", "net.ipv4.ip_forward=1"] in env.calls
+        assert ["ip", "route", "get", "1.1.1.1"] in env.calls
+        assert [
+            "iptables", "-t", "nat", "-A", "POSTROUTING", *NAT_ARGS_IDEMP
+        ] in env.calls
+        assert "-A POSTROUTING -s 10.9.0.0/24 -o eth0 -j MASQUERADE" in (
+            env.before_rules.read_text(encoding="utf-8")
+        )
+
+    def test_unit_inactive_full_install(
+        self, env: Env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A-2: конфиг+бинарь есть, юнит inactive → не «установлен», полный цикл."""
+        env.awg_config.parent.mkdir(parents=True, exist_ok=True)
+        env.awg_config.write_text("[Interface]\nPrivateKey = FIXTURE_PW_X\n", encoding="utf-8")
+        monkeypatch.setattr(install, "unit_active", lambda name: False)
+
+        assert install.run_install(state_path=env.state_path) == 0
+        assert _apt_seq(env) != []  # полный install выполнен
+        assert len(env.units) == 1  # юнит переустановлен
+        assert "FIXTURE_PW_X" not in env.awg_config.read_text(encoding="utf-8")
 
     def test_missing_binary_reinstalls(self, env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
         """Конфиг есть, но пакеты снесены (нет бинарника awg) → установка идёт заново."""

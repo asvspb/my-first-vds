@@ -1,7 +1,8 @@
 """Установка AmneziaWG (SPEC-20261110, ADR-005: PPA ppa:amnezia/ppa → apt).
 
 Поток `vds amneziawg install`: root-check → идемпотентность (пакеты+конфиг
-на месте — «уже установлен», exit 0) → port_free(port, udp) ДО любых
+на месте и юнит активен — «уже установлен»: дотянуть маршрутизацию P15
+(ip_forward + MASQUERADE) и exit 0) → port_free(port, udp) ДО любых
 изменений (E1: порт занят — отказ до изменений) → FileLock →
 apt: software-properties-common (при отсутствии) → add-apt-repository -y
 ppa:amnezia/ppa → apt-get update → apt-get install -y amneziawg-tools
@@ -42,7 +43,7 @@ from src.core.logger import console
 from src.core.netcheck import port_free, port_owner
 from src.core.secrets import write_secret_atomic
 from src.core.shell import ShellResult, run_list
-from src.core.units import install_unit
+from src.core.units import install_unit, unit_active
 from src.gateway.paths import (
     AWG_ADDRESS_SUBNET,
     AWG_CONFIG_PATH,
@@ -208,8 +209,17 @@ def _setup_routing() -> str:
 
 
 def _installed() -> bool:
-    """Установлен ли уже AWG (конфиг сервера + бинарник awg на месте)."""
-    return AWG_CONFIG_PATH.is_file() and shutil.which("awg") is not None
+    """Установлен ли уже AWG: конфиг сервера + бинарник awg + юнит активен.
+
+    Юнит входит в признак «установлен»: конфиг и пакеты на месте при
+    остановленном юните считаются полусломанным состоянием — повторный
+    install идёт полным циклом и сам всё восстанавливает.
+    """
+    return (
+        AWG_CONFIG_PATH.is_file()
+        and shutil.which("awg") is not None
+        and unit_active(AWG_UNIT)
+    )
 
 
 def _ensure_apt_packages() -> None:
@@ -441,9 +451,21 @@ def run_install(
     # Идемпотентность (E7) ДО проверки порта: активный awg0 сам владеет
     # udp-портом — повторный install не должен быть «порт занят».
     if _installed():
+        # P15: до early-return дотягиваем маршрутизацию (ip_forward +
+        # MASQUERADE) — на живой установке она могла не доехать (регрессия:
+        # early-return молча пропускал P15-шаги).
+        try:
+            wan_if = _setup_routing()
+        except (InstallError, OSError) as exc:
+            console.print(
+                f"[error][amneziawg] Маршрутизация (P15, повторный install): {exc}[/error]"
+            )
+            return 1
         console.print(
             "[success][amneziawg] AmneziaWG уже установлен (пакеты awg и "
-            f"{AWG_CONFIG_PATH} на месте) — повторная установка не требуется.[/success]"
+            f"{AWG_CONFIG_PATH} на месте) — повторная установка не требуется; "
+            f"маршрутизация проверена/обновлена (NAT: {AWG_ADDRESS_SUBNET} "
+            f"-> {wan_if}).[/success]"
         )
         return 0
 

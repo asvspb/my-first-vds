@@ -554,6 +554,24 @@ def xray_add_cdn_client(
     raise typer.Exit(0 if result else 1)
 
 
+@xray_app.command("remove-cdn-client")
+def xray_remove_cdn_client(
+    name: str = typer.Argument(..., help="Имя CDN-клиента"),
+    apply: bool = typer.Option(False, "--apply", help="Применить удаление (по умолчанию dry-run)"),
+):
+    """Удалить CDN-клиента (uuid из конфига + state; dry-run по умолчанию)"""
+    from src.core.logger import console
+    from src.gateway.store import StoreError
+    from src.xray.cdn import CdnError, remove_cdn_client
+
+    try:
+        remove_cdn_client(name, apply=apply)
+    except (StoreError, CdnError) as exc:
+        console.print(f"[error][xray-cdn] {exc}[/error]")
+        raise typer.Exit(1)
+    raise typer.Exit(0)
+
+
 @xray_app.command("remove-cdn")
 def xray_remove_cdn(
     apply: bool = typer.Option(False, "--apply", help="Применить удаление (по умолчанию dry-run)"),

@@ -20,6 +20,9 @@ from src.xray.config import render_config, XrayConfigParams
 UUID = "11111111-2222-3333-4444-555555555555"
 CDN_UUID_1 = "11111111-2222-3333-4444-666666666666"
 CDN_UUID_2 = "11111111-2222-3333-4444-777777777777"
+XHTTP_UUID = "11111111-2222-3333-4444-888888888888"
+CERT_PATH = "/etc/letsencrypt/live/example.invalid/fullchain.pem"
+KEY_PATH = "/etc/letsencrypt/live/example.invalid/privkey.pem"
 PRIVATE_KEY = "FIXTURE_UUID_REALITYPRIVATEKEY"
 SHORT_ID = "abcd1234"
 SERVER_IP = "203.0.113.10"
@@ -100,6 +103,51 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, _CallRec
 
 def _params(domain: str = CDN_DOMAIN, port: int = CDN_ORIGIN_PORT_DEFAULT) -> cdn.CdnParams:
     return cdn.CdnParams(domain=domain, port=port)
+
+
+@pytest.fixture()
+def env_xhttp(
+    env: tuple[Path, _CallRecorder],
+) -> tuple[Path, _CallRecorder]:
+    """env + текущий config.json с Reality+XHTTP (mode=port, публичный 8443).
+
+    Регресс-фикстура B-1: старый env-конфиг был без xhttp_enabled — CDN-рендер
+    молча удалял XHTTP-инблэнд из живого конфига.
+    """
+    config_path = cdn.XRAY_CONFIG_PATH
+    config_path.write_text(
+        render_config(
+            XrayConfigParams(
+                client_ids=[UUID],
+                private_key=PRIVATE_KEY,
+                short_ids=[SHORT_ID],
+                sni=SNI,
+                port=443,
+                xhttp_enabled=True,
+                domain="example.invalid",
+                cert_path=CERT_PATH,
+                key_path=KEY_PATH,
+                xhttp_client_ids=[XHTTP_UUID],
+                xhttp_mode="port",
+            )
+        ),
+        encoding="utf-8",
+    )
+    return env
+
+
+def _xhttp_inbound(config: dict) -> dict:
+    return next(
+        ib for ib in config["inbounds"]
+        if ib.get("streamSettings", {}).get("network") == "xhttp"
+    )
+
+
+def _ws_inbound(config: dict) -> dict:
+    return next(
+        ib for ib in config["inbounds"]
+        if ib.get("streamSettings", {}).get("network") == "ws"
+    )
 
 
 class TestIsCloudflareIp:
@@ -260,6 +308,69 @@ class TestInstallCdn:
         state_path, _ = env
         assert cdn.add_cdn(CDN_DOMAIN, state_path=str(state_path)) == 1
 
+    def test_same_domain_other_port_reconfigures(
+        self, env: tuple[Path, _CallRecorder]
+    ) -> None:
+        """B-3: домен совпал, порт другой — перенастройка, а не exit 0."""
+        state_path, recorder = env
+        assert cdn.install_cdn(_params(port=2053), str(state_path)) == 0
+        recorder.calls.clear()
+        assert cdn.install_cdn(_params(port=2087), str(state_path)) == 0
+        # Перенастройка выполняла мутации (test -> restart -> ufw).
+        assert recorder.calls != []
+        config = json.loads(cdn.XRAY_CONFIG_PATH.read_text(encoding="utf-8"))
+        assert _ws_inbound(config)["port"] == 2087
+        state = load_state(str(state_path))
+        assert state.protocols["xray-cdn"]["port"] == 2087
+
+
+class TestXhttpPreserved:
+    """B-1 регресс: CDN-рендер переносит XHTTP-часть из текущего config.json."""
+
+    def test_add_cdn_preserves_xhttp_inbound(
+        self, env_xhttp: tuple[Path, _CallRecorder]
+    ) -> None:
+        state_path, _ = env_xhttp
+        assert cdn.install_cdn(_params(), str(state_path)) == 0
+        config = json.loads(cdn.XRAY_CONFIG_PATH.read_text(encoding="utf-8"))
+        networks = [ib["streamSettings"]["network"] for ib in config["inbounds"]]
+        assert networks == ["tcp", "xhttp", "ws"]
+        xhttp = _xhttp_inbound(config)
+        assert xhttp["port"] == 8443
+        assert xhttp["settings"]["clients"] == [{"id": XHTTP_UUID}]
+        assert (
+            xhttp["streamSettings"]["tlsSettings"]["certificates"][0]
+            ["certificateFile"]
+        ) == CERT_PATH
+        assert (
+            xhttp["streamSettings"]["tlsSettings"]["certificates"][0]["keyFile"]
+        ) == KEY_PATH
+        # Reality-инблэнд тоже перенесён.
+        assert config["inbounds"][0]["streamSettings"]["realitySettings"][
+            "privateKey"
+        ] == PRIVATE_KEY
+
+    def test_add_cdn_client_preserves_xhttp(
+        self, env_xhttp: tuple[Path, _CallRecorder], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        state_path, _ = env_xhttp
+        assert cdn.install_cdn(_params(), str(state_path)) == 0
+        monkeypatch.setattr(cdn, "gen_uuid", lambda: CDN_UUID_1)
+        cdn.add_cdn_client("phone", str(state_path))
+        config = json.loads(cdn.XRAY_CONFIG_PATH.read_text(encoding="utf-8"))
+        assert _xhttp_inbound(config)["settings"]["clients"] == [{"id": XHTTP_UUID}]
+        assert _ws_inbound(config)["settings"]["clients"] == [{"id": CDN_UUID_1}]
+
+    def test_remove_cdn_keeps_xhttp(
+        self, env_xhttp: tuple[Path, _CallRecorder], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        state_path, _ = env_xhttp
+        assert cdn.install_cdn(_params(), str(state_path)) == 0
+        assert cdn.remove_cdn(apply=True, yes=True, state_path=str(state_path)) == 0
+        config = json.loads(cdn.XRAY_CONFIG_PATH.read_text(encoding="utf-8"))
+        networks = [ib["streamSettings"]["network"] for ib in config["inbounds"]]
+        assert networks == ["tcp", "xhttp"]
+
 
 class TestAddCdnClient:
     def test_client_added_config_and_state(
@@ -347,6 +458,81 @@ class TestAddCdnClient:
         assert cdn.XRAY_CONFIG_PATH.read_bytes() == before
         state = load_state(str(state_path))
         assert state.protocols["xray-cdn"]["client_ids"] == []
+
+
+class TestRemoveCdnClient:
+    """B-2: remove_cdn_client — dry-run по умолчанию, apply, несуществующий."""
+
+    def _setup(
+        self, env: tuple[Path, _CallRecorder], monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[Path, _CallRecorder]:
+        state_path, recorder = env
+        assert cdn.install_cdn(_params(), str(state_path)) == 0
+        monkeypatch.setattr(cdn, "gen_uuid", lambda: CDN_UUID_1)
+        cdn.add_cdn_client("phone", str(state_path))
+        recorder.calls.clear()
+        return state_path, recorder
+
+    def test_dry_run_no_changes(
+        self, env: tuple[Path, _CallRecorder], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        state_path, recorder = self._setup(env, monkeypatch)
+        before = cdn.XRAY_CONFIG_PATH.read_bytes()
+        result = cdn.remove_cdn_client("phone", apply=False, state_path=str(state_path))
+        assert result["dry_run"] is True
+        assert any("phone" in item for item in result["plan"])
+        assert cdn.XRAY_CONFIG_PATH.read_bytes() == before
+        assert recorder.calls == []
+        state = load_state(str(state_path))
+        assert state.protocols["xray-cdn"]["clients"] == {"phone": CDN_UUID_1}
+
+    def test_apply_removes_from_config_and_state(
+        self, env: tuple[Path, _CallRecorder], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        state_path, recorder = self._setup(env, monkeypatch)
+        result = cdn.remove_cdn_client("phone", apply=True, state_path=str(state_path))
+        assert result["dry_run"] is False
+
+        config = json.loads(cdn.XRAY_CONFIG_PATH.read_text(encoding="utf-8"))
+        assert _ws_inbound(config)["settings"]["clients"] == []
+        state = load_state(str(state_path))
+        meta = state.protocols["xray-cdn"]
+        assert meta["client_ids"] == []
+        assert meta["clients"] == {}
+
+        # update-последовательность: test -> restart (ufw не нужен).
+        argvs = [" ".join(c) for c in recorder.calls]
+        assert argvs == [
+            f"{cdn.XRAY_BIN_PATH} run -test -config {cdn.XRAY_CONFIG_PATH}",
+            f"systemctl restart {cdn.XRAY_UNIT}",
+        ]
+
+    def test_nonexistent_client(
+        self, env: tuple[Path, _CallRecorder], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        state_path, recorder = self._setup(env, monkeypatch)
+        before = cdn.XRAY_CONFIG_PATH.read_bytes()
+        with pytest.raises(cdn.CdnError, match="не найден"):
+            cdn.remove_cdn_client("ghost", apply=True, state_path=str(state_path))
+        assert cdn.XRAY_CONFIG_PATH.read_bytes() == before
+        assert recorder.calls == []
+
+    def test_apply_restart_fail_rollback(
+        self, env: tuple[Path, _CallRecorder], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        state_path, recorder = self._setup(env, monkeypatch)
+        # Бэкап CLIENT_BACKUP_SUFFIX создан при add_cdn_client и не
+        # перезаписывается (снапшот первой операции, паттерн модуля) —
+        # откат возвращает именно его содержимое.
+        backup_snapshot = cdn.XRAY_CONFIG_PATH.with_name(
+            cdn.XRAY_CONFIG_PATH.name + cdn.CLIENT_BACKUP_SUFFIX
+        ).read_bytes()
+        recorder.fail_on = "restart"
+        with pytest.raises(cdn.CdnError):
+            cdn.remove_cdn_client("phone", apply=True, state_path=str(state_path))
+        assert cdn.XRAY_CONFIG_PATH.read_bytes() == backup_snapshot
+        state = load_state(str(state_path))
+        assert state.protocols["xray-cdn"]["clients"] == {"phone": CDN_UUID_1}
 
 
 class TestRemoveCdn:

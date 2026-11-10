@@ -14,9 +14,10 @@ config.json + cdn-параметров -> под FileLock: бэкап config.jso
 restart vds-xray (fail: откат + рестарт на прежнем конфиге) -> UFW allow
 {port}/tcp -> state.protocols["xray-cdn"].
 
-Идемпотентность: protocols["xray-cdn"].installed=True и домен совпадает —
-«уже настроен», exit 0 без перегенерации uuid; другой домен — перенастройка
-(перерендер конфига с новым доменом).
+    Идемпотентность: protocols["xray-cdn"].installed=True и домен/порт/путь
+    совпадают — «уже настроен», exit 0 без перегенерации uuid; другой домен
+    ИЛИ другой порт/путь при том же домене — перенастройка (перерендер
+    конфига).
 
 Reality/XHTTP-поля конфига CDN-кодом не читаются и не пишутся напрямую —
 они переносятся из текущего config.json в рендер без изменений (SPEC §4.1).
@@ -210,11 +211,49 @@ def _reality_fields(current: dict) -> dict:
         ) from exc
 
 
+def _xhttp_fields(current: dict) -> dict | None:
+    """XHTTP-поля из текущего конфига (инблэнд network=xhttp); нет — None.
+
+    Переносятся как есть: клиентские uuid, порт, bind/mode (fallback —
+    есть listen на loopback, port — публичный слушатель), LE-сертификаты.
+    """
+    for inbound in current.get("inbounds", []):
+        if inbound.get("streamSettings", {}).get("network") != "xhttp":
+            continue
+        try:
+            certificates = (
+                inbound["streamSettings"]["tlsSettings"]["certificates"]
+            )
+            bind = str(inbound.get("listen", ""))
+            return {
+                "client_ids": [
+                    c["id"] for c in inbound["settings"].get("clients", [])
+                ],
+                "port": int(inbound["port"]),
+                "bind": bind,
+                "mode": "fallback" if bind else "port",
+                "cert_path": str(certificates[0]["certificateFile"]),
+                "key_path": str(certificates[0]["keyFile"]),
+            }
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise CdnError(
+                f"Неожиданная структура XHTTP-инблэнда в "
+                f"{XRAY_CONFIG_PATH}: {exc} (E8: не меняю)."
+            ) from exc
+    return None
+
+
 def _render_with_cdn(
     current: dict, params: CdnParams, cdn_client_ids: list[str]
 ) -> str:
-    """Полный рендер: Reality+XHTTP из текущего конфига + CDN-инблэнд (WP-1)."""
+    """Полный рендер: Reality+XHTTP из текущего конфига + CDN-инблэнд (WP-1).
+
+    XHTTP-часть (инблэнд 8443 + клиенты) переносится из ТЕКУЩЕГО config.json
+    — без этого рендер молча удалял бы XHTTP-инблэнд из живого конфига
+    (паттерн переноса Reality-полей).
+    """
     reality = _reality_fields(current)
+    xhttp = _xhttp_fields(current)
     cert_path, key_path = _cdn_cert_paths(params.domain)
     render_params = XrayConfigParams(
         client_ids=reality["client_ids"],
@@ -229,6 +268,19 @@ def _render_with_cdn(
         cdn_client_ids=cdn_client_ids,
         cdn_cert_path=str(cert_path),
         cdn_key_path=str(key_path),
+        **(
+            {
+                "xhttp_enabled": True,
+                "xhttp_client_ids": list(xhttp["client_ids"]),
+                "xhttp_mode": str(xhttp["mode"]),
+                "xhttp_port": int(xhttp["port"]),
+                "xhttp_bind": str(xhttp["bind"]),
+                "cert_path": str(xhttp["cert_path"]),
+                "key_path": str(xhttp["key_path"]),
+            }
+            if xhttp
+            else {}
+        ),
     )
     return render_config(render_params)
 
@@ -311,7 +363,9 @@ def install_cdn(params: CdnParams, state_path: str | None = None) -> int:
     FileLock; бэкап config.json; render+запись атомарно 0600; `xray -test`
     (fail: откат); рестарт vds-xray (fail: откат); UFW allow; state
     protocols["xray-cdn"] = {installed, domain, port, path, client_ids,
-    clients}. Повторный запуск с тем же доменом — идемпотентный exit 0.
+    clients}. Повторный запуск с тем же доменом, портом и path —
+    идемпотентный exit 0; другой домен ИЛИ порт/путь при том же домене —
+    перенастройка (перерендер конфига).
     """
     violations = check_prerequisites(params, XRAY_CONFIG_PATH)
     if violations:
@@ -320,14 +374,19 @@ def install_cdn(params: CdnParams, state_path: str | None = None) -> int:
         return 1
 
     try:
-        current = _read_config(XRAY_CONFIG_PATH)
         state = load_state(state_path)
-    except (CdnError, StoreError) as exc:
+    except StoreError as exc:
         console.print(f"[error][xray-cdn] {exc}[/error]")
         return 1
 
     meta = state.protocols.get(STATE_KEY)
-    if meta and meta.get("installed") and meta.get("domain") == params.domain:
+    if (
+        meta
+        and meta.get("installed")
+        and meta.get("domain") == params.domain
+        and int(meta.get("port", CDN_ORIGIN_PORT_DEFAULT)) == params.port
+        and str(meta.get("path", CDN_WS_PATH)) == params.ws_path
+    ):
         console.print(
             f"[success][xray-cdn] CDN-транспорт уже настроен на "
             f"{params.domain}:{params.port} — изменений не требуется "
@@ -338,12 +397,19 @@ def install_cdn(params: CdnParams, state_path: str | None = None) -> int:
     cdn_client_ids: list[str] = list(meta.get("client_ids", [])) if meta else []
     cdn_clients: dict[str, str] = dict(meta.get("clients", {})) if meta else {}
 
-    rendered = _render_with_cdn(current, params, cdn_client_ids)
     backup_path = XRAY_CONFIG_PATH.with_name(
         XRAY_CONFIG_PATH.name + INSTALL_BACKUP_SUFFIX
     )
 
     with FileLock(LOCK_FILE):
+        # Чтение текущего конфига под лок (TOCTOU): рендер строится из того
+        # же снапшота, который бэкапится и перезаписывается.
+        try:
+            current = _read_config(XRAY_CONFIG_PATH)
+        except CdnError as exc:
+            console.print(f"[error][xray-cdn] {exc}[/error]")
+            return 1
+        rendered = _render_with_cdn(current, params, cdn_client_ids)
         _backup_config(XRAY_CONFIG_PATH, backup_path)
         if not write_secret_atomic(str(XRAY_CONFIG_PATH), rendered, mode=0o600):
             console.print(
@@ -425,15 +491,16 @@ def add_cdn_client(name: str, state_path: str | None = None) -> dict:
         port=int(meta.get("port", CDN_ORIGIN_PORT_DEFAULT)),
         ws_path=str(meta.get("path", CDN_WS_PATH)),
     )
-    current = _read_config(XRAY_CONFIG_PATH)
     client_uuid = gen_uuid()
     cdn_client_ids = list(meta.get("client_ids", [])) + [client_uuid]
-    rendered = _render_with_cdn(current, params, cdn_client_ids)
 
     backup_path = XRAY_CONFIG_PATH.with_name(
         XRAY_CONFIG_PATH.name + CLIENT_BACKUP_SUFFIX
     )
     with FileLock(LOCK_FILE):
+        # Чтение текущего конфига под лок (TOCTOU).
+        current = _read_config(XRAY_CONFIG_PATH)
+        rendered = _render_with_cdn(current, params, cdn_client_ids)
         _backup_config(XRAY_CONFIG_PATH, backup_path)
         if not write_secret_atomic(str(XRAY_CONFIG_PATH), rendered, mode=0o600):
             raise CdnError(f"Не удалось записать {XRAY_CONFIG_PATH}.")
@@ -467,6 +534,71 @@ def add_cdn_client(name: str, state_path: str | None = None) -> dict:
         "uuid": client_uuid,
         "share_link": share_link,
     }
+
+
+def remove_cdn_client(
+    name: str,
+    apply: bool = False,
+    state_path: str | None = None,
+) -> dict:
+    """Удалить CDN-клиента. Dry-run по умолчанию (SPEC §5): план без
+    изменений; apply=True — uuid из CDN-инблэнда config.json (бэкап ->
+    гейт -> рестарт) и запись из state (clients-pop). Несуществующее
+    имя — CdnError до любых мутаций.
+    """
+    if os.geteuid() != 0:
+        raise CdnError("Требуется root (запустите через sudo).")
+
+    meta, state = _cdn_meta(state_path)
+    clients_map: dict[str, str] = dict(meta.get("clients", {}))
+    if name not in clients_map:
+        raise CdnError(f"CDN-клиент с именем '{name}' не найден.")
+    client_uuid = clients_map[name]
+    new_ids = [u for u in meta.get("client_ids", []) if u != client_uuid]
+
+    plan = [
+        f"uuid клиента '{name}' из CDN-инблэнда {XRAY_CONFIG_PATH}",
+        f"клиент '{name}' из state (protocols['{STATE_KEY}'].clients)",
+        f"рестарт {XRAY_UNIT}",
+    ]
+    if not apply:
+        console.print("[warning][xray-cdn] План удаления CDN-клиента (dry-run):[/warning]")
+        for item in plan:
+            console.print(f"  - {item}")
+        console.print("[info]Это dry-run. Для применения: "
+                      "`vds xray remove-cdn-client " + name + " --apply`[/info]")
+        return {"name": name, "dry_run": True, "plan": plan}
+
+    params = CdnParams(
+        domain=str(meta["domain"]),
+        port=int(meta.get("port", CDN_ORIGIN_PORT_DEFAULT)),
+        ws_path=str(meta.get("path", CDN_WS_PATH)),
+    )
+
+    backup_path = XRAY_CONFIG_PATH.with_name(
+        XRAY_CONFIG_PATH.name + CLIENT_BACKUP_SUFFIX
+    )
+    with FileLock(LOCK_FILE):
+        # Чтение текущего конфига под лок (TOCTOU).
+        current = _read_config(XRAY_CONFIG_PATH)
+        rendered = _render_with_cdn(current, params, new_ids)
+        _backup_config(XRAY_CONFIG_PATH, backup_path)
+        if not write_secret_atomic(str(XRAY_CONFIG_PATH), rendered, mode=0o600):
+            raise CdnError(f"Не удалось записать {XRAY_CONFIG_PATH}.")
+        _gate_and_restart(backup_path)
+
+        clients_map.pop(name)
+        meta.update({"client_ids": new_ids, "clients": clients_map})
+        state.protocols[STATE_KEY] = meta
+        try:
+            save_state(state, state_path)
+        except (StoreError, OSError) as exc:
+            raise CdnError(
+                f"Конфиг обновлён, но состояние не сохранено: {exc}"
+            ) from exc
+
+    console.print(f"[change][xray-cdn] Клиент '{name}' удалён (cdn).[/change]")
+    return {"name": name, "dry_run": False, "plan": plan}
 
 
 def _strip_cdn(config: dict) -> tuple[dict, list[str]]:
