@@ -50,6 +50,15 @@ ACME_HYSTERIA2_HOOK_NAME = "vds-hysteria2-cert.sh"
 XHTTP_INTERNAL_PORT = 8443
 XRAY_HTTP_BIND = "127.0.0.1"
 
+# CDN-транспорт (SPEC-20261110, ADR-006): VLESS+WS+TLS за Cloudflare proxy.
+# Отдельный proxied-DNS-элемент cdn.<домен> (orange cloud), origin-инблэнд
+# vless+ws+tls на TCP 2053 — первый свободный из CF HTTPS-портов
+# (443 Reality, 8443 XHTTP-direct). LE live-путь параметризован доменом —
+# см. ACME_LETSENCRYPT_LIVE(domain).
+CDN_ORIGIN_PORT_DEFAULT = 2053
+CDN_WS_PATH = "/cdnws"
+CDN_DOMAIN_HINT = "cdn."  # имя поддомена приходит флагом; константа — подсказка для сообщений
+
 
 def ACME_LETSENCRYPT_LIVE(domain: str) -> Path:
     """Каталог live-сертификата LE для домена (ADR-004, пути локализованы в acme)."""

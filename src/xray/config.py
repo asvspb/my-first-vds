@@ -11,12 +11,23 @@ vless+xhttp+tls, слушающий на XRAY_HTTP_BIND:XHTTP_INTERNAL_PORT (loo
 байт-в-байт совпадает с прежним (золотой снапшот-тест). mode=port — без
 fallbacks, XHTTP-inbound слушает на всех интерфейсах (публичный 8443,
 fallback-план ADR-003).
+
+CDN (SPEC-20261110, ADR-006): при `cdn_enabled` добавляется третий инблэнд
+vless+ws+tls на CDN_ORIGIN_PORT_DEFAULT (TCP 2053) с LE-сертификатом
+cdn-домена (все интерфейсы, за Cloudflare proxy). Без cdn-полей рендер
+байт-в-байт прежний (золотой снапшот-тест).
 """
 
 import json
 from dataclasses import dataclass, field
 
-from src.gateway.paths import XHTTP_INTERNAL_PORT, XRAY_HTTP_BIND
+from src.gateway.paths import (
+    CDN_ORIGIN_PORT_DEFAULT,
+    CDN_WS_PATH,
+    XHTTP_INTERNAL_PORT,
+    XRAY_HTTP_BIND,
+)
+from urllib.parse import quote
 
 DEFAULT_SNI = "www.google.com"
 DEFAULT_PORT = 443
@@ -25,6 +36,9 @@ XHTTP_MODES = ("fallback", "port")
 # Фиксированный path XHTTP (дельта WP-3, вердикт архитектора 2026-11-09):
 # без параметризации в этом цикле; смена — коммитом + state (extra.path).
 XHTTP_PATH = "/xhttp"
+
+CDN_DEFAULT_PORT = CDN_ORIGIN_PORT_DEFAULT
+CDN_DEFAULT_WS_PATH = CDN_WS_PATH
 
 
 @dataclass(frozen=True)
@@ -56,6 +70,13 @@ class XrayConfigParams:
     xhttp_mode: str = "fallback"
     xhttp_port: int = XHTTP_INTERNAL_PORT
     xhttp_bind: str = XRAY_HTTP_BIND
+    cdn_enabled: bool = False
+    cdn_domain: str = ""
+    cdn_port: int = CDN_ORIGIN_PORT_DEFAULT
+    cdn_ws_path: str = CDN_WS_PATH
+    cdn_client_ids: list[str] = field(default_factory=list)
+    cdn_cert_path: str = ""
+    cdn_key_path: str = ""
 
 
 def _xhttp_inbound(params: XrayConfigParams) -> dict:
@@ -85,6 +106,49 @@ def _xhttp_inbound(params: XrayConfigParams) -> dict:
     if params.xhttp_mode == "fallback":
         inbound["listen"] = params.xhttp_bind
     return inbound
+
+
+def _cdn_inbound(params: XrayConfigParams) -> dict:
+    """Инблэнд vless+ws+tls за Cloudflare (SPEC-20261110, ADR-006): TCP 2053,
+    ws path /cdnws, TLS на LE-сертификате cdn-домена. Все интерфейсы
+    (CF→origin соединяется извне)."""
+    return {
+        "port": params.cdn_port,
+        "protocol": "vless",
+        "settings": {
+            "clients": [{"id": client_id} for client_id in params.cdn_client_ids],
+            "decryption": "none",
+        },
+        "streamSettings": {
+            "network": "ws",
+            "security": "tls",
+            "wsSettings": {
+                "path": params.cdn_ws_path,
+                "headers": {"Host": params.cdn_domain},
+            },
+            "tlsSettings": {
+                "certificates": [
+                    {
+                        "certificateFile": params.cdn_cert_path,
+                        "keyFile": params.cdn_key_path,
+                    }
+                ]
+            },
+        },
+    }
+
+
+def render_cdn_share_link(uuid: str, cdn_domain: str, cdn_port: int, cdn_ws_path: str, name: str) -> str:
+    """VLESS share-link CDN-клиента (формат — SPEC §3, юнит-тест WP-1).
+
+    `vless://<uuid>@<cdn-domain>:<port>?encryption=none&security=tls&sni=<domain>&type=ws&host=<domain>&path=<encoded>#<name>`
+    """
+    return (
+        f"vless://{uuid}@{cdn_domain}:{cdn_port}"
+        f"?encryption=none&security=tls&sni={cdn_domain}"
+        f"&type=ws&host={cdn_domain}&path={quote(cdn_ws_path, safe='')}"
+        f"#{name}"
+    )
 
 
 def render_config(params: XrayConfigParams) -> str:
@@ -121,6 +185,8 @@ def render_config(params: XrayConfigParams) -> str:
     ]
     if params.xhttp_enabled:
         inbounds.append(_xhttp_inbound(params))
+    if params.cdn_enabled:
+        inbounds.append(_cdn_inbound(params))
 
     config = {
         "inbounds": inbounds,
