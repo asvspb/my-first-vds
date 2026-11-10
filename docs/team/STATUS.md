@@ -3,7 +3,103 @@
 > Обновляет оркестратор после каждого гейта. Единый источник правды о текущем цикле.
 > Шаблон: [templates/STATUS.md](templates/STATUS.md).
 
-## Активный цикл: Domain / XHTTP / ACME (фазы 3 + частично 6) — ЗАВЕРШЁН 2026-11-09
+## Активный цикл (параллельный #2): CDN-transport — VLESS за Cloudflare (фаза 3 roadmap)
+- **IDEA:** скоуп утверждён владельцем в чате 2026-11-10 (пятый канал: egress через
+  CF, чтобы цензор видел IP Cloudflare)
+- **REQ:** [REQ-20261110-cdn-transport](requirements/REQ-20261110-cdn-transport.md) (G1 READY)
+- **SPEC:** [SPEC-20261110-cdn-transport](specs/SPEC-20261110-cdn-transport.md)
+  + [ADR-006](../adr/ADR-006-cdn-cloudflare-transport.md) (OQ-1..5: proxied-запись
+  `cdn.eu-cloud-xip.com`, апекс/`103-45-247-172` — grey; транспорт WS v1, XHTTP
+  packet-up — future; origin-порт TCP 2053 (CF HTTPS-порты: 443/2053/2083/2087/2096/8443),
+  edge-порт = origin-порт — девиация от FR-4; TLS Full (strict) + отдельный LE-cert
+  cdn-домена; CF — ручные шаги владельца, CF-API — future)
+- **Этап:** ✅ G6 Close — сервер установлен на asv1 (PPA, UDP 51825, юнит с P14-фиксом),
+  клиент laptop + e2e (handshake + youtube 204/0.28s через AWG-туннель с ноутбука),
+  NAT/forwarding (P15) персистентны. Финальная верификация:
+  [TEST-20261110-amneziawg-cdn](reports/TEST-20261110-amneziawg-cdn.md) (AWG PASS, CDN-блокер B-1 найден и закрыт).
+  Эксплуатация: split-конфиг ноутбука (`~/awg0-split.conf`, awg-quick) — youtube/telegram через AWG,
+  остальное напрямую; на стороне провайдера владельца youtube-SNI DPI-иммунен к zapret-стратегиям.; **владелец-шаги
+  (перенос зоны в CF, чеклист SPEC §7.1) запускаются параллельно с кодом**
+- **Владелец гейта:** architect → orchestrator
+- **Пересечение с AWG-циклом:** `src/main.py` — только добавляющие команды (WP-3);
+  `src/amneziawg/*` не трогаются. При merge-конфликте — сериализация WP-3.
+
+### Work packages (CDN)
+| WP | Кодер | Статус | Отчёт | Блокер |
+|---|---|---|---|---|
+| WP-1 Рендер CDN-инблэнда (paths+config) | vds-coder | ⏳ pending | — | — |
+| WP-2 src/xray/cdn.py (install/remove/clients) | vds-coder | ⏳ pending (после WP-1) | — | — |
+| WP-3 CLI+status+links | vds-coder | ⏳ pending (после WP-2) | — | — |
+| Владелец §7.1 (CF-панель, шаги 1–8) | владелец | ⏳ параллельно | — | шаг 2 (grey на direct-записях) — блокер инварианта |
+| Приёмка [VDS] + Reality-gate | оркестратор + тестер (G4) | ⏳ pending | — | — |
+
+### Гейты (CDN)
+| Гейт | Статус | Дата | Кто |
+|---|---|---|---|
+| G0 Intake | ✅ | 2026-11-10 | owner + пользователь |
+| G1 Ready | ✅ | 2026-11-10 | vds-analyst |
+| G2 Spec | ✅ APPROVED | 2026-11-10 | vds-architect |
+| G3 Build | ⏳ | — | vds-coder (WP-1..3 сериализация) |
+| G4 Verify | ⏳ | — | vds-tester (§7.2 + Reality-gate блокер) |
+| G5 Docs | ⏳ | — | vds-docs + **аналитик: правка FR-4 REQ (порт 2053, SPEC §4.3)** |
+| G6 Close | ⏳ | — | оркестратор |
+
+### Открытые пункты цикла (CDN)
+1. **Девиация FR-4 (SPEC §4.3):** share-link CDN использует порт 2053, не 443 —
+   факт CF «edge-порт = origin-порт», 443 занят Reality. Аналитик правит REQ на G5.
+2. **Reality-gate приёмки (блокер G4):** после переноса зоны в CF клиент `phone`
+   (Reality, доменная ссылка) и `mob` (Hysteria2) обязаны работать e2e —
+   апекс/`103-45-247-172` grey-cloud. Нарушение → откат toggle orange + G4 FAIL.
+3. LE-продление cdn-домена через CF edge (E11) — проверка `certbot renew --dry-run`
+   на приёмке; fallback — временный grey на время продления (чеклист §7.1-9).
+
+## Цикл AmneziaWG transport (фаза 4 roadmap) — ЗАВЕРШЁН 2026-11-10
+- **IDEA:** скоуп утверждён владельцем в чате 2026-11-10 (четвёртый UDP-транспорт:
+  серверный модуль `src/amneziawg/`, клиентская выдача .conf, guard-минор .zshrc)
+- **REQ:** [REQ-20261110-amneziawg-transport](requirements/REQ-20261110-amneziawg-transport.md) (G1 READY)
+- **SPEC:** [SPEC-20261110-amneziawg-transport](specs/SPEC-20261110-amneziawg-transport.md)
+  + [ADR-005](../adr/ADR-005-amneziawg-transport-decisions.md) (OQ-1..6: UDP 51825;
+  клиентский режим (b) — conf + AmneziaVPN; источник — PPA `ppa:amnezia/ppa`
+  (amneziawg-tools + amneziawg-dkms, kernel-модуль), mirror-конвенция не применима —
+  задокументировано; AWG 1.5-набор параметров; PSK по умолчанию)
+- **Этап:** ✅ G6 Close — сервер установлен на asv1 (PPA, UDP 51825, юнит с P14-фиксом),
+  клиент laptop + e2e (handshake + youtube 204/0.28s через AWG-туннель с ноутбука),
+  NAT/forwarding (P15) персистентны. Финальная верификация:
+  [TEST-20261110-amneziawg-cdn](reports/TEST-20261110-amneziawg-cdn.md) (AWG PASS, CDN-блокер B-1 найден и закрыт).
+  Эксплуатация: split-конфиг ноутбука (`~/awg0-split.conf`, awg-quick) — youtube/telegram через AWG,
+  остальное напрямую; на стороне провайдера владельца youtube-SNI DPI-иммунен к zapret-стратегиям.
+- **Владелец гейта:** architect → orchestrator
+
+### Work packages
+| WP | Кодер | Статус | Отчёт | Блокер |
+|---|---|---|---|---|
+| WP-1 Генератор+рендер обфускации | vds-coder | ✅ done (fbd23d7) | — | — |
+| WP-2 Install (PPA/port/UFW/юнит) | vds-coder | ✅ done (177831b, +P15) | — | — |
+| WP-3 Клиенты+store/links | vds-coder | ✅ done (c782a2a) | — | — |
+| WP-4 Status+remove | vds-coder | ✅ done (da4d9ba) | — | — |
+| WP-5 Guard .zshrc (awg*) | vds-coder | ✅ done (35608e0, +P14-паттерн-фикс amnezia0) | — | — |
+| WP-6 Приёмка [VDS] + гейт импорта в AmneziaVPN (OQ-4) | оркестратор + тестер (G4) | ✅ PASS (установка на asv1 + e2e ноутбук; импорт .conf в AmneziaVPN подтверждён трафиком 316+ МБ) | — | — |
+
+### Гейты
+| Гейт | Статус | Дата | Кто |
+|---|---|---|---|
+| G0 Intake | ✅ | 2026-11-10 | owner + пользователь |
+| G1 Ready | ✅ | 2026-11-10 | vds-analyst |
+| G2 Spec | ✅ APPROVED | 2026-11-10 | vds-architect |
+| G3 Build | ⏳ | — | vds-coder (WP-1..4, сериализация; WP-5 параллельно) |
+| G4 Verify | ⏳ | — | vds-tester |
+| G5 Docs | ⏳ | — | vds-docs |
+| G6 Close | ⏳ | — | оркестратор |
+
+### Открытые пункты цикла
+1. **Гейт OQ-4:** клиентский .conf (AWG 1.5-набор) должен импортироваться в
+   AmneziaVPN владельца (WP-6); отказ → правка ADR-005 на 2.0-набор (S1–S4 ≥12,
+   H-диапазоны), не «fix on the fly».
+2. Mirror-конвенция (ADR-001/VDS_GITHUB_MIRROR) на AWG-путь не распространяется:
+   источник — Launchpad PPA; при недоступности PPA с asv1 — E1-отказ + ручной
+   перенос .deb, эскалация к архитектору.
+
+## Архив: Domain / XHTTP / ACME (фазы 3 + частично 6) — ЗАВЕРШЁН 2026-11-09
 - **IDEA:** скоуп утверждён владельцем в чате 2026-11-09 (домен `103-45-247-172.eu-cloud-xip.com` → 103.45.247.172 проверен; три направления: XHTTP, ACME, домен для Reality)
 - **REQ:** [REQ-20261109-domain-xhttp-acme](requirements/REQ-20261109-domain-xhttp-acme.md) (G1 READY)
 - **SPEC:** [SPEC-20261109-domain-xhttp-acme](specs/SPEC-20261109-domain-xhttp-acme.md) + [ADR-003](../adr/ADR-003-xhttp-reality-coexistence.md) (OQ-1; уточнён фактом [VDS]: fallback не работает, основной режим `--mode port`) + [ADR-004](../adr/ADR-004-acme-http01-certbot.md) (OQ-2/OQ-4)
