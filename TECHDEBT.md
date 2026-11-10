@@ -265,6 +265,30 @@ test_re_add_after_remove_writes_installed_true` — remove → add →
 
 ---
 
+## P14. `systemd/vds-amneziawg.service.tpl` — ExecStop по iface ищет конфиг не там — ✅ ВЫПОЛНЕНО 2026-11-10
+
+> Найдено на живой приёмке AWG (WP-6, asv1): после add/remove-client сервис
+> vds-amneziawg в crash-loop — «awg0 already exists» на каждом start.
+
+**Проблема:** `ExecStart=/usr/bin/awg-quick up {config_path}` (явный путь —
+работает), но `ExecStop=/usr/bin/awg-quick down {iface}` — awg-quick down по
+имени интерфейса ищет конфиг в ДЕФОЛТНОМ каталоге
+`/etc/amnezia/amneziawg/<iface>.conf`, а наш лежит в `/etc/amnezia/awg0.conf`
+(`paths.py::AWG_CONFIG_PATH`). ExecStop падает, интерфейс остаётся up,
+следующий start — «awg0 already exists», crash-loop.
+
+**Действия:** 1) шаблон: `ExecStop=/usr/bin/awg-quick down {config_path}`
+(awg-quick down принимает путь к конфигу); 2) `amneziawg/install.py` перед
+`systemctl enable+restart` — очистка stale-интерфейса: `ip link show <iface>`
+существует → `ip link del <iface>` (idempotent, run_list); 3) регресс в
+`tests/amneziawg/test_install.py`: шаблон содержит `down {config_path}` и
+НЕ содержит `down {iface}`; happy-path выполняет ip-link-del-очистку перед
+enable/restart; случай отсутствия интерфейса — без del.
+
+**Критерий:** `pytest -q` зелёный (326); `compileall`; verbatim grep шаблона.
+
+---
+
 ## Порядок работ
 
 | Этап | Пункты | Суммарно | Почему сначала |

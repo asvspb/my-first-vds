@@ -236,6 +236,24 @@ def _install_locked(port: int, state_path: Optional[str]) -> int:
             )
             return 1
 
+    # P14: после неудачного ExecStop (awg-quick down по iface вместо пути
+    # конфига) интерфейс может остаться up → следующий start падает
+    # «awg0 already exists». Чистим stale-интерфейс перед стартом
+    # (idempotent: удаления нет — просто пропускаем).
+    iface_exists = run_list(["ip", "link", "show", AWG_IFACE], timeout=10)
+    if iface_exists.ok:
+        console.print(
+            f"[warning][amneziawg] Найден stale-интерфейс {AWG_IFACE} — "
+            "удаляется перед запуском сервиса.[/warning]"
+        )
+        del_iface = run_list(["ip", "link", "del", AWG_IFACE], timeout=10)
+        if not del_iface.ok:
+            console.print(
+                f"[error][amneziawg] Не удалось удалить stale-интерфейс "
+                f"{AWG_IFACE}: {del_iface.stderr.strip()}[/error]"
+            )
+            return 1
+
     enable = run_list(["systemctl", "enable", AWG_UNIT], timeout=15)
     restart = run_list(["systemctl", "restart", AWG_UNIT], timeout=60)
     if not (enable.ok and restart.ok):

@@ -246,4 +246,54 @@ class TestUnitTemplate:
         exec_start = [ln for ln in rendered.splitlines() if ln.startswith("ExecStart=")]
         exec_stop = [ln for ln in rendered.splitlines() if ln.startswith("ExecStop=")]
         assert exec_start == ["ExecStart=/usr/bin/awg-quick up /etc/amnezia/awg0.conf"]
-        assert exec_stop == ["ExecStop=/usr/bin/awg-quick down awg0"]
+        # P14: down идёт по пути конфига (awg-quick down по iface ищет
+        # конфиг в дефолтном каталоге — там его нет).
+        assert exec_stop == ["ExecStop=/usr/bin/awg-quick down /etc/amnezia/awg0.conf"]
+
+    def test_exec_stop_uses_config_path_not_iface(self) -> None:
+        """P14-регресс: в шаблоне `down {config_path}` и НЕ `down {iface}`."""
+        from src.core.units import SYSTEMD_DIR
+
+        tpl = (SYSTEMD_DIR / "vds-amneziawg.service.tpl").read_text(
+            encoding="utf-8"
+        )
+        exec_stop = [ln for ln in tpl.splitlines() if ln.startswith("ExecStop=")]
+        assert exec_stop == ["ExecStop=/usr/bin/awg-quick down {config_path}"]
+        assert "down {iface}" not in tpl
+
+
+class TestStaleIfaceCleanup:
+    """P14-регресс: stale-интерфейс удаляется перед enable+restart."""
+
+    def test_happy_path_cleanup_when_iface_exists(self, env: Env) -> None:
+        # Фикстурный мок возвращает rc=0 на любой команде → `ip link show`
+        # означает «интерфейс есть», `ip link del` — успех, systemctl штатно.
+        assert install.run_install(state_path=env.state_path) == 0
+        # Мок фикстуры возвращает rc=0 на `ip link show` → интерфейс «есть»,
+        # значит cleanup обязан выполниться и precede enable/restart.
+        calls = env.calls
+        assert ["ip", "link", "show", "awg0"] in calls
+        assert ["ip", "link", "del", "awg0"] in calls
+        show_idx = calls.index(["ip", "link", "show", "awg0"])
+        del_idx = calls.index(["ip", "link", "del", "awg0"])
+        enable_idx = calls.index(["systemctl", "enable", "vds-amneziawg.service"])
+        assert show_idx < del_idx < enable_idx
+
+    def test_no_del_when_iface_absent(self, env: Env) -> None:
+        """`ip link show` вернул rc!=0 → удаления нет, установка продолжается."""
+        real_run_list = install.run_list
+
+        def _absent(args, timeout=10):
+            env.calls.append(args)
+            if args[:3] == ["ip", "link", "show"]:
+                return ShellResult(stdout="", stderr="Device \"awg0\" does not exist.", returncode=1)
+            return real_run_list(args, timeout=timeout)
+
+        install.run_list = _absent
+        try:
+            assert install.run_install(state_path=env.state_path) == 0
+        finally:
+            install.run_list = real_run_list
+        assert ["ip", "link", "show", "awg0"] in env.calls
+        assert ["ip", "link", "del", "awg0"] not in env.calls
+
