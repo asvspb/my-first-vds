@@ -513,6 +513,57 @@ def xray_use_domain(
     raise typer.Exit(0)
 
 
+@xray_app.command("add-cdn")
+def xray_add_cdn(
+    domain: str = typer.Option(
+        ..., "--domain", help="CDN-домен с LE-сертификатом (`vds acme issue --domain <cdn-домен>`)"
+    ),
+    port: int = typer.Option(2053, "--port", help="Origin-порт инблэнда (CF HTTPS-порт)"),
+    yes: bool = typer.Option(False, "--yes", help="Без интерактивного подтверждения"),
+):
+    """Добавить CDN-транспорт VLESS+WS+TLS за Cloudflare (SPEC WP-2, ADR-006)"""
+    from src.core.logger import console
+    from src.xray.cdn import add_cdn
+
+    if not yes:
+        import questionary
+
+        if not questionary.confirm(
+            f"Добавить CDN-инблэнд на {domain}:{port}? Будет перезапущен "
+            "vds-xray (короткий downtime); Reality/XHTTP не изменяются.",
+            default=False,
+        ).ask():
+            console.print("[info][xray-cdn] Операция отменена.[/info]")
+            raise typer.Exit(1)
+    raise typer.Exit(add_cdn(domain, port=port))
+
+
+@xray_app.command("add-cdn-client")
+def xray_add_cdn_client(
+    name: str = typer.Argument(..., help="Имя нового CDN-клиента"),
+):
+    """Добавить CDN-клиента и показать share-link (vless за Cloudflare)"""
+    from src.core.logger import console
+    from src.xray.cdn import CdnError, add_cdn_client
+
+    try:
+        result = add_cdn_client(name)
+    except (StoreError, CdnError) as exc:
+        console.print(f"[error][xray-cdn] {exc}[/error]")
+        raise typer.Exit(1)
+    raise typer.Exit(0 if result else 1)
+
+
+@xray_app.command("remove-cdn")
+def xray_remove_cdn(
+    apply: bool = typer.Option(False, "--apply", help="Применить удаление (по умолчанию dry-run)"),
+    yes: bool = typer.Option(False, "--yes", help="Без интерактивного подтверждения"),
+):
+    """Снять CDN-транспорт (инблэнд ws, клиенты state, UFW; Reality/XHTTP не трогаются)"""
+    from src.xray.cdn import remove_cdn
+    raise typer.Exit(remove_cdn(apply=apply, yes=yes))
+
+
 @hysteria2_app.command("install")
 def hysteria2_install(
     port: int = typer.Option(443, "--port", help="UDP-порт QUIC"),
