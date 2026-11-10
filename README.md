@@ -10,11 +10,12 @@ VDS Orchestrator — единый инструмент инициализаци�
 
 **Возможности:**
 - Интерактивное TUI-меню (на базе `questionary`)
-- Управление ZeroTier + ZTNET Panel (Docker)
-- Watchdog и декларативный reconciler топологии сетей
-- WireGuard VPN, Coturn TURN-сервер
-- Gateway-протоколы против блокировок: Xray VLESS Reality (TCP 443) и
-  Hysteria2 (QUIC, UDP 443), общее хранилище клиентов (`vds gateway`)
+- **Gateway-протоколы против блокировок** (основной сценарий): Xray VLESS
+  Reality (TCP 443), VLESS XHTTP (TCP 8443, TLS) и Hysteria2 (QUIC, UDP 443),
+  общее хранилище клиентов (`vds gateway`), опционально ACME-сертификаты
+  для домена
+- ZeroTier + ZTNET Panel, WireGuard, Coturn — **архив/опционально**:
+  модули рабочие, но не входят в основной сценарий (см. [docs/DEPLOY.md](docs/DEPLOY.md))
 - Системный dashboard: CPU, RAM, диск, Docker
 - Первичная настройка сервера: пользователь, SSH, UFW, Docker, Swap
 
@@ -163,9 +164,10 @@ vds hysteria2 remove --apply        # Удалить (sysctl-тюнинг НЕ �
 Типовой поток: `owner → analyst → architect → coders → tester → [debugger] → docs → close`.
 Модели: архитектор и тестировщик — `glm-5.3`, дебагер — `deepseek-flash`, остальные — `glm-5.3-flash`.
 
-## Systemd-таймеры
+## Systemd-таймеры (только для ZeroTier, архив)
 
-После установки ZeroTier автоматически активируются:
+Активируются **только** при явной установке `vds zerotier install` (опциональный
+сценарий; основной VPN-путь — gateway-протоколы, таймеры им не нужны):
 
 | Таймер | Описание | Интервал |
 |--------|----------|----------|
