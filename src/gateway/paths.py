@@ -27,6 +27,16 @@ HYSTERIA2_CONFIG_PATH = Path("/etc/hysteria/config.yaml")
 HYSTERIA2_CERT_PATH = Path("/etc/hysteria/cert.pem")
 HYSTERIA2_KEY_PATH = Path("/etc/hysteria/key.pem")
 
+# AmneziaWG (SPEC-20261110, ADR-005): обфусцированный WireGuard, UDP 51825,
+# kernel-модуль из PPA ppa:amnezia/ppa; подсеть 10.9.0.0/24 (RFC1918, вне
+# используемых подсетей zerotier/wireguard/xray).
+AWG_UNIT = "vds-amneziawg.service"
+AWG_CONFIG_PATH = Path("/etc/amnezia/awg0.conf")
+AWG_CLIENTS_DIR = GATEWAY_DIR / "clients" / "amneziawg"
+AWG_PORT_DEFAULT = 51825
+AWG_IFACE = "awg0"
+AWG_ADDRESS_SUBNET = "10.9.0.0/24"
+
 # sysctl-тюнинг (не откатывается при remove — ADR-002).
 SYSCTL_CONF_PATH = Path("/etc/sysctl.d/99-vds-gateway.conf")
 

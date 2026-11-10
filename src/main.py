@@ -19,6 +19,7 @@ coturn_app = typer.Typer(help="Coturn TURN server management")
 gateway_app = typer.Typer(help="Gateway state management")
 xray_app = typer.Typer(help="Xray VLESS Reality gateway (TCP 443)")
 hysteria2_app = typer.Typer(help="Hysteria2 QUIC gateway (UDP 443)")
+amneziawg_app = typer.Typer(help="AmneziaWG gateway (obfuscated WireGuard, UDP 51825)")
 acme_app = typer.Typer(help="ACME / Let's Encrypt certificates (certbot, HTTP-01)")
 app.add_typer(zerotier_app, name="zerotier")
 app.add_typer(wireguard_app, name="wireguard")
@@ -26,6 +27,7 @@ app.add_typer(coturn_app, name="coturn")
 app.add_typer(gateway_app, name="gateway")
 app.add_typer(xray_app, name="xray")
 app.add_typer(hysteria2_app, name="hysteria2")
+app.add_typer(amneziawg_app, name="amneziawg")
 app.add_typer(acme_app, name="acme")
 
 @app.callback(invoke_without_command=True)
@@ -49,6 +51,7 @@ def main_menu(ctx: typer.Context):
                 questionary.Choice("Управление Coturn (TURN)", "coturn"),
                 questionary.Choice("Управление Xray (VLESS Reality)", "xray"),
                 questionary.Choice("Управление Hysteria2 (QUIC, UDP 443)", "hysteria2"),
+                questionary.Choice("Управление AmneziaWG (UDP 51825)", "amneziawg"),
                 questionary.Choice("Базовая настройка сервера (Setup)", "server_setup"),
                 questionary.Choice("Очистка системы (Cleanup)", "cleanup"),
                 questionary.Choice("Выход", "exit"),
@@ -215,6 +218,23 @@ def main_menu(ctx: typer.Context):
                         hysteria2_remove(apply=True)
                     except typer.Exit:
                         pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+
+        elif choice == "amneziawg":
+            awg_choice = questionary.select(
+                "Меню AmneziaWG:",
+                choices=[
+                    questionary.Choice("Установка (install)", "install"),
+                    # add-client / status / remove — WP-3/WP-4 (SPEC §7)
+                    questionary.Choice("Назад", "back"),
+                ]
+            ).ask()
+
+            if awg_choice == "install":
+                try:
+                    amneziawg_install()
+                except typer.Exit:
+                    pass
                 questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
 
         elif choice == "zerotier":
@@ -543,6 +563,15 @@ def hysteria2_remove(
     """Удалить Hysteria2 (юнит, конфиг, сертификаты, бинарь, клиенты из store)"""
     from src.hysteria2.remove import run_remove
     raise typer.Exit(run_remove(apply=apply))
+
+
+@amneziawg_app.command("install")
+def amneziawg_install(
+    port: int = typer.Option(51825, "--port", help="UDP-порт AmneziaWG"),
+):
+    """Установить AmneziaWG (PPA ppa:amnezia/ppa, UDP 51825, obfuscated WireGuard)"""
+    from src.amneziawg.install import run_install
+    raise typer.Exit(run_install(port=port))
 
 
 @acme_app.command("issue")
