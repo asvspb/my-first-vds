@@ -12,7 +12,12 @@ from typing import Iterable
 from src.core.logger import console
 from src.core.netcheck import port_free, port_owner
 from src.core.shell import run_list
-from src.gateway.paths import XRAY_BIN_PATH, XRAY_CONFIG_PATH, XRAY_UNIT
+from src.gateway.paths import (
+    CDN_ORIGIN_PORT_DEFAULT,
+    XRAY_BIN_PATH,
+    XRAY_CONFIG_PATH,
+    XRAY_UNIT,
+)
 from src.gateway.store import StoreError, load_state
 from src.xray.install import is_service_active
 
@@ -45,6 +50,12 @@ def _known_secrets() -> list[str]:
     if state is not None:
         values.extend(
             client.uuid for client in state.clients if client.protocol == "xray" and client.uuid
+        )
+        cdn_meta = state.protocols.get("xray-cdn") or {}
+        values.extend(
+            str(uuid)
+            for uuid in (cdn_meta.get("clients") or {}).values()
+            if uuid
         )
     if XRAY_CONFIG_PATH.is_file():
         try:
@@ -107,6 +118,32 @@ def collect_status() -> dict:
         except (json.JSONDecodeError, OSError):
             xhttp_inbound = False
 
+    # CDN (SPEC-20261110 WP-3): meta из state + факт ws-инблэнда на cdn-порту.
+    cdn_meta: dict | None = None
+    cdn_inbound: bool = False
+    cdn_client_names: list[str] = []
+    if state is not None:
+        cdn_meta = state.protocols.get("xray-cdn")
+        if cdn_meta:
+            cdn_client_names = sorted((cdn_meta.get("clients") or {}).keys())
+    if installed and XRAY_CONFIG_PATH.is_file():
+        try:
+            config = json.loads(XRAY_CONFIG_PATH.read_text(encoding="utf-8"))
+            # Без meta (рассинхрон) ищем ws-инблэнд на дефолтном CDN-порту.
+            cdn_port = int(
+                cdn_meta.get("port", CDN_ORIGIN_PORT_DEFAULT)
+                if cdn_meta
+                else CDN_ORIGIN_PORT_DEFAULT
+            )
+            for ib in config.get("inbounds", []):
+                if (
+                    ib.get("streamSettings", {}).get("network") == "ws"
+                    and int(ib.get("port", -1)) == cdn_port
+                ):
+                    cdn_inbound = True
+        except (json.JSONDecodeError, OSError, TypeError, ValueError):
+            cdn_inbound = False
+
     return {
         "installed": installed,
         "unit_active": active,
@@ -121,6 +158,11 @@ def collect_status() -> dict:
             "meta": xhttp_meta,
             "inbound_in_config": xhttp_inbound,
             "clients": xhttp_client_names,
+        },
+        "cdn": {
+            "meta": cdn_meta,
+            "inbound_in_config": cdn_inbound,
+            "clients": cdn_client_names,
         },
     }
 
@@ -188,6 +230,49 @@ def run_status() -> int:
             "записи protocols['xhttp'] — рассинхрон, перезапустите "
             "`vds xray add-transport xhttp --domain <домен> --apply` или "
             "проверьте state.json.[/warning]"
+        )
+
+    # CDN (SPEC-20261110 WP-3): домен/порт/path/клиенты + рассинхрон.
+    cdn = info.get("cdn", {})
+    cdn_meta = cdn.get("meta")
+    if cdn_meta and cdn_meta.get("installed"):
+        cdn_domain = cdn_meta.get("domain", "?")
+        cdn_port = cdn_meta.get("port", "?")
+        cdn_path = cdn_meta.get("path", "?")
+        inflag = (
+            "[success]инблэнд в конфиге[/success]"
+            if cdn.get("inbound_in_config")
+            else "[error]инблэнда нет в конфиге[/error]"
+        )
+        console.print(
+            f"[info][xray] CDN:[/info] домен={cdn_domain}, порт {cdn_port}, "
+            f"path={cdn_path}, {inflag}"
+        )
+        if cdn.get("clients"):
+            console.print(
+                f"[info][xray] CDN-клиенты ({len(cdn['clients'])}):[/info] "
+                + ", ".join(cdn["clients"])
+            )
+            console.print(
+                "[info][xray] Ссылки клиентов CDN:[/info] `vds gateway links`"
+            )
+        elif cdn.get("inbound_in_config"):
+            console.print(
+                "[info][xray] CDN-клиентов нет "
+                "(`vds xray add-cdn-client NAME`).[/info]"
+            )
+    elif cdn.get("inbound_in_config"):
+        console.print(
+            "[warning][xray] В конфиге есть CDN-инблэнд (ws), но в state нет "
+            "записи protocols['xray-cdn'] — рассинхрон, проверьте state.json "
+            "или перезапустите `vds xray add-cdn --domain <cdn-домен>`."
+            "[/warning]"
+        )
+    elif cdn_meta:
+        console.print(
+            "[warning][xray] В state есть запись protocols['xray-cdn'] "
+            "(installed=False), инблэнда в конфиге нет — CDN не настроен; "
+            "`vds xray add-cdn --domain <cdn-домен>`.[/warning]"
         )
 
     journal = run_list(

@@ -34,12 +34,15 @@ def render_all_links(
     from src.hysteria2.clients import render_share_link as render_hy_link
     from src.xray.clients import render_share_link as render_reality_link
     from src.xray.clients import render_xhttp_share_link
+    from src.xray.config import render_cdn_share_link
 
     state: GatewayState = load_state(state_path)
-    if protocol is not None and protocol not in ("xray", "hysteria2", "amneziawg"):
+    if protocol is not None and protocol not in (
+        "xray", "hysteria2", "amneziawg", "xray-cdn",
+    ):
         raise ValueError(
             f"Неизвестный протокол {protocol!r} "
-            "(поддерживаются: xray, hysteria2, amneziawg)."
+            "(поддерживаются: xray, hysteria2, amneziawg, xray-cdn)."
         )
 
     result: list[tuple[str, str, str]] = []
@@ -115,4 +118,29 @@ def render_all_links(
                 )
             )
         # прочие протоколы: рендеры не определены — пропускаем
+
+    # CDN-транспорт (SPEC-20261110 WP-3): клиенты живут не в state.clients, а в
+    # protocols["xray-cdn"]["clients"] ({name: uuid}); ссылка — реюз
+    # render_cdn_share_link из config.py (формат WP-1, не дублируем).
+    if protocol in (None, "xray-cdn"):
+        cdn_meta = state.protocols.get("xray-cdn") or {}
+        if cdn_meta.get("installed"):
+            cdn_domain = str(cdn_meta.get("domain") or "")
+            cdn_port = int(cdn_meta.get("port", 2053))
+            cdn_path = str(cdn_meta.get("path", "/ws"))
+            clients_map = cdn_meta.get("clients") or {}
+            if cdn_domain:
+                for name, client_uuid in clients_map.items():
+                    if not client_uuid:
+                        continue  # битый профиль — пропускаем, не роняем команду
+                    result.append(
+                        (
+                            name,
+                            "xray-cdn",
+                            render_cdn_share_link(
+                                str(client_uuid), cdn_domain, cdn_port,
+                                cdn_path, name,
+                            ),
+                        )
+                    )
     return result

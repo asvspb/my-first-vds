@@ -285,6 +285,103 @@ class TestAmneziawgPlaceholder:
         assert "FIXTURE_PW_SECRET" not in result[0][2]
 
 
+class TestCdnLink:
+    """SPEC-20261110 WP-3: CDN-клиенты из protocols['xray-cdn']['clients']
+    в links — реюз render_cdn_share_link (формат WP-1)."""
+
+    CDN_UUID = "11111111-2222-3333-4444-777777777777"
+    CDN_DOMAIN = "cdn.example.com"
+
+    def _cdn_state(self) -> GatewayState:
+        state = GatewayState()
+        state.protocols["xray-cdn"] = {
+            "installed": True,
+            "domain": self.CDN_DOMAIN,
+            "port": 2053,
+            "path": "/ws",
+            "client_ids": [self.CDN_UUID],
+            "clients": {"phone-cdn": self.CDN_UUID},
+        }
+        return state
+
+    def test_exact_format(self, state_path: str) -> None:
+        _save(self._cdn_state(), state_path)
+        result = render_all_links(state_path)
+        assert result == [
+            (
+                "phone-cdn",
+                "xray-cdn",
+                f"vless://{self.CDN_UUID}@{self.CDN_DOMAIN}:2053"
+                f"?encryption=none&security=tls&sni={self.CDN_DOMAIN}"
+                f"&type=ws&host={self.CDN_DOMAIN}&path=%2Fws#phone-cdn",
+            )
+        ]
+
+    def test_filter_protocol_xray_cdn(self, state_path: str) -> None:
+        state = self._cdn_state()
+        state.protocols["xray-cdn"]["clients"] = {
+            "a": self.CDN_UUID,
+            "b": "11111111-2222-3333-4444-888888888888",
+        }
+        _save(state, state_path)
+        result = render_all_links(state_path, protocol="xray-cdn")
+        assert [(n, p) for n, p, _ in result] == [("a", "xray-cdn"), ("b", "xray-cdn")]
+
+    def test_not_installed_no_lines(self, state_path: str) -> None:
+        state = self._cdn_state()
+        state.protocols["xray-cdn"]["installed"] = False
+        _save(state, state_path)
+        assert render_all_links(state_path) == []
+
+    def test_no_clients_no_lines(self, state_path: str) -> None:
+        state = self._cdn_state()
+        state.protocols["xray-cdn"]["clients"] = {}
+        _save(state, state_path)
+        assert render_all_links(state_path) == []
+
+    def test_golden_existing_output_unchanged_with_cdn_present(
+        self, state_path: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Золотой инвариант: прежний вывод (phone/mob/xhttp-web/awg) не
+        изменился, CDN-строка добавляется отдельной записью."""
+        monkeypatch.setattr("src.core.netcheck.public_ip", lambda: IP)
+        state = _full_state()
+        state.protocols["xray-cdn"] = self._cdn_state().protocols["xray-cdn"]
+        state.clients.append(
+            ClientProfile(
+                name="mob-awg", protocol="amneziawg", port=51825,
+                extra={"conf_path": "/opt/my-vds/gateway/clients/amneziawg/mob-awg.conf"},
+            )
+        )
+        _save(state, state_path)
+
+        result = render_all_links(state_path)
+        assert [
+            (n, p, l) for n, p, l in result if p != "amneziawg" and p != "xray-cdn"
+        ] == [
+            (
+                "phone",
+                "xray",
+                f"vless://{UUID}@{IP}:443?security=reality&sni={SNI}&fp=chrome"
+                f"&pbk={PBK}&sid={SID}&flow=xtls-rprx-vision#phone",
+            ),
+            ("mob", "hysteria2", f"hysteria2://{PASSWORD}@{IP}:443/?sni={IP}&insecure=1#mob"),
+            (
+                "xhttp-web",
+                "xray",
+                f"vless://{UUID_XHTTP}@{DOMAIN}:443"
+                f"?security=tls&network=xhttp&sni={DOMAIN}&fp=chrome"
+                f"&path=/xhttp&type=xhttp#xhttp-web",
+            ),
+        ]
+        assert result[3][2].startswith("amneziawg client 'mob-awg': conf ")
+        assert result[4][2] == (
+            f"vless://{self.CDN_UUID}@{self.CDN_DOMAIN}:2053"
+            f"?encryption=none&security=tls&sni={self.CDN_DOMAIN}"
+            f"&type=ws&host={self.CDN_DOMAIN}&path=%2Fws#phone-cdn"
+        )
+
+
 class TestEmptyState:
     def test_missing_file_returns_empty(self, tmp_path) -> None:
         assert render_all_links(str(tmp_path / "nope.json")) == []
