@@ -37,6 +37,11 @@ AWG_PORT_DEFAULT = 51825
 AWG_IFACE = "awg0"
 AWG_ADDRESS_SUBNET = "10.9.0.0/24"
 
+# P15 (TECHDEBT, найдено на asv1): маршрутзация клиентского трафика —
+# ip_forward + MASQUERADE для awg0-подсети.
+AWG_SYSCTL_FORWARD_CONF = Path("/etc/sysctl.d/99-vds-awg-forward.conf")
+AWG_UFW_BEFORE_RULES = Path("/etc/ufw/before.rules")
+
 # sysctl-тюнинг (не откатывается при remove — ADR-002).
 SYSCTL_CONF_PATH = Path("/etc/sysctl.d/99-vds-gateway.conf")
 

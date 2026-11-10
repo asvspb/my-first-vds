@@ -38,9 +38,19 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
     e.awg_config = tmp_path / "etc" / "amnezia" / "awg0.conf"
     e.state_path = str(tmp_path / "state.json")
     e.lock_file = str(tmp_path / "awg.lock")
+    e.sysctl_conf = tmp_path / "etc" / "sysctl.d" / "99-vds-awg-forward.conf"
+    e.before_rules = tmp_path / "etc" / "ufw" / "before.rules"
 
     monkeypatch.setattr(install, "AWG_CONFIG_PATH", e.awg_config)
     monkeypatch.setattr(install, "LOCK_FILE", e.lock_file)
+    monkeypatch.setattr(install, "AWG_SYSCTL_FORWARD_CONF", e.sysctl_conf)
+    monkeypatch.setattr(install, "AWG_UFW_BEFORE_RULES", e.before_rules)
+    # before.rules как на живой системе (есть секция *filter).
+    e.before_rules.parent.mkdir(parents=True, exist_ok=True)
+    e.before_rules.write_text(
+        "# rules.before\n*filter\n:INPUT ACCEPT [0:0]\n:FORWARD ACCEPT [0:0]\nCOMMIT\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(install, "port_free", lambda port, proto: e.port_free_calls.append((port, proto)) or True)
     monkeypatch.setattr(install, "port_owner", lambda port, proto: None)
     monkeypatch.setattr(install, "shutil", shutil)
@@ -64,6 +74,15 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
         if args == ["ufw", "allow", "51825/udp"]:
             e.ufw_calls.append(args)
             return ShellResult(stdout="", stderr="", returncode=0)
+        if args == ["ip", "route", "get", "1.1.1.1"]:
+            # RFC 5737-адресация (AGENTS.md §6); WAN — eth0.
+            return ShellResult(
+                stdout="1.1.1.1 via 203.0.113.1 dev eth0 src 203.0.113.10 uid 0\n",
+                stderr="", returncode=0,
+            )
+        if args[0] == "iptables" and "-C" in args:
+            # Правила MASQUERADE изначально нет → код должен выполнить -A.
+            return ShellResult(stdout="", stderr="iptables: Bad rule", returncode=1)
         # dpkg -s …, add-apt-repository, apt-get …, apt-mark hold,
         # systemctl enable/restart — всё успешно
         return ShellResult(stdout="", stderr="", returncode=0)
@@ -296,4 +315,100 @@ class TestStaleIfaceCleanup:
             install.run_list = real_run_list
         assert ["ip", "link", "show", "awg0"] in env.calls
         assert ["ip", "link", "del", "awg0"] not in env.calls
+
+
+NAT_ARGS_BASE = ["-s", "10.9.0.0/24", "-o", "eth0", "-j", "MASQUERADE"]
+NAT_RULE_LINE = "-A POSTROUTING " + " ".join(NAT_ARGS_BASE)
+
+
+class TestRoutingSetup:
+    """P15-регресс: без ip_forward/MASQUERADE handshake был, данных не было."""
+
+    def test_happy_path_routing_sequence_before_restart(self, env: Env) -> None:
+        assert install.run_install(state_path=env.state_path) == 0
+        sysctl_idx = env.calls.index(["sysctl", "-w", "net.ipv4.ip_forward=1"])
+        route_idx = env.calls.index(["ip", "route", "get", "1.1.1.1"])
+        nat_c_idx = env.calls.index(["iptables", "-t", "nat", "-C", "POSTROUTING", *NAT_ARGS_BASE])
+        nat_a_idx = env.calls.index(["iptables", "-t", "nat", "-A", "POSTROUTING", *NAT_ARGS_BASE])
+        restart_idx = env.calls.index(["systemctl", "restart", "vds-amneziawg.service"])
+        assert sysctl_idx < route_idx < nat_c_idx < nat_a_idx < restart_idx
+        # NAT-правило: проверка (-C) безуспешна → добавление (-A) ровно одно.
+        nat_a_calls = [
+            a for a in env.calls
+            if a[0] == "iptables" and "-A" in a
+        ]
+        assert nat_a_calls == [["iptables", "-t", "nat", "-A", "POSTROUTING", *NAT_ARGS_BASE]]
+
+    def test_sysctl_persist_file_written(self, env: Env) -> None:
+        assert install.run_install(state_path=env.state_path) == 0
+        assert env.sysctl_conf.read_text(encoding="utf-8") == "net.ipv4.ip_forward = 1\n"
+        # Повторная настройка (прямой вызов) не перезаписывает/не дублирует.
+        install._ensure_ip_forward()
+        install._ensure_ip_forward()
+        assert env.sysctl_conf.read_text(encoding="utf-8") == "net.ipv4.ip_forward = 1\n"
+
+    def test_before_rules_nat_block_before_filter(self, env: Env) -> None:
+        assert install.run_install(state_path=env.state_path) == 0
+        content = env.before_rules.read_text(encoding="utf-8")
+        assert NAT_RULE_LINE in content
+        assert content.index("*nat") < content.index("*filter")
+        assert ":POSTROUTING ACCEPT [0:0]" in content
+        # COMMIT завершает nat-секцию, затем идёт исходный *filter-блок.
+        first_commit = content.index("COMMIT\n")
+        assert content.index("*filter") > first_commit
+
+    def test_before_rules_idempotent_no_duplicate(self, env: Env) -> None:
+        assert install.run_install(state_path=env.state_path) == 0
+        once = env.before_rules.read_text(encoding="utf-8")
+        install._ensure_nat_masquerade("10.9.0.0/24", "eth0")
+        assert env.before_rules.read_text(encoding="utf-8") == once
+
+    def test_missing_before_rules_runtime_only(self, env: Env) -> None:
+        """before.rules отсутствует → только runtime + warning, установка успешна."""
+        env.before_rules.unlink()
+        assert install.run_install(state_path=env.state_path) == 0
+        assert not env.before_rules.exists()
+        assert ["iptables", "-t", "nat", "-A", "POSTROUTING", *NAT_ARGS_BASE] in env.calls
+
+    def test_nat_rule_already_present_no_append(self, env: Env) -> None:
+        """-C вернул успех (правило есть) → -A не выполняется, persist идемпотентен."""
+        env.before_rules.write_text(
+            "# rules.before\n*filter\n:INPUT ACCEPT [0:0]\nCOMMIT\n", encoding="utf-8"
+        )
+        real_run_list = install.run_list
+
+        def _rule_exists(args, timeout=10):
+            env.calls.append(args)
+            if args[0] == "iptables" and "-C" in args:
+                return ShellResult(stdout="", stderr="", returncode=0)
+            return real_run_list(args, timeout=timeout)
+
+        install.run_list = _rule_exists
+        try:
+            assert install.run_install(state_path=env.state_path) == 0
+        finally:
+            install.run_list = real_run_list
+        nat_a_calls = [a for a in env.calls if a[0] == "iptables" and "-A" in a]
+        assert nat_a_calls == []
+        assert NAT_RULE_LINE in env.before_rules.read_text(encoding="utf-8")
+
+    def test_wan_iface_extraction(self, env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            install, "run_list",
+            lambda args, timeout=10: ShellResult(
+                stdout="1.1.1.1 via 203.0.113.1 dev eth5 src 203.0.113.10 uid 0\n",
+                stderr="", returncode=0,
+            ),
+        )
+        assert install._detect_wan_iface() == "eth5"
+
+    def test_wan_iface_no_dev_field_raises(self, env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            install, "run_list",
+            lambda args, timeout=10: ShellResult(
+                stdout="1.1.1.1 via 203.0.113.1 src 203.0.113.10\n", stderr="", returncode=0
+            ),
+        )
+        with pytest.raises(install.InstallError, match="dev"):
+            install._detect_wan_iface()
 

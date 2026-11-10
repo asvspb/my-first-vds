@@ -289,6 +289,39 @@ enable/restart; случай отсутствия интерфейса — бе�
 
 ---
 
+## P15. `amneziawg/install.py` — не настроена маршрутизация (ip_forward + MASQUERADE) — ✅ ВЫПОЛНЕНО 2026-11-10
+
+> Найдено на живой asv1: handshake UDP проходит, клиентский трафик не
+> выходит в интернет (handshake ok, данные — нет).
+
+**Проблема:** WP-2 install.py ставит пакеты, генерирует ключи, пишет конфиг и
+поднимает юнит vds-amneziawg, но не включает `net.ipv4.ip_forward` и не
+добавляет MASQUERADE для awg0-подсети (10.9.0.0/24). awg0-интерфейс поднят,
+handshake успешен, но forwarded-трафик клиентов отбрасывается.
+
+**Действия:** 1) `amneziawg/install.py::_ensure_ip_forward` — `sysctl -w
+net.ipv4.ip_forward=1` (до старта юнита) + persist
+`/etc/sysctl.d/99-vds-awg-forward.conf` (`net.ipv4.ip_forward = 1`),
+идемпотентно; 2) `_detect_wan_iface` — WAN по `ip route get 1.1.1.1`
+(поле `dev`; отказ определения — отказ установки, угадывать нельзя);
+3) `_ensure_nat_masquerade` — runtime `iptables -t nat -C POSTROUTING
+-s 10.9.0.0/24 -o <wan> -j MASQUERADE` (нет → `-A`) + persist: NAT-секция
+(`*nat` / `:POSTROUTING ACCEPT [0:0]` / правило / `COMMIT`) вставляется
+перед `*filter` в `/etc/ufw/before.rules` (grep по строке правила;
+`ufw reload` НЕ выполняется — runtime-правило уже активно, ufw перечитает
+при рестарте); before.rules отсутствует → только runtime + warning;
+4) пути в `gateway/paths.py`: `AWG_SYSCTL_FORWARD_CONF`,
+`AWG_UFW_BEFORE_RULES`; 5) регресс в
+`tests/amneziawg/test_install.py::TestRoutingSetup` — happy-path
+последовательность sysctl → route-get → iptables -C → -A → restart,
+persist-файлы (tmp), идемпотентность обоих persist, отсутствие before.rules,
+уже существующее NAT-правило (без -A), извлечение wan_if.
+
+**Критерий:** `pytest -q` зелёный (346+N); `compileall`; verbatim
+happy-path последовательности (sysctl → nat → before.rules).
+
+---
+
 ## Порядок работ
 
 | Этап | Пункты | Суммарно | Почему сначала |

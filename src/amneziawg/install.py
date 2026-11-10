@@ -10,7 +10,10 @@ amneziawg-dkms → apt-mark hold (пин, E9-устойчивость) → кл�
 строго после установки) → obfuscation-параметры (config.py WP-1) → рендер
 серверного .conf → write_secret_atomic 0600 → юнит из
 systemd/vds-amneziawg.service.tpl → ufw allow <port>/udp (при наличии ufw,
-паттерн src/wireguard/install.py) → systemctl enable+restart →
+паттерн src/wireguard/install.py) → маршрутизация (P15, TECHDEBT):
+sysctl -w net.ipv4.ip_forward=1 + persist в sysctl.d, MASQUERADE
+(10.9.0.0/24 → WAN по `ip route get 1.1.1.1`) runtime iptables + persist
+в /etc/ufw/before.rules → systemctl enable+restart →
 метаданные в gateway store (public_key, obfuscation, psk_required-флаг;
 приватный ключ — только в /etc/amnezia/awg0.conf).
 
@@ -45,7 +48,9 @@ from src.gateway.paths import (
     AWG_CONFIG_PATH,
     AWG_IFACE,
     AWG_PORT_DEFAULT,
+    AWG_SYSCTL_FORWARD_CONF,
     AWG_UNIT,
+    AWG_UFW_BEFORE_RULES,
 )
 from src.gateway.store import StoreError, load_state, save_state
 
@@ -69,6 +74,137 @@ def _run_checked(args: list[str], timeout: int, what: str) -> ShellResult:
         detail = result.stderr.strip() or result.stdout.strip() or f"rc={result.returncode}"
         raise InstallError(f"{what}: {detail}")
     return result
+
+
+def _write_text_preserving_mode(path: Path, text: str) -> None:
+    """Атомарная запись текстового файла с сохранением существующих прав.
+
+    Новый файл получает 0644 (sysctl.d / ufw before.rules — системные
+    non-secret конфиги, не 0600). Родительский каталог не создаётся.
+    """
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
+    tmp = path.with_name(path.name + ".vds.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+    os.replace(tmp, path)
+
+
+def _detect_wan_iface() -> str:
+    """WAN-интерфейс по маршруту до 1.1.1.1 (`ip route get` → поле dev).
+
+    Ошибка или пустой вывод — InstallError: угадывать имя интерфейса нельзя.
+    """
+    res = run_list(["ip", "route", "get", "1.1.1.1"], timeout=10)
+    if not res.ok:
+        detail = res.stderr.strip() or res.stdout.strip() or f"rc={res.returncode}"
+        raise InstallError(f"ip route get 1.1.1.1 (определение WAN): {detail}")
+    tokens = res.output.split()
+    for i, tok in enumerate(tokens):
+        if tok == "dev" and i + 1 < len(tokens):
+            return tokens[i + 1]
+    raise InstallError(
+        f"ip route get 1.1.1.1: не найдено поле dev в выводе: {res.output.strip()[:120]}"
+    )
+
+
+def _ensure_ip_forward() -> None:
+    """net.ipv4.ip_forward=1: runtime (sysctl -w) + persist в sysctl.d.
+
+    P15: без forwarding клиентский трафик не маршрутизируется (handshake
+    UDP проходит, данных нет). Persist-файл идемпотентен: при уже
+    включённой строке запись не повторяется.
+    """
+    _run_checked(
+        ["sysctl", "-w", "net.ipv4.ip_forward=1"],
+        timeout=10,
+        what="sysctl -w net.ipv4.ip_forward=1",
+    )
+    if AWG_SYSCTL_FORWARD_CONF.is_file():
+        existing = AWG_SYSCTL_FORWARD_CONF.read_text(encoding="utf-8")
+        if "net.ipv4.ip_forward" in existing:
+            return
+    AWG_SYSCTL_FORWARD_CONF.parent.mkdir(parents=True, exist_ok=True)
+    _write_text_preserving_mode(AWG_SYSCTL_FORWARD_CONF, "net.ipv4.ip_forward = 1\n")
+    console.print(
+        f"[change][amneziawg] ip_forward=1 применён и сохранён в "
+        f"{AWG_SYSCTL_FORWARD_CONF}.[/change]"
+    )
+
+
+def _nat_rule_args(subnet: str, wan_if: str, op: str) -> list[str]:
+    """Аргументы iptables для проверки (-C) / добавления (-A) MASQUERADE."""
+    return [
+        "iptables", "-t", "nat", op, "POSTROUTING",
+        "-s", subnet, "-o", wan_if, "-j", "MASQUERADE",
+    ]
+
+
+def _ensure_nat_masquerade(subnet: str, wan_if: str) -> None:
+    """MASQUERADE для awg0-подсети: runtime iptables + persist в ufw before.rules.
+
+    Runtime: `-C` (есть?) → нет → `-A`. Persist (P15): NAT-секция перед
+    `*filter` в /etc/ufw/before.rules — ufw перечитает при рестарте;
+    reload не выполняем, runtime-правило уже активно. before.rules
+    отсутствует → только runtime + warning. Идемпотентно по строке
+    `-A POSTROUTING -s <subnet> -o <wan_if> -j MASQUERADE`.
+    """
+    rule_line = f"-A POSTROUTING -s {subnet} -o {wan_if} -j MASQUERADE"
+
+    check = run_list(_nat_rule_args(subnet, wan_if, "-C"), timeout=15)
+    if not check.ok:
+        _run_checked(
+            _nat_rule_args(subnet, wan_if, "-A"),
+            timeout=15,
+            what=f"iptables -t nat -A POSTROUTING ({subnet} -> {wan_if})",
+        )
+        console.print(
+            f"[change][amneziawg] MASQUERADE добавлен: {subnet} -> {wan_if}.[/change]"
+        )
+
+    if not AWG_UFW_BEFORE_RULES.is_file():
+        console.print(
+            f"[warning][amneziawg] {AWG_UFW_BEFORE_RULES} не найден — "
+            "MASQUERADE применён только runtime и пропадёт после перезагрузки "
+            "(ufw не установлен?).[/warning]"
+        )
+        return
+
+    content = AWG_UFW_BEFORE_RULES.read_text(encoding="utf-8")
+    if rule_line in content:
+        return
+    lines = content.splitlines(keepends=True)
+    filter_idx = next(
+        (i for i, ln in enumerate(lines) if ln.strip() == "*filter"), None
+    )
+    if filter_idx is None:
+        console.print(
+            f"[warning][amneziawg] {AWG_UFW_BEFORE_RULES}: не найдена секция "
+            "*filter — persist MASQUERADE пропущен (правило только runtime).[/warning]"
+        )
+        return
+    nat_block = "*nat\n:POSTROUTING ACCEPT [0:0]\n" + rule_line + "\nCOMMIT\n"
+    lines.insert(filter_idx, nat_block)
+    _write_text_preserving_mode(AWG_UFW_BEFORE_RULES, "".join(lines))
+    console.print(
+        f"[change][amneziawg] MASQUERADE сохранён в {AWG_UFW_BEFORE_RULES} "
+        "перед *filter (ufw перечитает при рестарте).[/change]"
+    )
+
+
+def _setup_routing() -> str:
+    """Маршрутизация клиентского трафика (P15): ip_forward + MASQUERADE.
+
+    Возвращает WAN-интерфейс, использованный в правиле (для логов/диагностики).
+    """
+    _ensure_ip_forward()
+    wan_if = _detect_wan_iface()
+    _ensure_nat_masquerade(AWG_ADDRESS_SUBNET, wan_if)
+    return wan_if
 
 
 def _installed() -> bool:
@@ -236,6 +372,16 @@ def _install_locked(port: int, state_path: Optional[str]) -> int:
             )
             return 1
 
+    # P15 (TECHDEBT, найдено на asv1): маршруттизация ДО старта юнита —
+    # без ip_forward и MASQUERADE handshake проходит, но клиентский трафик
+    # не выходит в интернет. WAN-интерфейс определяется по маршруту до
+    # 1.1.1.1; отказ определения — отказ установки (угадывать нельзя).
+    try:
+        wan_if = _setup_routing()
+    except (InstallError, OSError) as exc:
+        console.print(f"[error][amneziawg] Маршрутизация (P15): {exc}[/error]")
+        return 1
+
     # P14: после неудачного ExecStop (awg-quick down по iface вместо пути
     # конфига) интерфейс может остаться up → следующий start падает
     # «awg0 already exists». Чистим stale-интерфейс перед стартом
@@ -273,7 +419,8 @@ def _install_locked(port: int, state_path: Optional[str]) -> int:
     console.print(
         f"[success][amneziawg] AmneziaWG установлен: udp/{port}, интерфейс "
         f"{AWG_IFACE} ({AWG_ADDRESS_SUBNET}), юнит {AWG_UNIT} активен "
-        f"(пакеты {pkg_version or AWG_APT_PACKAGES[0]} из {AWG_PPA}).[/success]"
+        f"(пакеты {pkg_version or AWG_APT_PACKAGES[0]} из {AWG_PPA}, "
+        f"NAT: {AWG_ADDRESS_SUBNET} -> {wan_if}).[/success]"
     )
     console.print(
         "[info][amneziawg] Клиенты: `vds amneziawg add-client NAME` → .conf для "
