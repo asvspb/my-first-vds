@@ -136,7 +136,8 @@ vds hysteria2 remove --apply        # Удалить (sysctl-тюнинг НЕ �
 клиентов — `$INSTALL_DIR/gateway/state.json` (0600); приватные ключи — только
 в конфигах сервера, никогда в share-link и логах. Порты TCP/UDP 443 должны
 быть открыты в UFW. Обзор протоколов — [docs/VPN-PROTOCOLS.md](docs/VPN-PROTOCOLS.md),
-план развития — [docs/CENSORSHIP-ROADMAP.md](docs/CENSORSHIP-ROADMAP.md).
+план развития — [docs/CENSORSHIP-ROADMAP.md](docs/CENSORSHIP-ROADMAP.md),
+паттерны обхода с живыми доказательствами — [docs/CENSORSHIP-PATTERNS.md](docs/CENSORSHIP-PATTERNS.md).
 
 > **Hysteria2 в MVP — тестовый режим:** self-signed сертификат + `insecure=1`
 > в клиентской ссылке. ACME-сертификат (Let's Encrypt по домену) — фаза 6

@@ -39,7 +39,8 @@ src/
 └── system/              # setup, cleanup
 systemd/                 # unit-файлы таймеров/сервисов; vds-xray/vds-hysteria2 .service.tpl; sysctl/99-vds-gateway.conf.tpl
 tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/
-docs/                    # TEAM.md, VPN-PROTOCOLS.md, CENSORSHIP-ROADMAP.md, adr/, team/
+docs/                    # TEAM.md, VPN-PROTOCOLS.md, CENSORSHIP-ROADMAP.md,
+                         # CENSORSHIP-PATTERNS.md, MIGRATE-VDS.md, adr/, team/
 install.sh, preinstall.sh, local-init.sh, myhelp.sh
 ```
 
@@ -93,6 +94,7 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 
 `README.md` — обзор и команды; `docs/TEAM.md` — роли и процесс;
 `docs/VPN-PROTOCOLS.md` — протоколы; `docs/CENSORSHIP-ROADMAP.md` — roadmap;
+`docs/CENSORSHIP-PATTERNS.md` — паттерны обхода (с живыми доказательствами);
 `TECHDEBT.md` — бэклог. При изменении поведения обновлять соответствующий документ.
 
 ## 9. Роли
