@@ -144,6 +144,12 @@
 |---|---|---|---|---|---|
 | чат 2026-11-09 | REQ-20261109-domain-xhttp-acme | SPEC-20261109-domain-xhttp-acme (+ADR-003/004) | aa01d98 (WP-1..4) + P13 | G4 CONDITIONAL PASS + ACCEPT PASS | ACCEPT-20261109-domain-xhttp-acme |
 
+## Бэклог идей (вход для intake)
+
+- **Точки роста схем/протоколов:** [docs/GROWTH-POINTS.md](../GROWTH-POINTS.md) —
+  24 пункта (GR-01…GR-24) с фактами, действиями и AC; предложенный порядок волн
+  в §9. Дефекты/долг — по-прежнему [TECHDEBT.md](../../TECHDEBT.md).
+
 ## Архитектурные решения (вне циклов)
 
 ### ZeroTier → архив/опционально (2026-11-10, решение владельца)

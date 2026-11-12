@@ -106,6 +106,7 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 (Reality, XHTTP, Hysteria2 hop/obfs, AWG, CDN); `docs/CDN-FRONTS.md` — пул
 фронтов CDN; `docs/CENSORSHIP-ROADMAP.md` — roadmap;
 `docs/CENSORSHIP-PATTERNS.md` — паттерны обхода (с живыми доказательствами);
+`docs/GROWTH-POINTS.md` — точки роста схем/протоколов (вход для intake);
 `docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…008;
 `TECHDEBT.md` — бэклог. При изменении поведения обновлять соответствующий документ
 (новый протокол/транспорт — ADR + VPN-PROTOCOLS + README + AGENTS).
