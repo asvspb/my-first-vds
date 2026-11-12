@@ -139,6 +139,7 @@ AmneziaWG — UDP 51825. Все команды требуют root; `remove` б�
 ```bash
 vds gateway status                  # Состояние gateway: state.json, клиенты, протоколы
 vds gateway links                   # Share-links клиентов (--protocol xray|hysteria2|amneziawg)
+vds gateway links --include-obfs    # + obfs-ссылки hysteria2 (`<name>@obfs`)
 vds gateway blockcheck              # «Блок IP» vs «деградация» vs «локальная проблема»
 
 vds xray install                    # Установить Xray VLESS Reality (TCP 443)

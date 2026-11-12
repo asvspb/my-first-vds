@@ -9,7 +9,7 @@ FIXTURE_PW_*/FIXTURE_UUID_*, 203.0.113.0/24 (RFC 5737).
 import pytest
 
 from src.gateway.links import render_all_links
-from src.gateway.store import ClientProfile, GatewayState, save_state
+from src.gateway.store import ClientProfile, GatewayState, load_state, save_state
 
 UUID = "11111111-2222-3333-4444-555555555555"
 UUID_XHTTP = "11111111-2222-3333-4444-666666666666"
@@ -186,6 +186,68 @@ class TestHysteria2Link:
         result = render_all_links(state_path, protocol="hysteria2")
         assert result[0][2] == f"hysteria2://{PASSWORD}@{DOMAIN}:443/?sni={DOMAIN}#mob"
         assert "insecure" not in result[0][2]
+
+    def test_mport_included_when_hop_ports_set(self, state_path: str) -> None:
+        state = _full_state()
+        state.protocols["acme"] = {"domain": DOMAIN}
+        state.protocols["hysteria2"]["hop_ports"] = "20000-20500"
+        state.clients = [state.clients[1]]
+        _save(state, state_path)
+
+        result = render_all_links(state_path, protocol="hysteria2")
+        assert result[0][2].endswith(f"?sni={DOMAIN}&mport=20000-20500#mob")
+
+
+class TestHysteria2ObfsLinks:
+    """`--include-obfs`: второй ряд `<name>@obfs` для obfs-инстанса."""
+
+    def _state(self, state_path: str, *, with_obfs: bool = True) -> None:
+        state = _full_state()
+        state.protocols["acme"] = {"domain": DOMAIN}
+        state.clients = [state.clients[1]]
+        if with_obfs:
+            state.protocols["hysteria2-obfs"] = {
+                "installed": True,
+                "port": 51826,
+                "obfs_password": "FIXTURE_PW_Obfs",
+            }
+        _save(state, state_path)
+
+    def test_obfs_link_added(self, state_path: str) -> None:
+        self._state(state_path)
+        result = render_all_links(
+            state_path, protocol="hysteria2", include_obfs=True
+        )
+        assert [name for name, _, _ in result] == ["mob", "mob@obfs"]
+        assert result[1][1] == "hysteria2"
+        assert result[1][2] == (
+            f"hysteria2://{PASSWORD}@{DOMAIN}:51826/?sni={DOMAIN}"
+            f"&obfs=salamander&obfs-password=FIXTURE_PW_Obfs#mob%40obfs"
+        )
+
+    def test_obfs_link_includes_mport(self, state_path: str) -> None:
+        self._state(state_path)
+        state = load_state(state_path)
+        state.protocols["hysteria2"]["hop_ports"] = "20000-20500"
+        _save(state, state_path)
+
+        result = render_all_links(
+            state_path, protocol="hysteria2", include_obfs=True
+        )
+        for _, _, link in result:
+            assert "mport=20000-20500" in link
+
+    def test_obfs_link_absent_without_flag(self, state_path: str) -> None:
+        self._state(state_path)
+        result = render_all_links(state_path, protocol="hysteria2")
+        assert [name for name, _, _ in result] == ["mob"]
+
+    def test_obfs_link_absent_without_instance(self, state_path: str) -> None:
+        self._state(state_path, with_obfs=False)
+        result = render_all_links(
+            state_path, protocol="hysteria2", include_obfs=True
+        )
+        assert [name for name, _, _ in result] == ["mob"]
 
 
 class TestAllAndFilter:
@@ -425,7 +487,8 @@ class TestCliOutputNoWrap:
         assert len(long_link) > 200
 
         def fake_render(state_path: "str | None" = None,
-                        protocol: "str | None" = None):
+                        protocol: "str | None" = None,
+                        include_obfs: bool = False):
             return [("phone", "xray", long_link)]
 
         monkeypatch.setattr("src.gateway.links.render_all_links", fake_render)

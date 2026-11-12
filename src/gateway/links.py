@@ -7,8 +7,10 @@
   - Xray XHTTP     — src.xray.clients.render_xhttp_share_link
                      (домен/порт/path из protocols["xhttp"]);
   - Hysteria2      — src.hysteria2.clients.render_share_link
-                     (LE-домен из protocols["acme"]["domain"] — без insecure;
-                     иначе legacy self-signed формат).
+                     (LE-домен через hysteria2.clients.le_domain — без
+                     insecure; иначе legacy self-signed формат). С
+                     include_obfs=True вторым рядом идёт obfs-ссылка
+                     (`<name>@obfs`, порт obfs-инстанса, obfs=salamander).
 
 Секреты: ссылки — продукт команды; privateKey Reality и state целиком не
 печатаются и не логируются. Клиенты без uuid/password (битые профили)
@@ -22,15 +24,20 @@ from src.gateway.store import GatewayState, load_state
 def render_all_links(
     state_path: Optional[str] = None,
     protocol: Optional[str] = None,
+    include_obfs: bool = False,
 ) -> list[tuple[str, str, str]]:
     """Для каждого клиента state — (name, protocol, share_link); порядок
     стабилен (порядок списка клиентов). protocol — фильтр
-    ("xray" | "hysteria2"); None — все протоколы.
+    ("xray" | "hysteria2"); None — все протоколы. include_obfs — дополнительно
+    вернуть obfs-ссылку каждого hysteria2-клиента (`<name>@obfs`: другой порт,
+    obfs=salamander), если obfs-инстанс установлен.
 
     Пустой state (нет клиентов) — пустой список. Host Reality при недоступном
     публичном IP — "SERVER_IP" (прежнее поведение regen_reality_links).
     """
     from src.core.netcheck import public_ip
+    from src.gateway.paths import HYSTERIA2_OBFS_PORT_DEFAULT
+    from src.hysteria2.clients import le_domain as hy_le_domain
     from src.hysteria2.clients import render_share_link as render_hy_link
     from src.xray.clients import render_share_link as render_reality_link
     from src.xray.clients import render_xhttp_share_link
@@ -93,21 +100,50 @@ def render_all_links(
             port = int(client.port if client.port else meta.get("port", 443))
             # Хост LE-ссылки — общий резолвер hysteria2 (acme.domain может быть
             # CDN-фронтом, а сертификат выпущен на state.domain).
-            from src.hysteria2.clients import le_domain as hy_le_domain
-
             le_domain = hy_le_domain(state)
+            # port hopping: mport в ссылке iff hop_ports в state (как add-client).
+            mport = str(meta.get("hop_ports") or "") or None
             if le_domain:
-                link = render_hy_link(
-                    host=le_domain, password=password, name=client.name,
-                    port=port, insecure=False,
-                )
+                host, insecure = le_domain, False
             else:
                 host = client.sni or meta.get("cert_cn") or "SERVER_IP"
-                link = render_hy_link(
-                    host=host, password=password, name=client.name,
-                    port=port, insecure=True,
+                insecure = True
+            result.append(
+                (
+                    client.name,
+                    "hysteria2",
+                    render_hy_link(
+                        host=host, password=password, name=client.name,
+                        port=port, insecure=insecure, mport=mport,
+                    ),
                 )
-            result.append((client.name, "hysteria2", link))
+            )
+            # obfs-инстанс: отдельный порт + obfs-пароль; имя `<name>@obfs`,
+            # чтобы `vpn profile pull` держал оба профиля рядом.
+            obfs_meta = state.protocols.get("hysteria2-obfs") or {}
+            if (
+                include_obfs
+                and obfs_meta.get("installed")
+                and obfs_meta.get("obfs_password")
+            ):
+                obfs_name = f"{client.name}@obfs"
+                result.append(
+                    (
+                        obfs_name,
+                        "hysteria2",
+                        render_hy_link(
+                            host=host,
+                            password=password,
+                            name=obfs_name,
+                            port=int(
+                                obfs_meta.get("port", HYSTERIA2_OBFS_PORT_DEFAULT)
+                            ),
+                            insecure=insecure,
+                            mport=mport,
+                            obfs_password=str(obfs_meta["obfs_password"]),
+                        ),
+                    )
+                )
         elif client.protocol == "amneziawg":
             # AWG не имеет share-link-формата (SPEC FR-5): строка-плейсхолдер
             # с путём к .conf, без секретов (ключи — только в .conf/state).

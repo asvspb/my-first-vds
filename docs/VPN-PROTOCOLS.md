@@ -163,7 +163,8 @@ vds hysteria2 rotate-obfs               # новый obfs-пароль + рес�
 vds hysteria2 remove-obfs [--apply]     # dry-run по умолчанию
 ```
 
-Ссылка obfs-клиента (её печатает `add-client` второй строкой):
+Ссылка obfs-клиента: `add-client` печатает её второй строкой, `gateway links
+--include-obfs` — отдельным рядом `<name>@obfs` (для `vpn profile pull`):
 `hysteria2://<password>@<ip>:51826/?sni=<ip>&obfs=salamander&obfs-password=<obfs>&insecure=1#name`.
 
 Серверный YAML: пароль обфускатора вложен в ключ типа — hysteria v2 читает

@@ -458,6 +458,11 @@ def gateway_links(
     protocol: str = typer.Option(
         None, "--protocol", help="Фильтр: xray | hysteria2 | amneziawg (по умолчанию все)"
     ),
+    include_obfs: bool = typer.Option(
+        False,
+        "--include-obfs",
+        help="Добавить obfs-ссылку hysteria2-клиентов (`<name>@obfs`, порт obfs-инстанса)",
+    ),
 ):
     """Share-links всех клиентов из state (для `vpn profile pull` по ssh)"""
     from src.core.logger import console
@@ -465,7 +470,7 @@ def gateway_links(
     from src.gateway.store import StoreError
 
     try:
-        links = render_all_links(protocol=protocol)
+        links = render_all_links(protocol=protocol, include_obfs=include_obfs)
     except (StoreError, ValueError) as exc:
         console.print(f"[error][gateway] {exc}[/error]")
         raise typer.Exit(1)
