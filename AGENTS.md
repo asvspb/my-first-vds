@@ -7,8 +7,15 @@
 ## 1. О проекте
 
 **VDS Orchestrator** — Python CLI для управления выделенным сервером (Ubuntu 24.04):
-ZeroTier + ZTNET Panel (Docker), WireGuard, Coturn, системный dashboard, первичная
-настройка и очистка. Версия 3.0. Почти все операции требуют root.
+gateway-протоколы против блокировок (Xray VLESS Reality/XHTTP/CDN, Hysteria2 с port
+hopping и obfs salamander, AmneziaWG), ACME/Let's Encrypt, общее хранилище клиентов
+(`vds gateway links`), плюс ZeroTier + ZTNET Panel (Docker), WireGuard, Coturn
+(архив/опционально), системный dashboard, первичная настройка и очистка.
+Версия 3.0. Почти все операции требуют root.
+
+Репозиторий отдельный (`my-first-vds`); UbuntuInstaller деплоит его скриптами
+`11_vds-deploy.sh` / `8_vds-server.sh` (источник — `VDS_REPO`) и забирает ссылки
+через `vpn profile pull`. Копии репозитория в ubuntuInstaller нет.
 
 ## 2. Стек
 
@@ -19,8 +26,8 @@ ZeroTier + ZTNET Panel (Docker), WireGuard, Coturn, системный dashboard
 | Конфиги/модели | pydantic 2.x |
 | HTTP | requests |
 | Метрики | psutil |
-| Тесты | pytest (`tests/`: core, gateway, xray, hysteria2) |
-| Инфраструктура | Docker (ZTNET), systemd, iptables, UFW |
+| Тесты | pytest (`tests/`: core, gateway, xray, hysteria2, amneziawg, acme) |
+| Инфраструктура | Docker (ZTNET), systemd, iptables/nftables, UFW, certbot |
 | ОС | Ubuntu 24.04 LTS |
 
 ## 3. Структура
@@ -32,15 +39,17 @@ src/
 ├── zerotier/            # install, api, watchdog, reconcile, nat, diagnose, add_network, cleanup
 ├── wireguard/           # install, add-client, remove
 ├── coturn/              # TURN-сервер
-├── xray/                # Xray VLESS Reality (TCP 443): adapter, install, clients, config, status, remove
-├── hysteria2/           # Hysteria2 QUIC (UDP 443): adapter, install, clients, config, status, sysctl, remove
-├── gateway/             # paths, store (state.json: клиенты/протоколы, 0600) + `gateway status`
+├── xray/                # Reality (443), XHTTP (8443), CDN (2053): adapter, install, clients, config, status, remove
+├── hysteria2/           # QUIC (443): adapter, install, clients, config, hop, obfs, status, sysctl, remove
+├── amneziawg/           # AmneziaWG (UDP 51825): install, clients, status, remove
+├── acme/                # ACME/LE: issue (HTTP-01) + deploy-hook для Hysteria2
+├── gateway/             # paths, store (state.json 0600), links, blockcheck
 ├── sysinfo/             # dashboard
 └── system/              # setup, cleanup
-systemd/                 # unit-файлы таймеров/сервисов; vds-xray/vds-hysteria2 .service.tpl; sysctl/99-vds-gateway.conf.tpl
-tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/
-docs/                    # TEAM.md, VPN-PROTOCOLS.md, CENSORSHIP-ROADMAP.md,
-                         # CENSORSHIP-PATTERNS.md, MIGRATE-VDS.md, adr/, team/
+systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg .service.tpl; sysctl/99-vds-gateway.conf.tpl
+tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/, amneziawg/, acme/
+docs/                    # TEAM.md, DEPLOY.md, VPN-PROTOCOLS.md, CDN-FRONTS.md,
+                         # CENSORSHIP-ROADMAP.md, CENSORSHIP-PATTERNS.md, MIGRATE-VDS.md, adr/, team/
 install.sh, preinstall.sh, local-init.sh, myhelp.sh
 ```
 
@@ -93,9 +102,13 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 ## 8. Документация
 
 `README.md` — обзор и команды; `docs/TEAM.md` — роли и процесс;
-`docs/VPN-PROTOCOLS.md` — протоколы; `docs/CENSORSHIP-ROADMAP.md` — roadmap;
+`docs/DEPLOY.md` — деплой и чеклист; `docs/VPN-PROTOCOLS.md` — протоколы
+(Reality, XHTTP, Hysteria2 hop/obfs, AWG, CDN); `docs/CDN-FRONTS.md` — пул
+фронтов CDN; `docs/CENSORSHIP-ROADMAP.md` — roadmap;
 `docs/CENSORSHIP-PATTERNS.md` — паттерны обхода (с живыми доказательствами);
-`TECHDEBT.md` — бэклог. При изменении поведения обновлять соответствующий документ.
+`docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…008;
+`TECHDEBT.md` — бэклог. При изменении поведения обновлять соответствующий документ
+(новый протокол/транспорт — ADR + VPN-PROTOCOLS + README + AGENTS).
 
 ## 9. Роли
 
