@@ -383,6 +383,76 @@ def gateway_status():
         )
 
 
+@gateway_app.command("blockcheck")
+def gateway_blockcheck(
+    timeout: float = typer.Option(30.0, "--timeout", help="Таймаут внешних проб (сек)"),
+    json_output: bool = typer.Option(
+        False, "--json", help="Machine-readable вывод (experimental)"
+    ),
+):
+    """Диагностика «блок нашего IP» vs «глобальная деградация» vs «локальная
+    проблема»: локальная проба + внешний check-host.net + контрольный хост.
+    Offline/сбой API -> вердикт unknown, exit 0 (не ошибка)."""
+    import json as _json
+
+    from src.core.logger import console
+    from src.core.netcheck import run_blockcheck
+
+    verdict, evidence = run_blockcheck(timeout=timeout)
+    if json_output:
+        print(_json.dumps({"verdict": verdict, "evidence": evidence}, ensure_ascii=False))
+        raise typer.Exit(0)
+
+    tag = {
+        "ok": "success",
+        "ip_block_likely": "error",
+        "ru_segment_block_likely": "warning",
+        "global_degradation": "warning",
+        "local_problem": "error",
+        "unknown": "info",
+    }[verdict]
+    console.print(f"[{tag}][blockcheck] Вердикт: {verdict}[/{tag}]")
+
+    target = evidence.get("target") or {}
+    control = evidence.get("control") or {}
+    console.print("[info][blockcheck] Evidences:[/info]")
+    console.print(
+        f"  - local tcp {evidence.get('public_ip') or '?'}:443: "
+        f"{evidence.get('local_tcp_ok')} (vds-xray active: {evidence.get('unit_active')})"
+    )
+    if target:
+        console.print(
+            f"  - target (наш IP): RU ok {target.get('ru_ok')}/{target.get('ru_total')}, "
+            f"мир ok {target.get('world_ok')}/{target.get('world_total')}"
+        )
+    else:
+        console.print("  - target (наш IP): внешняя проба недоступна")
+    if control:
+        console.print(
+            f"  - control ({'93.184.216.34'}): RU ok {control.get('ru_ok')}/{control.get('ru_total')}, "
+            f"мир ok {control.get('world_ok')}/{control.get('world_total')}"
+        )
+    else:
+        console.print("  - control: внешняя проба недоступна")
+
+    advice = {
+        "ok": "IP-блок маловероятен; недоступность у клиента — блок "
+        "сегмента клиента, не наш IP (CDN-канал должен жить).",
+        "ip_block_likely": "Вероятен TSPU-блок нашего IP: используйте "
+        "CDN-канал/фронт или ротацию IP.",
+        "ru_segment_block_likely": "Блок на RU-сегменте: direct-каналы под "
+        "вопросом, CDN должен жить.",
+        "global_degradation": "Внешний сервис/мир деградировал — не "
+        "различимо с блоком; повторите позже.",
+        "local_problem": "Сервис жив извне, локально нет: проверьте юнит/"
+        "порт (`vds xray status`).",
+        "unknown": "Недостаточно данных (API недоступен/offline); вердикт "
+        "не вынесен.",
+    }[verdict]
+    console.print(f"[info][blockcheck] Рекомендация:[/info] {advice}")
+    raise typer.Exit(0)
+
+
 @gateway_app.command("links")
 def gateway_links(
     protocol: str = typer.Option(
@@ -541,17 +611,66 @@ def xray_add_cdn(
 @xray_app.command("add-cdn-client")
 def xray_add_cdn_client(
     name: str = typer.Argument(..., help="Имя нового CDN-клиента"),
+    front: str = typer.Option(
+        None, "--front", help="Фронт пула для host/sni ссылки (по умолчанию основной домен CDN)"
+    ),
 ):
     """Добавить CDN-клиента и показать share-link (vless за Cloudflare)"""
     from src.core.logger import console
     from src.xray.cdn import CdnError, add_cdn_client
 
     try:
-        result = add_cdn_client(name)
+        result = add_cdn_client(name, front=front)
     except (StoreError, CdnError) as exc:
         console.print(f"[error][xray-cdn] {exc}[/error]")
         raise typer.Exit(1)
     raise typer.Exit(0 if result else 1)
+
+
+@xray_app.command("add-cdn-front")
+def xray_add_cdn_front(
+    domain: str = typer.Argument(..., help="Домен фронта с LE-сертификатом (`vds acme issue --domain <домен>`)"),
+    apply: bool = typer.Option(False, "--apply", help="Применить (по умолчанию dry-run)"),
+):
+    """Добавить фронт в пул CDN (сертификат в CDN-инблэнд, SPEC WP-2)"""
+    from src.xray.cdn import add_cdn_front
+    raise typer.Exit(add_cdn_front(domain, apply=apply))
+
+
+@xray_app.command("remove-cdn-front")
+def xray_remove_cdn_front(
+    domain: str = typer.Argument(..., help="Домен фронта"),
+    apply: bool = typer.Option(False, "--apply", help="Применить удаление (по умолчанию dry-run)"),
+):
+    """Снять фронт из пула CDN (LE-сертификат certbot не удаляется)"""
+    from src.xray.cdn import remove_cdn_front
+    raise typer.Exit(remove_cdn_front(domain, apply=apply))
+
+
+@xray_app.command("list-cdn-fronts")
+def xray_list_cdn_fronts():
+    """Фронты пула CDN: домен, LE-файлы, срок сертификата, DNS-чек"""
+    from src.core.logger import console
+    from src.xray.cdn import list_fronts
+
+    fronts = list_fronts()
+    if not fronts:
+        console.print(
+            "[warning][xray-cdn] CDN не установлен — пул фронтов пуст "
+            "(`vds xray add-cdn --domain <домен>`).[/warning]"
+        )
+        raise typer.Exit(1)
+    for front in fronts:
+        label = "основной" if front["main"] else "фронт"
+        days = front["cert_days_left"]
+        days_info = str(days) if days is not None else "?"
+        console.print(
+            f"[info][xray-cdn] {front['domain']} ({label}):[/info] "
+            f"LE={'есть' if front['cert_files_ok'] else 'нет'}, "
+            f"осталось {days_info} дн., "
+            f"DNS={'ок' if front['dns_ok'] else 'не подтверждён'}"
+        )
+    raise typer.Exit(0)
 
 
 @xray_app.command("remove-cdn-client")
@@ -585,10 +704,59 @@ def xray_remove_cdn(
 @hysteria2_app.command("install")
 def hysteria2_install(
     port: int = typer.Option(443, "--port", help="UDP-порт QUIC"),
+    masquerade_url: str = typer.Option(
+        None,
+        "--masquerade-url",
+        help="Сайт-маскировка при зондировании (по умолчанию https://download.microsoft.com/)",
+    ),
 ):
     """Установить Hysteria2 (QUIC, UDP 443, self-signed без домена)"""
     from src.hysteria2.install import run_install
-    raise typer.Exit(run_install(port=port))
+    raise typer.Exit(run_install(port=port, masquerade_url=masquerade_url))
+
+
+@hysteria2_app.command("add-hop-ports")
+def hysteria2_add_hop_ports(
+    port_range: str = typer.Argument(..., help="Диапазон UDP-портов, напр. 20000-20500 (<=1000 портов)"),
+    apply: bool = typer.Option(False, "--apply", help="Применить (по умолчанию dry-run)"),
+):
+    """Port hopping: REDIRECT диапазона на udp/443 (цепочка VDS_HY2_HOP, ADR-008)"""
+    from src.hysteria2.hop import add_hop_ports
+    raise typer.Exit(add_hop_ports(port_range, apply=apply))
+
+
+@hysteria2_app.command("remove-hop-ports")
+def hysteria2_remove_hop_ports(
+    apply: bool = typer.Option(False, "--apply", help="Применить удаление (по умолчанию dry-run)"),
+):
+    """Снять port hopping (цепочка, UFW, юнит; живой udp/443 не трогается)"""
+    from src.hysteria2.hop import remove_hop_ports
+    raise typer.Exit(remove_hop_ports(apply=apply))
+
+
+@hysteria2_app.command("add-obfs")
+def hysteria2_add_obfs(
+    port: int = typer.Option(51826, "--port", help="UDP-порт obfs-инстанса salamander"),
+):
+    """Запустить obfs-инстанс (salamander) параллельно с основным udp/443"""
+    from src.hysteria2.obfs import add_obfs
+    raise typer.Exit(add_obfs(port=port))
+
+
+@hysteria2_app.command("remove-obfs")
+def hysteria2_remove_obfs(
+    apply: bool = typer.Option(False, "--apply", help="Применить удаление (по умолчанию dry-run)"),
+):
+    """Снять obfs-инстанс (юнит, конфиг, state; основной udp/443 не трогается)"""
+    from src.hysteria2.obfs import remove_obfs
+    raise typer.Exit(remove_obfs(apply=apply))
+
+
+@hysteria2_app.command("rotate-obfs")
+def hysteria2_rotate_obfs():
+    """Ротация obfs-пароля (тот же порт, рестарт; клиентам — ре-импорт ссылки)"""
+    from src.hysteria2.obfs import rotate_obfs
+    raise typer.Exit(rotate_obfs())
 
 
 @hysteria2_app.command("add-client")

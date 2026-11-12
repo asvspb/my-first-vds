@@ -126,6 +126,63 @@ QUIC (UDP:443); TLS-сертификат через ACME (Let's Encrypt) или 
 (притворяться обычным сайтом при зондировании). Требуются настройки `sysctl`
 (буферы). Клиентская ссылка: `hysteria2://<password>@<ip>:443/?sni=<домен>`.
 
+### 2.3.1. Port hopping (SPEC-20261112 WP-1, ADR-008)
+
+Ответ на порто-специфичный шейпинг UDP: клиент прыгает по диапазону портов,
+сервер редиректит весь диапазон на слушающий udp/443 через именованную цепочку
+nat-таблицы `VDS_HY2_HOP` (REDIRECT + jump из PREROUTING; nat срабатывает до
+UFW-фильтрации, поверх — одно UFW-правило на диапазон). Персистентность после
+ребута — oneshot-юнит `vds-hysteria2-hop.service` с идемпотентным apply-скриптом
+`/usr/local/sbin/vds-hy2-hop-apply.sh` (`-C`-проверки перед `-A`). Живой
+udp/443 не прерывается: правило только добавляет путь. Диапазон — явный
+аргумент, ширина ≤ 1000 портов, всегда в state (`hop_ports`) и виден в status.
+
+```bash
+vds hysteria2 add-hop-ports 20000-20500 [--apply]   # dry-run по умолчанию
+vds hysteria2 remove-hop-ports [--apply]
+```
+
+Клиент получает `mport=20000-20500` в share-link (стандартный параметр
+hysteria2/sing-box: `ports: "20000-20500"` в sing-box-конфиге):
+`hysteria2://<password>@<ip>:443/?sni=<ip>&insecure=1&mport=20000-20500#name`.
+
+### 2.3.2. Obfs salamander (SPEC-20261112 WP-1, REQ FR-1..5)
+
+Ответ на «голый QUIC — самый заметный фингерпринт»: параллельный инстанс
+hysteria2 на отдельном UDP-порту (по умолчанию 51826) с обфускацией
+salamander. Собственный конфиг `/etc/hysteria/obfs.yaml` (0600) и юнит
+`vds-hysteria2-obfs.service`; auth-пароль — тот же общий пароль основного
+инстанса (один секрет на транспорт), obfs-пароль — отдельный генерируемый.
+Основной udp/443 не трогается вовсе — soft rollout по построению. Ротация
+obfs-пароля — на том же порту с кратким разрывом ~5 с (девиация FR-5, SPEC
+§3.6); смена порта = `remove-obfs` + `add-obfs --port N`.
+
+```bash
+vds hysteria2 add-obfs [--port 51826]   # установить obfs-инстанс
+vds hysteria2 rotate-obfs               # новый obfs-пароль + рестарт
+vds hysteria2 remove-obfs [--apply]     # dry-run по умолчанию
+```
+
+Ссылка obfs-клиента (её печатает `add-client` второй строкой):
+`hysteria2://<password>@<ip>:51826/?sni=<ip>&obfs=salamander&obfs-password=<obfs>&insecure=1#name`.
+
+### 2.3.3. TLS/ACME fallback-флоу и masquerade (фактическое состояние)
+
+Код ACME — SPEC-20261109/ADR-004, нового кода в WP-1 нет; фактический флоу:
+
+1. `vds acme issue --domain <домен> --email <email>` — LE-сертификат
+   (HTTP-01) + deploy-hook на продление.
+2. `vds hysteria2 apply-cert --apply` — подмена self-signed на LE (бэкап
+   `.bak-pre-le`), рестарт.
+3. `vds hysteria2 add-client NAME` — ссылка БЕЗ `insecure=1`, sni=домен.
+4. `vds hysteria2 apply-cert --restore` — откат к self-signed; старые
+   insecure-ссылки снова валидны.
+
+Без домена/ACME — self-signed (CN=<ip>, 10 лет) и `insecure=1` в ссылках.
+Masquerade — `type: proxy` на `https://download.microsoft.com/` (зондирование
+видит настоящий сайт); URL конфигурируется флагом
+`vds hysteria2 install --masquerade-url <URL>`.
+
 ---
 
 ## 3. План добавления в VDS Orchestrator
@@ -155,10 +212,15 @@ vds xray add-client NAME            # профиль + share-link vless://...
 vds xray status                     # юнит, xray -test, порт TCP 443, journal (маскируется)
 vds xray remove [--apply]           # удаление: юнит, конфиг, бинарь+geodata, клиенты
 
-vds hysteria2 install               # бинарь, self-signed TLS (CN=<ip>, 10 лет), masquerade, BBR
+vds hysteria2 install [--masquerade-url URL]   # бинарь, self-signed TLS, masquerade, BBR
 vds hysteria2 add-client NAME       # пароль + share-link hysteria2://...?insecure=1
 vds hysteria2 status                # юнит, UDP 443, срок сертификата, journal
 vds hysteria2 remove [--apply]      # удаление (sysctl-тюнинг не откатывается — ADR-002)
+vds hysteria2 add-hop-ports 20000-20500 [--apply]  # port hopping (ADR-008)
+vds hysteria2 remove-hop-ports [--apply]
+vds hysteria2 add-obfs [--port 51826]              # obfs salamander (WP-1)
+vds hysteria2 remove-obfs [--apply]
+vds hysteria2 rotate-obfs
 ```
 
 Изначальный план (частично выполнен, оставлен для контекста фаз 3+):

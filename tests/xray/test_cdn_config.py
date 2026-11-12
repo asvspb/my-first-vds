@@ -218,6 +218,56 @@ class TestDeterminism:
         json.loads(render_config(_cdn_params()))
 
 
+FRONT_1_CERT = "/etc/letsencrypt/live/cdn1.example.invalid/fullchain.pem"
+FRONT_1_KEY = "/etc/letsencrypt/live/cdn1.example.invalid/privkey.pem"
+FRONT_2_CERT = "/etc/letsencrypt/live/cdn2.example.invalid/fullchain.pem"
+FRONT_2_KEY = "/etc/letsencrypt/live/cdn2.example.invalid/privkey.pem"
+
+
+class TestCdnExtraCerts:
+    """Пул фронтов (SPEC-20261112 WP-2): multi-cert CDN-инблэнд; без extra —
+    рендер байт-в-байт прежний (golden-регресс)."""
+
+    def test_two_fronts_three_certificates_deterministic_order(self) -> None:
+        parsed = json.loads(
+            render_config(
+                _cdn_params(
+                    cdn_extra_certs=[
+                        (FRONT_1_CERT, FRONT_1_KEY),
+                        (FRONT_2_CERT, FRONT_2_KEY),
+                    ]
+                )
+            )
+        )
+        certs = parsed["inbounds"][1]["streamSettings"]["tlsSettings"]["certificates"]
+        assert certs == [
+            {"certificateFile": CDN_CERT, "keyFile": CDN_KEY},
+            {"certificateFile": FRONT_1_CERT, "keyFile": FRONT_1_KEY},
+            {"certificateFile": FRONT_2_CERT, "keyFile": FRONT_2_KEY},
+        ]
+
+    def test_without_extra_byte_identical_to_legacy(self) -> None:
+        assert (
+            render_config(_cdn_params())
+            == render_config(_cdn_params(cdn_extra_certs=[]))
+        )
+        parsed = json.loads(render_config(_cdn_params()))
+        certs = parsed["inbounds"][1]["streamSettings"]["tlsSettings"]["certificates"]
+        assert certs == [{"certificateFile": CDN_CERT, "keyFile": CDN_KEY}]
+
+    def test_default_params_no_extra(self) -> None:
+        assert XrayConfigParams().cdn_extra_certs == []
+
+    def test_extra_certs_do_not_touch_reality(self) -> None:
+        without = json.loads(render_config(_params()))
+        with_extra = json.loads(
+            render_config(
+                _cdn_params(cdn_extra_certs=[(FRONT_1_CERT, FRONT_1_KEY)])
+            )
+        )
+        assert with_extra["inbounds"][0] == without["inbounds"][0]
+
+
 class TestCdnPathsConstants:
     def test_defaults(self) -> None:
         assert CDN_ORIGIN_PORT_DEFAULT == 2053

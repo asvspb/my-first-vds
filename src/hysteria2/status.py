@@ -15,14 +15,21 @@ from src.core.shell import run_list
 from src.gateway.paths import (
     HYSTERIA2_CERT_PATH,
     HYSTERIA2_CONFIG_PATH,
+    HYSTERIA2_HOP_CHAIN,
+    HYSTERIA2_OBFS_CONFIG_PATH,
+    HYSTERIA2_OBFS_UNIT,
     HYSTERIA2_UNIT,
 )
+from src.core.units import unit_active
 from src.gateway.store import StoreError, load_state
 from src.hysteria2.install import HYSTERIA2_BIN_PATH, is_service_active
 
 UNIT_FILE = Path("/etc/systemd/system") / HYSTERIA2_UNIT
 
-_PASSWORD_YAML_RE = re.compile(r'^(\s*password:\s*"?)[A-Za-z0-9]+("?\s*)$', re.M)
+_PASSWORD_YAML_RE = re.compile(r'^(\s*password:\s*"?)[A-Za-z0-9_-]+("?\s*)$', re.M)
+# Значение password-поля (для извлечения секретов из YAML-дампов).
+# [A-Za-z0-9_-]: пароли могут содержать _ и - (фикстуры FIXTURE_PW_*, gen_password).
+_PASSWORD_VALUE_RE = re.compile(r'^\s*password:\s*"?([A-Za-z0-9_-]+)"?\s*$', re.M)
 _OPENSSL_DATE_FMT = "%b %d %H:%M:%S %Y %Z"
 
 
@@ -36,21 +43,36 @@ def _mask_secrets(text: str, secrets: Iterable[str]) -> str:
 
 
 def _known_secrets() -> list[str]:
-    """Auth-пароли для маскирования (status не должен падать на битых файлах)."""
+    """Auth/obfs-пароли для маскирования (status не должен падать на битых файлах)."""
     values: list[str] = []
     try:
-        meta = load_state().protocols.get("hysteria2", {})
+        state = load_state()
+    except StoreError:
+        state = None
+    if state is not None:
+        meta = state.protocols.get("hysteria2", {})
         password = meta.get("auth_password")
         if password:
             values.append(password)
-    except StoreError:
-        pass
+        # Obfs-пароль (SPEC-20261112 WP-1) — маскируется наравне с auth.
+        obfs_password = (state.protocols.get("hysteria2-obfs") or {}).get(
+            "obfs_password"
+        )
+        if obfs_password:
+            values.append(str(obfs_password))
     if HYSTERIA2_CONFIG_PATH.is_file():
         try:
             text = HYSTERIA2_CONFIG_PATH.read_text(encoding="utf-8")
             match = re.search(r'^\s*password:\s*"?([A-Za-z0-9]+)"?\s*$', text, re.M)
             if match:
                 values.append(match.group(1))
+        except OSError:
+            pass
+    # obfs.yaml содержит два password-поля (auth + obfs) — regex ловит оба.
+    if HYSTERIA2_OBFS_CONFIG_PATH.is_file():
+        try:
+            text = HYSTERIA2_OBFS_CONFIG_PATH.read_text(encoding="utf-8")
+            values.extend(_PASSWORD_VALUE_RE.findall(text))
         except OSError:
             pass
     return [v for v in values if v]
@@ -105,13 +127,39 @@ def collect_status() -> dict:
     client_names: list[str] = []
     acme_domain = ""
     state_error: str | None = None
+    hop_ports: str | None = None
+    obfs_installed = False
+    obfs_port: int | None = None
+    obfs_active = False
     try:
         state = load_state()
         client_names = [c.name for c in state.clients if c.protocol == "hysteria2"]
         acme_meta = state.protocols.get("acme") or {}
         acme_domain = str(acme_meta.get("domain") or "")
+        hop_ports = (state.protocols.get("hysteria2") or {}).get("hop_ports")
+        obfs_meta = state.protocols.get("hysteria2-obfs") or {}
+        obfs_installed = bool(obfs_meta.get("installed"))
+        obfs_port = int(obfs_meta["port"]) if obfs_meta.get("port") else None
     except StoreError as exc:
         state_error = str(exc)
+    # Наличие цепочки/правила hopping — единственная сетевая проба статуса
+    # (читающий -C; сбой iptables = «правила нет», консервативно).
+    hop_rule_present = False
+    if hop_ports:
+        try:
+            hop_start, hop_end = str(hop_ports).split("-", 1)
+            hop_rule_present = run_list(
+                [
+                    "iptables", "-t", "nat", "-C", HYSTERIA2_HOP_CHAIN,
+                    "-p", "udp", "--dport", f"{hop_start}:{hop_end}",
+                    "-j", "REDIRECT", "--to-ports", "443",
+                ],
+                timeout=5,
+            ).ok
+        except ValueError:
+            hop_rule_present = False
+    if obfs_installed:
+        obfs_active = unit_active(HYSTERIA2_OBFS_UNIT)
     # E10: домен выдан (LE в state), но у Hysteria2 всё ещё self-signed —
     # смешанное состояние: новые ссылки без insecure=1 не проходят валидацию.
     domain_mismatch = bool(acme_domain) and cert_type is not None and cert_type != "le"
@@ -128,6 +176,18 @@ def collect_status() -> dict:
         "domain_mismatch": domain_mismatch,
         "clients": client_names,
         "state_error": state_error,
+        "hop": {
+            "ports": hop_ports,
+            "chain": HYSTERIA2_HOP_CHAIN,
+            "rule_present": hop_rule_present,
+        },
+        "obfs": {
+            "installed": obfs_installed,
+            "unit": HYSTERIA2_OBFS_UNIT,
+            "port": obfs_port,
+            "unit_active": obfs_active,
+            "config_path": str(HYSTERIA2_OBFS_CONFIG_PATH),
+        },
     }
 
 
@@ -181,6 +241,31 @@ def run_status() -> int:
     else:
         console.print(
             f"[warning][hysteria2] Порт {info['port']}/udp не слушается.[/warning]"
+        )
+
+    # Port hopping (SPEC-20261112 WP-1): диапазон + наличие цепочки.
+    hop = info.get("hop") or {}
+    if hop.get("ports"):
+        chain_flag = (
+            "[success]цепочка активна[/success]"
+            if hop.get("rule_present")
+            else "[error]правила нет в iptables[/error]"
+        )
+        console.print(
+            f"[info][hysteria2] Port hopping:[/info] {hop['ports']}/udp -> 443, "
+            f"цепочка {hop['chain']}, {chain_flag}"
+        )
+
+    # Obfs-инстанс (SPEC-20261112 WP-1): юнит, порт; пароль маскируется.
+    obfs = info.get("obfs") or {}
+    if obfs.get("installed"):
+        unit_flag = (
+            "[success]active[/success]" if obfs.get("unit_active") else "[error]inactive[/error]"
+        )
+        console.print(
+            f"[info][hysteria2] Obfs (salamander):[/info] udp/{obfs.get('port')}, "
+            f"юнит {obfs.get('unit')}: {unit_flag}. Ротация: "
+            "`vds hysteria2 rotate-obfs`."
         )
 
     if info["state_error"]:

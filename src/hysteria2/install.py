@@ -15,6 +15,7 @@ auth-пароль переиспользуются и НИКОГДА не пер
 моками; реальная установка выполняется только на [VDS].
 """
 
+import dataclasses
 import hashlib
 import os
 import platform
@@ -225,16 +226,18 @@ def _ensure_password(state_path: str | None) -> str:
     return gen_password()
 
 
-def _write_config(password: str, port: int) -> None:
+def _write_config(password: str, port: int, masquerade_url: str | None = None) -> None:
     """Срендерить и атомарно записать config.yaml (0600)."""
-    rendered = render_config(
-        Hysteria2ConfigParams(
-            password=password,
-            port=port,
-            cert_path=str(HYSTERIA2_CERT_PATH),
-            key_path=str(HYSTERIA2_KEY_PATH),
-        )
+    params = Hysteria2ConfigParams(
+        password=password,
+        port=port,
+        cert_path=str(HYSTERIA2_CERT_PATH),
+        key_path=str(HYSTERIA2_KEY_PATH),
     )
+    if masquerade_url:
+        # Флаг --masquerade-url (SPEC-20261112 WP-1): маскировка конфигурируема.
+        params = dataclasses.replace(params, masquerade_url=masquerade_url)
+    rendered = render_config(params)
     HYSTERIA2_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not write_secret_atomic(str(HYSTERIA2_CONFIG_PATH), rendered, mode=0o600):
         raise InstallError(f"Не удалось записать {HYSTERIA2_CONFIG_PATH}.")
@@ -258,12 +261,17 @@ def _save_state_meta(
     save_state(state, state_path)
 
 
-def _install_locked(ip: str, port: int, state_path: str | None) -> int:
+def _install_locked(
+    ip: str,
+    port: int,
+    state_path: str | None,
+    masquerade_url: str | None = None,
+) -> int:
     try:
         _fetch_and_install_binary()
         _ensure_certificate(ip)
         password = _ensure_password(state_path)
-        _write_config(password, port)
+        _write_config(password, port, masquerade_url)
     except (InstallError, OSError) as exc:
         console.print(f"[error][hysteria2] {exc}[/error]")
         return 1
@@ -312,6 +320,7 @@ def _install_locked(ip: str, port: int, state_path: str | None) -> int:
 def run_install(
     port: int = HYSTERIA2_PORT,
     state_path: str | None = None,
+    masquerade_url: str | None = None,
 ) -> int:
     """Точка входа `vds hysteria2 install`. 0 — успех (в т.ч. «уже установлено»)."""
     if os.geteuid() != 0:
@@ -347,7 +356,7 @@ def run_install(
         return 1
 
     with FileLock(LOCK_FILE):
-        return _install_locked(ip, port, state_path)
+        return _install_locked(ip, port, state_path, masquerade_url)
 
 
 def is_service_active() -> bool:

@@ -110,6 +110,33 @@ class TestMasking:
         assert "FIXTURE_PW_Masked" not in masked
         assert masked.count("***") == 2
 
+    def test_known_secrets_include_obfs_password(self, env, monkeypatch) -> None:
+        """obfs-пароль из state и obfs.yaml маскируется наравне с auth (SPEC WP-1)."""
+        state = _load_state(env["state_path"])
+        state.protocols["hysteria2-obfs"] = {
+            "installed": True, "port": 51826, "obfs_password": "FIXTURE_PW_ObfState"
+        }
+        save_state(state, env["state_path"])
+        obfs_cfg = (
+            status_mod.HYSTERIA2_CONFIG_PATH.parent / "obfs.yaml"
+        )
+        obfs_cfg.write_text(
+            "auth:\n  type: password\n  password: FIXTURE_PW_ObfYaml\n"
+            "obfs:\n  type: salamander\n  password: FIXTURE_PW_ObfState\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(status_mod, "HYSTERIA2_OBFS_CONFIG_PATH", obfs_cfg)
+
+        secrets = status_mod._known_secrets()
+        assert "FIXTURE_PW_Masked" in secrets
+        assert "FIXTURE_PW_ObfState" in secrets
+        assert "FIXTURE_PW_ObfYaml" in secrets
+        masked = status_mod._mask_secrets(
+            "leak FIXTURE_PW_ObfState and FIXTURE_PW_ObfYaml", secrets
+        )
+        assert "FIXTURE_PW_ObfState" not in masked
+        assert "FIXTURE_PW_ObfYaml" not in masked
+
     def test_mask_secrets_masks_yaml_password_line(self) -> None:
         masked = status_mod._mask_secrets(
             'auth:\n  password: "FIXTURE_PW_Unknown"\n', ["FIXTURE_PW_Unknown"]

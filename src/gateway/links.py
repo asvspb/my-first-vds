@@ -122,12 +122,16 @@ def render_all_links(
     # CDN-транспорт (SPEC-20261110 WP-3): клиенты живут не в state.clients, а в
     # protocols["xray-cdn"]["clients"] ({name: uuid}); ссылка — реюз
     # render_cdn_share_link из config.py (формат WP-1, не дублируем).
+    # Пул фронтов (SPEC-20261112 WP-2): по одной ссылке на фронт на клиента —
+    # основная (host=основной домен, прежний формат имени) + по строке на
+    # каждый дополнительный фронт (имя `name@front`).
     if protocol in (None, "xray-cdn"):
         cdn_meta = state.protocols.get("xray-cdn") or {}
         if cdn_meta.get("installed"):
             cdn_domain = str(cdn_meta.get("domain") or "")
             cdn_port = int(cdn_meta.get("port", 2053))
             cdn_path = str(cdn_meta.get("path", "/ws"))
+            fronts = sorted((cdn_meta.get("fronts") or {}).keys())
             clients_map = cdn_meta.get("clients") or {}
             if cdn_domain:
                 for name, client_uuid in clients_map.items():
@@ -143,4 +147,17 @@ def render_all_links(
                             ),
                         )
                     )
+                    for front in fronts:
+                        if front == cdn_domain:
+                            continue
+                        result.append(
+                            (
+                                f"{name}@{front}",
+                                "xray-cdn",
+                                render_cdn_share_link(
+                                    str(client_uuid), front, cdn_port,
+                                    cdn_path, f"{name}@{front}",
+                                ),
+                            )
+                        )
     return result

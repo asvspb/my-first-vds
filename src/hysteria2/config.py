@@ -23,6 +23,8 @@ class Hysteria2ConfigParams:
     cert_path/key_path: пути self-signed сертификата (ADR-002).
     bandwidth_up/down: ограничения канала (формат hysteria: "<n> mbps").
     masquerade_url: сайт-маскировка для зондирования.
+    obfs_password: пароль obfs salamander (SPEC-20261112 WP-1); None —
+        блок `obfs:` не рендерится (основной инстанс не меняется).
     """
 
     password: str
@@ -32,6 +34,7 @@ class Hysteria2ConfigParams:
     bandwidth_up: str = BANDWIDTH_UP
     bandwidth_down: str = BANDWIDTH_DOWN
     masquerade_url: str = MASQUERADE_URL
+    obfs_password: str | None = None
 
 
 def render_config(params: Hysteria2ConfigParams) -> str:
@@ -51,7 +54,17 @@ def render_config(params: Hysteria2ConfigParams) -> str:
         "  type: password\n"
         f'  password: "{params.password}"\n'
         "\n"
-        "bandwidth:\n"
+        + (
+            # Блок obfs — только при заданном пароле (SPEC-20261112 WP-1);
+            # без поля рендер байт-в-байт прежний (золотой тест).
+            "obfs:\n"
+            "  type: salamander\n"
+            f'  password: "{params.obfs_password}"\n'
+            "\n"
+            if params.obfs_password
+            else ""
+        )
+        + "bandwidth:\n"
         f"  up: {params.bandwidth_up}\n"
         f"  down: {params.bandwidth_down}\n"
         "\n"

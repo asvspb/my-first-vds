@@ -275,6 +275,31 @@ def run_status() -> int:
             "`vds xray add-cdn --domain <cdn-домен>`.[/warning]"
         )
 
+    # Пул CDN-фронтов (SPEC-20261112 WP-2): строка на фронт.
+    if cdn_meta and cdn_meta.get("installed"):
+        from src.xray.cdn import list_fronts
+
+        fronts = list_fronts()
+        if len(fronts) > 1 or (fronts and not fronts[0]["main"]):
+            console.print(
+                f"[info][xray] Пул CDN-фронтов ({len(fronts)}):[/info]"
+            )
+            for front in fronts:
+                label = "основной" if front["main"] else "фронт"
+                files_flag = (
+                    "[success]LE есть[/success]"
+                    if front["cert_files_ok"]
+                    else "[error]LE-файлов нет[/error]"
+                )
+                dns_flag = (
+                    "[success]DNS ок[/success]" if front["dns_ok"] else "[warning]DNS не подтверждён[/warning]"
+                )
+                days = front["cert_days_left"]
+                days_info = f", осталось {days} дн." if days is not None else ""
+                console.print(
+                    f"  - {front['domain']} ({label}): {files_flag}{days_info}, {dns_flag}"
+                )
+
     journal = run_list(
         ["journalctl", "-u", XRAY_UNIT, "-n", "20", "--no-pager", "-p", "warning"],
         timeout=10,

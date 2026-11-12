@@ -77,6 +77,10 @@ class XrayConfigParams:
     cdn_client_ids: list[str] = field(default_factory=list)
     cdn_cert_path: str = ""
     cdn_key_path: str = ""
+    # Пул CDN-фронтов (SPEC-20261112 WP-2): дополнительные LE-сертификаты
+    # (cert_path, key_path) в certificates CDN-инблэнда — Xray выбирает
+    # сертификат по SNI. Без extra — рендер байт-в-байт прежний (golden).
+    cdn_extra_certs: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _xhttp_inbound(params: XrayConfigParams) -> dict:
@@ -111,7 +115,19 @@ def _xhttp_inbound(params: XrayConfigParams) -> dict:
 def _cdn_inbound(params: XrayConfigParams) -> dict:
     """Инблэнд vless+ws+tls за Cloudflare (SPEC-20261110, ADR-006): TCP 2053,
     ws path /cdnws, TLS на LE-сертификате cdn-домена. Все интерфейсы
-    (CF→origin соединяется извне)."""
+    (CF→origin соединяется извне). Пул фронтов (SPEC-20261112 WP-2): в
+    certificates попадают основной сертификат + cdn_extra_certs (порядок
+    детерминирован; Xray выбирает сертификат по SNI клиента)."""
+    certificates = [
+        {
+            "certificateFile": params.cdn_cert_path,
+            "keyFile": params.cdn_key_path,
+        }
+    ]
+    certificates.extend(
+        {"certificateFile": cert_path, "keyFile": key_path}
+        for cert_path, key_path in params.cdn_extra_certs
+    )
     return {
         "port": params.cdn_port,
         "protocol": "vless",
@@ -126,14 +142,7 @@ def _cdn_inbound(params: XrayConfigParams) -> dict:
                 "path": params.cdn_ws_path,
                 "headers": {"Host": params.cdn_domain},
             },
-            "tlsSettings": {
-                "certificates": [
-                    {
-                        "certificateFile": params.cdn_cert_path,
-                        "keyFile": params.cdn_key_path,
-                    }
-                ]
-            },
+            "tlsSettings": {"certificates": certificates},
         },
     }
 

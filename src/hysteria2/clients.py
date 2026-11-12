@@ -40,6 +40,8 @@ def render_share_link(
     name: str,
     port: int = 443,
     insecure: bool = True,
+    mport: str | None = None,
+    obfs_password: str | None = None,
 ) -> str:
     """Клиентская ссылка Hysteria2 (SPEC §3, VPN-PROTOCOLS §2.3).
 
@@ -50,12 +52,22 @@ def render_share_link(
     ссылка рендерится без `insecure=1`, sni=домен:
       hysteria2://<password>@<домен>:443/?sni=<домен>#<name>
 
-    Пароль — буквенно-цифровой (gen_password), URL-экранирование не требуется.
+    Port hopping (SPEC-20261112 WP-1): mport='<start>-<end>' добавляет
+    `&mport=<range>` (стандартный параметр hysteria2/sing-box).
+    obfs_password (SPEC-20261112 WP-1): ссылка obfs-инстанса salamander —
+      hysteria2://<password>@<host>:<port>/?sni=<host>&obfs=salamander
+      &obfs-password=<obfs>[&insecure=1][&mport=..]#<name>
+
+    Пароли — буквенно-цифровые (gen_password), URL-экранирование не требуется.
     """
     insecure_part = "&insecure=1" if insecure else ""
+    mport_part = f"&mport={mport}" if mport else ""
+    obfs_part = (
+        f"&obfs=salamander&obfs-password={obfs_password}" if obfs_password else ""
+    )
     return (
         f"hysteria2://{password}@{host}:{port}/"
-        f"?sni={host}{insecure_part}#{quote(name)}"
+        f"?sni={host}{obfs_part}{insecure_part}{mport_part}#{quote(name)}"
     )
 
 
@@ -98,6 +110,8 @@ def add_client(name: str, state_path: str | None = None) -> dict:
     else:
         host = public_ip() or meta.get("cert_cn") or "SERVER_IP"
         insecure = True
+    # Port hopping (SPEC-20261112 WP-1): mport в ссылку iff hop_ports в state.
+    hop_ports = str(meta.get("hop_ports") or "") or None
     profile = ClientProfile(
         name=name,
         protocol="hysteria2",
@@ -110,11 +124,29 @@ def add_client(name: str, state_path: str | None = None) -> dict:
     save_state(new_state, state_path)
 
     share_link = render_share_link(
-        host=host, password=password, name=name, port=port, insecure=insecure
+        host=host, password=password, name=name, port=port, insecure=insecure,
+        mport=hop_ports,
     )
     console.print(f"[success][hysteria2] Клиент '{name}' добавлен.[/success]")
     console.print(f"[change]{share_link}[/change]")
-    return {
+
+    # Obfs-инстанс установлен (SPEC-20261112 WP-1) — печатаем и obfs-ссылку:
+    # тот же auth-пароль (один секрет на транспорт), отдельный obfs-пароль.
+    obfs_meta = state.protocols.get("hysteria2-obfs") or {}
+    obfs_link: str | None = None
+    if obfs_meta.get("installed") and obfs_meta.get("obfs_password"):
+        obfs_link = render_share_link(
+            host=host,
+            password=password,
+            name=name,
+            port=int(obfs_meta.get("port", 51826)),
+            insecure=insecure,
+            mport=hop_ports,
+            obfs_password=str(obfs_meta["obfs_password"]),
+        )
+        console.print(f"[change]{obfs_link}[/change]")
+
+    result = {
         "name": name,
         "protocol": "hysteria2",
         "port": port,
@@ -122,6 +154,9 @@ def add_client(name: str, state_path: str | None = None) -> dict:
         "sni": host,
         "share_link": share_link,
     }
+    if obfs_link:
+        result["obfs_share_link"] = obfs_link
+    return result
 
 
 def remove_client(name: str, state_path: str | None = None) -> int:

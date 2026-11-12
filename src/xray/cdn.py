@@ -244,13 +244,19 @@ def _xhttp_fields(current: dict) -> dict | None:
 
 
 def _render_with_cdn(
-    current: dict, params: CdnParams, cdn_client_ids: list[str]
+    current: dict,
+    params: CdnParams,
+    cdn_client_ids: list[str],
+    extra_certs: list[tuple[str, str]] | None = None,
 ) -> str:
     """Полный рендер: Reality+XHTTP из текущего конфига + CDN-инблэнд (WP-1).
 
     XHTTP-часть (инблэнд 8443 + клиенты) переносится из ТЕКУЩЕГО config.json
     — без этого рендер молча удалял бы XHTTP-инблэнд из живого конфига
     (паттерн переноса Reality-полей).
+
+    extra_certs (SPEC-20261112 WP-2): сертификаты фронтов пула — попадают в
+    certificates CDN-инблэнда после основного (Xray выбирает по SNI).
     """
     reality = _reality_fields(current)
     xhttp = _xhttp_fields(current)
@@ -268,6 +274,7 @@ def _render_with_cdn(
         cdn_client_ids=cdn_client_ids,
         cdn_cert_path=str(cert_path),
         cdn_key_path=str(key_path),
+        cdn_extra_certs=list(extra_certs or []),
         **(
             {
                 "xhttp_enabled": True,
@@ -283,6 +290,327 @@ def _render_with_cdn(
         ),
     )
     return render_config(render_params)
+
+
+# ---------------------------------------------------------------------------
+# Пул CDN-фронтов (SPEC-20261112 WP-2, ADR-006 «Дополнение»).
+# Фронт = DNS-запись с orange cloud; на origin каждый фронт должен быть
+# покрыт собственным LE-сертификатом (CF Full strict валидирует по SNI).
+# ---------------------------------------------------------------------------
+
+FRONTS_BACKUP_SUFFIX = ".bak-fronts"
+
+# Константный контрольный формат дат openssl (как в hysteria2.status).
+_OPENSSL_DATE_FMT = "%b %d %H:%M:%S %Y %Z"
+
+
+def _fronts_from_meta(meta: dict) -> dict[str, dict]:
+    """Реестр фронтов из state: {domain: {cert_path, key_path}}."""
+    fronts = meta.get("fronts")
+    return dict(fronts) if isinstance(fronts, dict) else {}
+
+
+def _fronts_certs(fronts: dict[str, dict]) -> list[tuple[str, str]]:
+    """Сертификаты фронтов в детерминированном порядке (по домену)."""
+    return [
+        (str(fronts[domain]["cert_path"]), str(fronts[domain]["key_path"]))
+        for domain in sorted(fronts)
+        if fronts[domain].get("cert_path") and fronts[domain].get("key_path")
+    ]
+
+
+def _front_dns_ok(domain: str) -> bool:
+    """DNS фронта резолвится в CF-диапазоны или публичный IP (grey-фаза)."""
+    ips = resolve_ips(domain)
+    if not ips:
+        return False
+    server_ip = public_ip() or ""
+    return any(is_cloudflare_ip(ip) or ip == server_ip for ip in ips)
+
+
+def _cert_days_left(cert_path: Path) -> int | None:
+    """Остаток дней LE-сертификата (openssl enddate); сбой — None."""
+    from datetime import datetime, timezone
+
+    result = run_list(
+        ["openssl", "x509", "-enddate", "-noout", "-in", str(cert_path)],
+        timeout=10,
+    )
+    if not result.ok:
+        return None
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("notAfter="):
+            try:
+                not_after = datetime.strptime(
+                    line.split("=", 1)[1].strip(), _OPENSSL_DATE_FMT
+                ).replace(tzinfo=timezone.utc)
+                return (not_after - datetime.now(timezone.utc)).days
+            except ValueError:
+                return None
+    return None
+
+
+def add_cdn_front(
+    domain: str,
+    apply: bool = False,
+    state_path: str | None = None,
+) -> int:
+    """Добавить фронт пула CDN (SPEC §4.3). 0 — успех (в т.ч. уже есть).
+
+    Поток: root -> CDN установлен -> LE fullchain/privkey <domain> существуют
+    (иначе отказ с подсказкой `vds acme issue` при grey) -> DNS домена в
+    CF-диапазонах или = public_ip -> план [сертификат в certificates
+    CDN-инблэнда, рестарт vds-xray, state.fronts[domain]] -> dry-run по
+    умолчанию; apply: бэкап -> перерендер -> xray -test гейт (fail: откат)
+    -> рестарт -> state. Идемпотентно.
+    """
+    if os.geteuid() != 0:
+        console.print("[error][xray-cdn] Требуется root (запустите через sudo).[/error]")
+        return 1
+
+    try:
+        meta, state = _cdn_meta(state_path)
+    except CdnError as exc:
+        console.print(f"[error][xray-cdn] {exc}[/error]")
+        return 1
+
+    if domain == meta.get("domain"):
+        console.print(
+            f"[success][xray-cdn] Фронт {domain} — основной домен CDN, его "
+            "сертификат уже в конфиге (идемпотентно).[/success]"
+        )
+        return 0
+
+    fronts = _fronts_from_meta(meta)
+    if domain in fronts:
+        console.print(
+            f"[success][xray-cdn] Фронт {domain} уже в пуле — изменений не "
+            "требуется (идемпотентно).[/success]"
+        )
+        return 0
+
+    cert_path, key_path = _cdn_cert_paths(domain)
+    missing = [str(p) for p in (cert_path, key_path) if not p.is_file()]
+    if missing:
+        console.print(
+            "[error][xray-cdn] Файлы LE-сертификата фронта не найдены: "
+            + ", ".join(missing)
+            + f" — сначала выполните `vds acme issue --domain {domain}` "
+            "(DNS-запись на этот момент должна быть grey/DNS-only).[/error]"
+        )
+        return 1
+    if not _front_dns_ok(domain):
+        console.print(
+            f"[error][xray-cdn] Домен {domain} не резолвится в Cloudflare "
+            "и не равен публичному IP сервера — исправьте DNS-запись "
+            "(grey-фаза допускает прямой A-рекорд).[/error]"
+        )
+        return 1
+
+    plan = [
+        f"сертификат {domain} в certificates CDN-инблэнда "
+        f"({cert_path} + {key_path})",
+        f"рестарт {XRAY_UNIT} (короткий downtime CDN-канала)",
+        f"state.protocols['{STATE_KEY}'].fronts['{domain}']",
+    ]
+    console.print(f"[warning][xray-cdn] План добавления фронта {domain} (dry-run):[/warning]")
+    for item in plan:
+        console.print(f"  - {item}")
+    if not apply:
+        console.print(
+            "[info]Это dry-run. Для применения: "
+            f"`vds xray add-cdn-front {domain} --apply`[/info]"
+        )
+        return 0
+
+    params = CdnParams(
+        domain=str(meta["domain"]),
+        port=int(meta.get("port", CDN_ORIGIN_PORT_DEFAULT)),
+        ws_path=str(meta.get("path", CDN_WS_PATH)),
+    )
+    extra_certs = _fronts_certs(fronts) + [(str(cert_path), str(key_path))]
+    backup_path = XRAY_CONFIG_PATH.with_name(
+        XRAY_CONFIG_PATH.name + FRONTS_BACKUP_SUFFIX
+    )
+    with FileLock(LOCK_FILE):
+        current = _read_config(XRAY_CONFIG_PATH)
+        rendered = _render_with_cdn(
+            current, params, list(meta.get("client_ids", [])), extra_certs
+        )
+        _backup_config(XRAY_CONFIG_PATH, backup_path)
+        if not write_secret_atomic(str(XRAY_CONFIG_PATH), rendered, mode=0o600):
+            console.print(
+                f"[error][xray-cdn] Не удалось записать {XRAY_CONFIG_PATH}.[/error]"
+            )
+            return 1
+        try:
+            _gate_and_restart(backup_path)
+        except CdnError as exc:
+            console.print(f"[error][xray-cdn] {exc}[/error]")
+            return 1
+        try:
+            state = load_state(state_path)
+            meta = state.protocols[STATE_KEY]
+            fronts = _fronts_from_meta(meta)
+            fronts[domain] = {
+                "cert_path": str(cert_path),
+                "key_path": str(key_path),
+            }
+            meta["fronts"] = fronts
+            state.protocols[STATE_KEY] = meta
+            save_state(state, state_path)
+        except (StoreError, OSError) as exc:
+            console.print(
+                f"[error][xray-cdn] Конфиг применён, но состояние не "
+                f"сохранено: {exc}[/error]"
+            )
+            return 1
+
+    console.print(
+        f"[change][xray-cdn] Фронт {domain} добавлен в пул: сертификат в "
+        f"CDN-инблэнде, {XRAY_UNIT} перезапущен. LE-сертификат продлевается "
+        "certbot.timer.[/change]"
+    )
+    return 0
+
+
+def remove_cdn_front(
+    domain: str,
+    apply: bool = False,
+    state_path: str | None = None,
+) -> int:
+    """Снять фронт из пула (вычитание сертификата + fronts.pop).
+
+    Dry-run по умолчанию; LE-сертификат certbot НЕ удаляем (пассивный).
+    Неизвестный фронт — exit 0 (идемпотентно).
+    """
+    if os.geteuid() != 0:
+        console.print("[error][xray-cdn] Требуется root (запустите через sudo).[/error]")
+        return 1
+
+    try:
+        meta, state = _cdn_meta(state_path)
+    except CdnError as exc:
+        console.print(f"[error][xray-cdn] {exc}[/error]")
+        return 1
+
+    if domain == meta.get("domain"):
+        console.print(
+            f"[error][xray-cdn] {domain} — основной домен CDN; снять его "
+            "можно только снятием всего CDN: `vds xray remove-cdn --apply`.[/error]"
+        )
+        return 1
+
+    fronts = _fronts_from_meta(meta)
+    if domain not in fronts:
+        console.print(
+            f"[info][xray-cdn] Фронта {domain} нет в пуле — нечего снимать.[/info]"
+        )
+        return 0
+
+    plan = [
+        f"сертификат {domain} из certificates CDN-инблэнда",
+        f"рестарт {XRAY_UNIT}",
+        f"state.protocols['{STATE_KEY}'].fronts.pop('{domain}')",
+        "(LE-сертификат certbot не удаляется — пассивный)",
+    ]
+    console.print(f"[warning][xray-cdn] План снятия фронта {domain} (dry-run):[/warning]")
+    for item in plan:
+        console.print(f"  - {item}")
+    if not apply:
+        console.print(
+            "[info]Это dry-run. Для применения: "
+            f"`vds xray remove-cdn-front {domain} --apply`[/info]"
+        )
+        return 0
+
+    params = CdnParams(
+        domain=str(meta["domain"]),
+        port=int(meta.get("port", CDN_ORIGIN_PORT_DEFAULT)),
+        ws_path=str(meta.get("path", CDN_WS_PATH)),
+    )
+    remaining = {d: fronts[d] for d in fronts if d != domain}
+    extra_certs = _fronts_certs(remaining)
+    backup_path = XRAY_CONFIG_PATH.with_name(
+        XRAY_CONFIG_PATH.name + FRONTS_BACKUP_SUFFIX
+    )
+    with FileLock(LOCK_FILE):
+        current = _read_config(XRAY_CONFIG_PATH)
+        rendered = _render_with_cdn(
+            current, params, list(meta.get("client_ids", [])), extra_certs
+        )
+        _backup_config(XRAY_CONFIG_PATH, backup_path)
+        if not write_secret_atomic(str(XRAY_CONFIG_PATH), rendered, mode=0o600):
+            console.print(
+                f"[error][xray-cdn] Не удалось записать {XRAY_CONFIG_PATH}.[/error]"
+            )
+            return 1
+        try:
+            _gate_and_restart(backup_path)
+        except CdnError as exc:
+            console.print(f"[error][xray-cdn] {exc}[/error]")
+            return 1
+        try:
+            state = load_state(state_path)
+            meta = state.protocols[STATE_KEY]
+            fronts = _fronts_from_meta(meta)
+            fronts.pop(domain, None)
+            meta["fronts"] = fronts
+            state.protocols[STATE_KEY] = meta
+            save_state(state, state_path)
+        except (StoreError, OSError) as exc:
+            console.print(
+                f"[error][xray-cdn] Конфиг применён, но состояние не "
+                f"сохранено: {exc}[/error]"
+            )
+            return 1
+
+    console.print(
+        f"[change][xray-cdn] Фронт {domain} снят из пула; остальные фронты и "
+        "основной домен работают.[/change]"
+    )
+    return 0
+
+
+def list_fronts(state_path: str | None = None) -> list[dict]:
+    """[{domain, cert_days_left, dns_ok}] — основной домен + фронты пула.
+
+    Для status и CLI; не бросает исключений (битый state — пустой список).
+    """
+    try:
+        meta, _state = _cdn_meta(state_path)
+    except (CdnError, StoreError):
+        return []
+    result: list[dict] = []
+    main_domain = str(meta.get("domain") or "")
+    if main_domain:
+        cert_path, _ = _cdn_cert_paths(main_domain)
+        result.append(
+            {
+                "domain": main_domain,
+                "main": True,
+                "cert_files_ok": cert_path.is_file(),
+                "cert_days_left": (
+                    _cert_days_left(cert_path) if cert_path.is_file() else None
+                ),
+                "dns_ok": _front_dns_ok(main_domain),
+            }
+        )
+    for domain in sorted(_fronts_from_meta(meta)):
+        cert_path, _ = _cdn_cert_paths(domain)
+        result.append(
+            {
+                "domain": domain,
+                "main": False,
+                "cert_files_ok": cert_path.is_file(),
+                "cert_days_left": (
+                    _cert_days_left(cert_path) if cert_path.is_file() else None
+                ),
+                "dns_ok": _front_dns_ok(domain),
+            }
+        )
+    return result
 
 
 def _backup_config(config_path: Path, backup_path: Path) -> bool:
@@ -409,7 +737,9 @@ def install_cdn(params: CdnParams, state_path: str | None = None) -> int:
         except CdnError as exc:
             console.print(f"[error][xray-cdn] {exc}[/error]")
             return 1
-        rendered = _render_with_cdn(current, params, cdn_client_ids)
+        rendered = _render_with_cdn(
+            current, params, cdn_client_ids, _fronts_certs(_fronts_from_meta(meta)) if meta else []
+        )
         _backup_config(XRAY_CONFIG_PATH, backup_path)
         if not write_secret_atomic(str(XRAY_CONFIG_PATH), rendered, mode=0o600):
             console.print(
@@ -472,11 +802,17 @@ def add_cdn(domain: str, port: int = CDN_ORIGIN_PORT_DEFAULT, state_path: str | 
     return install_cdn(CdnParams(domain=domain, port=port), state_path)
 
 
-def add_cdn_client(name: str, state_path: str | None = None) -> dict:
+def add_cdn_client(
+    name: str,
+    state_path: str | None = None,
+    front: str | None = None,
+) -> dict:
     """Добавить CDN-клиента: uuid -> config (бэкап -> гейт -> рестарт) -> state.
 
     Возвращает dict с share-link (render_cdn_share_link, WP-1). Дубликат
-    имени — CdnError до записи конфига.
+    имени — CdnError до записи конфига. front (SPEC-20261112 WP-2) — домен
+    фронта пула для host/sni ссылки (основной домен или fronts); None —
+    основной домен CDN.
     """
     if os.geteuid() != 0:
         raise CdnError("Требуется root (запустите через sudo).")
@@ -491,6 +827,18 @@ def add_cdn_client(name: str, state_path: str | None = None) -> dict:
         port=int(meta.get("port", CDN_ORIGIN_PORT_DEFAULT)),
         ws_path=str(meta.get("path", CDN_WS_PATH)),
     )
+    # Выбор фронта для ссылки (WP-2): main домен или один из fronts пула.
+    link_host = params.domain
+    if front is not None:
+        if front != params.domain and front not in _fronts_from_meta(meta):
+            raise CdnError(
+                f"Фронт {front} не найден в пуле (основной домен: "
+                f"{params.domain}; фронты: "
+                f"{', '.join(sorted(_fronts_from_meta(meta))) or 'нет'}). "
+                "Сначала `vds xray add-cdn-front " + front + "`."
+            )
+        link_host = front
+
     client_uuid = gen_uuid()
     cdn_client_ids = list(meta.get("client_ids", [])) + [client_uuid]
 
@@ -500,7 +848,9 @@ def add_cdn_client(name: str, state_path: str | None = None) -> dict:
     with FileLock(LOCK_FILE):
         # Чтение текущего конфига под лок (TOCTOU).
         current = _read_config(XRAY_CONFIG_PATH)
-        rendered = _render_with_cdn(current, params, cdn_client_ids)
+        rendered = _render_with_cdn(
+            current, params, cdn_client_ids, _fronts_certs(_fronts_from_meta(meta))
+        )
         _backup_config(XRAY_CONFIG_PATH, backup_path)
         if not write_secret_atomic(str(XRAY_CONFIG_PATH), rendered, mode=0o600):
             raise CdnError(f"Не удалось записать {XRAY_CONFIG_PATH}.")
@@ -522,7 +872,7 @@ def add_cdn_client(name: str, state_path: str | None = None) -> dict:
             ) from exc
 
     share_link = render_cdn_share_link(
-        client_uuid, params.domain, params.port, params.ws_path, name
+        client_uuid, link_host, params.port, params.ws_path, name
     )
     console.print(f"[success][xray-cdn] Клиент '{name}' добавлен (cdn).[/success]")
     console.print(f"[change]{share_link}[/change]")
@@ -530,6 +880,7 @@ def add_cdn_client(name: str, state_path: str | None = None) -> dict:
         "name": name,
         "transport": "cdn",
         "domain": params.domain,
+        "front": link_host,
         "port": params.port,
         "uuid": client_uuid,
         "share_link": share_link,
@@ -581,7 +932,9 @@ def remove_cdn_client(
     with FileLock(LOCK_FILE):
         # Чтение текущего конфига под лок (TOCTOU).
         current = _read_config(XRAY_CONFIG_PATH)
-        rendered = _render_with_cdn(current, params, new_ids)
+        rendered = _render_with_cdn(
+            current, params, new_ids, _fronts_certs(_fronts_from_meta(meta))
+        )
         _backup_config(XRAY_CONFIG_PATH, backup_path)
         if not write_secret_atomic(str(XRAY_CONFIG_PATH), rendered, mode=0o600):
             raise CdnError(f"Не удалось записать {XRAY_CONFIG_PATH}.")

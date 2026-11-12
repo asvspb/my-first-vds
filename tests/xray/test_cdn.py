@@ -624,3 +624,185 @@ class TestStateFormat:
         assert set(meta) == {"installed", "domain", "port", "path", "client_ids", "clients"}
         assert meta["installed"] is True
         assert meta["port"] == 2053
+
+
+FRONT_1 = "cdn1.example.invalid"
+FRONT_2 = "cdn2.example.invalid"
+
+
+def _add_le_cert(domain: str) -> None:
+    live = cdn.ACME_LETSENCRYPT_LIVE(domain)
+    live.mkdir(parents=True, exist_ok=True)
+    (live / "fullchain.pem").write_text(f"FIXTURE_CERT_{domain}\n")
+    (live / "privkey.pem").write_text(f"FIXTURE_KEY_{domain}\n")
+
+
+class TestCdnFronts:
+    """Пул CDN-фронтов (SPEC-20261112 WP-2): add/remove/list + front в клиенте."""
+
+    def _installed(self, env) -> Path:
+        state_path, recorder = env
+        assert cdn.install_cdn(_params(), str(state_path)) == 0
+        recorder.calls.clear()  # дальше проверяем только вызовы front-операций
+        _add_le_cert(FRONT_1)
+        _add_le_cert(FRONT_2)
+        return state_path
+
+    def test_add_front_no_le_files_refused_before_mutations(
+        self, env: tuple[Path, _CallRecorder]
+    ) -> None:
+        state_path, recorder = env
+        assert cdn.install_cdn(_params(), str(state_path)) == 0
+        recorder.calls.clear()
+        before = cdn.XRAY_CONFIG_PATH.read_bytes()
+        state_before = Path(str(state_path)).read_bytes()
+        assert cdn.add_cdn_front("cdn9.example.invalid", state_path=str(state_path)) == 1
+        assert recorder.calls == []
+        assert cdn.XRAY_CONFIG_PATH.read_bytes() == before
+        assert Path(str(state_path)).read_bytes() == state_before
+        # сообщение о подсказке проверяется косвенно: exit 1 до мутаций
+        state = load_state(str(state_path))
+        assert "fronts" not in state.protocols["xray-cdn"]
+
+    def test_add_front_dry_run_no_changes(
+        self, env: tuple[Path, _CallRecorder]
+    ) -> None:
+        state_path, recorder = env
+        self._installed(env)
+        before = cdn.XRAY_CONFIG_PATH.read_bytes()
+        assert cdn.add_cdn_front(FRONT_1, apply=False, state_path=str(state_path)) == 0
+        assert recorder.calls == []
+        assert cdn.XRAY_CONFIG_PATH.read_bytes() == before
+        state = load_state(str(state_path))
+        assert "fronts" not in state.protocols["xray-cdn"]
+
+    def test_add_front_apply_multi_cert_and_state(
+        self, env: tuple[Path, _CallRecorder]
+    ) -> None:
+        state_path, recorder = env
+        self._installed(env)
+        assert cdn.add_cdn_front(FRONT_1, apply=True, state_path=str(state_path)) == 0
+        assert cdn.add_cdn_front(FRONT_2, apply=True, state_path=str(state_path)) == 0
+
+        config = json.loads(cdn.XRAY_CONFIG_PATH.read_text(encoding="utf-8"))
+        certs = _ws_inbound(config)["streamSettings"]["tlsSettings"]["certificates"]
+        # основной + 2 фронта = 3 записи; порядок: основной первый, фронты по алфавиту
+        assert len(certs) == 3
+        assert certs[0]["certificateFile"].endswith(f"live/{CDN_DOMAIN}/fullchain.pem")
+        assert certs[1]["certificateFile"].endswith(f"live/{FRONT_1}/fullchain.pem")
+        assert certs[2]["certificateFile"].endswith(f"live/{FRONT_2}/fullchain.pem")
+
+        state = load_state(str(state_path))
+        fronts = state.protocols["xray-cdn"]["fronts"]
+        assert set(fronts) == {FRONT_1, FRONT_2}
+        assert fronts[FRONT_1]["cert_path"].endswith(f"live/{FRONT_1}/fullchain.pem")
+        assert fronts[FRONT_1]["key_path"].endswith(f"live/{FRONT_1}/privkey.pem")
+
+        argvs = [" ".join(c) for c in recorder.calls]
+        assert f"systemctl restart {cdn.XRAY_UNIT}" in argvs
+
+    def test_add_front_idempotent_no_restart(
+        self, env: tuple[Path, _CallRecorder]
+    ) -> None:
+        state_path, recorder = env
+        self._installed(env)
+        assert cdn.add_cdn_front(FRONT_1, apply=True, state_path=str(state_path)) == 0
+        recorder.calls.clear()
+        assert cdn.add_cdn_front(FRONT_1, apply=True, state_path=str(state_path)) == 0
+        assert recorder.calls == []  # ни теста, ни рестарта
+
+    def test_add_main_domain_as_front_idempotent(
+        self, env: tuple[Path, _CallRecorder]
+    ) -> None:
+        state_path, recorder = env
+        self._installed(env)
+        assert cdn.add_cdn_front(CDN_DOMAIN, apply=True, state_path=str(state_path)) == 0
+        assert recorder.calls == []
+
+    def test_remove_front_subtracts_cert(
+        self, env: tuple[Path, _CallRecorder]
+    ) -> None:
+        state_path, recorder = env
+        self._installed(env)
+        assert cdn.add_cdn_front(FRONT_1, apply=True, state_path=str(state_path)) == 0
+        assert cdn.add_cdn_front(FRONT_2, apply=True, state_path=str(state_path)) == 0
+
+        before = cdn.XRAY_CONFIG_PATH.read_bytes()
+        assert cdn.remove_cdn_front(FRONT_1, apply=False, state_path=str(state_path)) == 0
+        assert cdn.XRAY_CONFIG_PATH.read_bytes() == before  # dry-run
+
+        assert cdn.remove_cdn_front(FRONT_1, apply=True, state_path=str(state_path)) == 0
+        config = json.loads(cdn.XRAY_CONFIG_PATH.read_text(encoding="utf-8"))
+        certs = _ws_inbound(config)["streamSettings"]["tlsSettings"]["certificates"]
+        assert len(certs) == 2
+        assert all(FRONT_1 not in c["certificateFile"] for c in certs)
+        state = load_state(str(state_path))
+        assert set(state.protocols["xray-cdn"]["fronts"]) == {FRONT_2}
+        # повторный remove — идемпотентный exit 0
+        assert cdn.remove_cdn_front(FRONT_1, apply=True, state_path=str(state_path)) == 0
+
+    def test_remove_main_domain_refused(
+        self, env: tuple[Path, _CallRecorder]
+    ) -> None:
+        state_path, recorder = env
+        self._installed(env)
+        assert cdn.remove_cdn_front(CDN_DOMAIN, apply=True, state_path=str(state_path)) == 1
+        assert recorder.calls == []
+
+    def test_add_cdn_client_front_selects_host(
+        self, env: tuple[Path, _CallRecorder], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        state_path, _ = env
+        self._installed(env)
+        assert cdn.add_cdn_front(FRONT_1, apply=True, state_path=str(state_path)) == 0
+        monkeypatch.setattr(cdn, "gen_uuid", lambda: CDN_UUID_1)
+
+        result = cdn.add_cdn_client("phone", state_path=str(state_path), front=FRONT_1)
+        assert result["front"] == FRONT_1
+        assert result["share_link"] == (
+            f"vless://{CDN_UUID_1}@{FRONT_1}:2053"
+            f"?encryption=none&security=tls&sni={FRONT_1}"
+            f"&type=ws&host={FRONT_1}&path=%2Fcdnws#phone"
+        )
+
+        # без front — прежний основной домен
+        monkeypatch.setattr(cdn, "gen_uuid", lambda: CDN_UUID_2)
+        result = cdn.add_cdn_client("mob", state_path=str(state_path))
+        assert result["share_link"].startswith(f"vless://{CDN_UUID_2}@{CDN_DOMAIN}:2053")
+
+    def test_add_cdn_client_unknown_front_refused(
+        self, env: tuple[Path, _CallRecorder], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        state_path, recorder = env
+        self._installed(env)
+        before = cdn.XRAY_CONFIG_PATH.read_bytes()
+        with pytest.raises(cdn.CdnError, match="не найден в пуле"):
+            cdn.add_cdn_client("phone", state_path=str(state_path), front="cdn9.example.invalid")
+        assert cdn.XRAY_CONFIG_PATH.read_bytes() == before
+
+    def test_list_fronts(
+        self, env: tuple[Path, _CallRecorder]
+    ) -> None:
+        state_path, _ = env
+        self._installed(env)
+        assert cdn.add_cdn_front(FRONT_1, apply=True, state_path=str(state_path)) == 0
+        fronts = cdn.list_fronts(str(state_path))
+        assert [f["domain"] for f in fronts] == [CDN_DOMAIN, FRONT_1]
+        assert fronts[0]["main"] is True
+        assert fronts[1]["main"] is False
+        assert fronts[1]["cert_files_ok"] is True
+        assert fronts[1]["dns_ok"] is True  # resolve_ips -> SERVER_IP (мок env)
+
+    def test_front_preserved_by_add_cdn_client_rerender(
+        self, env: tuple[Path, _CallRecorder], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Регресс: add_cdn_client перерендеривает конфиг — сертификаты
+        фронтов не должны пропадать (fronts из meta переносятся в рендер)."""
+        state_path, _ = env
+        self._installed(env)
+        assert cdn.add_cdn_front(FRONT_1, apply=True, state_path=str(state_path)) == 0
+        monkeypatch.setattr(cdn, "gen_uuid", lambda: CDN_UUID_1)
+        cdn.add_cdn_client("phone", str(state_path))
+        config = json.loads(cdn.XRAY_CONFIG_PATH.read_text(encoding="utf-8"))
+        certs = _ws_inbound(config)["streamSettings"]["tlsSettings"]["certificates"]
+        assert len(certs) == 2  # основной + фронт survives re-render

@@ -68,3 +68,18 @@ CDN_DOMAIN_HINT = "cdn."  # имя поддомена приходит флаг�
 def ACME_LETSENCRYPT_LIVE(domain: str) -> Path:
     """Каталог live-сертификата LE для домена (ADR-004, пути локализованы в acme)."""
     return Path("/etc/letsencrypt/live") / domain
+
+
+# Hysteria2 port hopping (SPEC-20261112 WP-1, ADR-008): именованная цепочка
+# nat/PREROUTING с REDIRECT диапазона на слушающий udp/443 + идемпотентный
+# apply-скрипт и oneshot-юнит для переживания ребута. Смена имён — новый ADR.
+HYSTERIA2_HOP_CHAIN = "VDS_HY2_HOP"
+HYSTERIA2_HOP_SCRIPT = Path("/usr/local/sbin/vds-hy2-hop-apply.sh")
+HYSTERIA2_HOP_UNIT = "vds-hysteria2-hop.service"
+
+# Hysteria2 obfs salamander (SPEC-20261112 WP-1): параллельный инстанс на
+# отдельном UDP-порту (по умолчанию 51826 — вне занятых 443/8443/2053/51825),
+# собственный конфиг (0600) и юнит из шаблона.
+HYSTERIA2_OBFS_CONFIG_PATH = Path("/etc/hysteria/obfs.yaml")
+HYSTERIA2_OBFS_UNIT = "vds-hysteria2-obfs.service"
+HYSTERIA2_OBFS_PORT_DEFAULT = 51826

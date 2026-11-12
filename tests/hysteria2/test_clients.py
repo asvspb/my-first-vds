@@ -67,6 +67,56 @@ class TestRenderShareLink:
         assert link.endswith("#my%20phone")
 
 
+class TestRenderShareLinkHopObfs:
+    """mport/obfs-параметры ссылки (SPEC-20261112 WP-1)."""
+
+    def test_mport_appended_after_insecure(self) -> None:
+        link = clients.render_share_link(
+            host=IP, password=PASSWORD, name="phone", port=443,
+            insecure=True, mport="20000-20500",
+        )
+        assert link == (
+            f"hysteria2://{PASSWORD}@{IP}:443/"
+            f"?sni={IP}&insecure=1&mport=20000-20500#phone"
+        )
+
+    def test_mport_without_insecure_le(self) -> None:
+        link = clients.render_share_link(
+            host="vpn.example.invalid", password=PASSWORD, name="mob",
+            port=443, insecure=False, mport="30000-30100",
+        )
+        assert link == (
+            f"hysteria2://{PASSWORD}@vpn.example.invalid:443/"
+            f"?sni=vpn.example.invalid&mport=30000-30100#mob"
+        )
+
+    def test_no_mport_without_param(self) -> None:
+        assert "mport" not in clients.render_share_link(
+            host=IP, password=PASSWORD, name="n"
+        )
+
+    def test_obfs_link_format(self) -> None:
+        link = clients.render_share_link(
+            host=IP, password=PASSWORD, name="phone", port=51826,
+            insecure=True, obfs_password="FIXTURE_PW_Obfs",
+        )
+        assert link == (
+            f"hysteria2://{PASSWORD}@{IP}:51826/"
+            f"?sni={IP}&obfs=salamander&obfs-password=FIXTURE_PW_Obfs"
+            f"&insecure=1#phone"
+        )
+
+    def test_obfs_link_with_mport(self) -> None:
+        link = clients.render_share_link(
+            host=IP, password=PASSWORD, name="phone", port=51826,
+            insecure=True, obfs_password="FIXTURE_PW_Obfs",
+            mport="20000-20500",
+        )
+        assert link.endswith(
+            "&obfs-password=FIXTURE_PW_Obfs&insecure=1&mport=20000-20500#phone"
+        )
+
+
 class TestAddClient:
     def test_add_client_profile_and_link(self, env) -> None:
         result = clients.add_client("laptop", state_path=env["state_path"])
@@ -105,6 +155,49 @@ class TestAddClient:
         assert occurrences[0] == (
             f"[change]hysteria2://{PASSWORD}@{IP}:443/"
             f"?sni={IP}&insecure=1#laptop[/change]"
+        )
+
+    def test_mport_included_iff_hop_ports_in_state(self, env) -> None:
+        """mport попадает в ссылку iff hop_ports есть в state (WP-1)."""
+        # без hop_ports — обычная ссылка
+        result = clients.add_client("laptop", state_path=env["state_path"])
+        assert "mport" not in result["share_link"]
+        # с hop_ports — mport в основной ссылке
+        from src.gateway.store import load_state, save_state
+
+        state = load_state(env["state_path"])
+        state.protocols["hysteria2"]["hop_ports"] = "20000-20500"
+        save_state(state, env["state_path"])
+        result = clients.add_client("phone", state_path=env["state_path"])
+        assert result["share_link"].endswith(
+            "&insecure=1&mport=20000-20500#phone"
+        )
+
+    def test_obfs_link_printed_when_obfs_installed(self, env) -> None:
+        from src.gateway.store import load_state, save_state
+
+        state = load_state(env["state_path"])
+        state.protocols["hysteria2-obfs"] = {
+            "installed": True, "port": 51826,
+            "obfs_password": "FIXTURE_PW_Obfs",
+        }
+        save_state(state, env["state_path"])
+        result = clients.add_client("laptop", state_path=env["state_path"])
+        assert result["obfs_share_link"] == (
+            f"hysteria2://{PASSWORD}@{IP}:51826/"
+            f"?sni={IP}&obfs=salamander&obfs-password=FIXTURE_PW_Obfs"
+            f"&insecure=1#laptop"
+        )
+        obfs_lines = [
+            line for line in env["recorder"].lines if "obfs=salamander" in line
+        ]
+        assert obfs_lines == [f"[change]{result['obfs_share_link']}[/change]"]
+
+    def test_no_obfs_link_without_obfs_instance(self, env) -> None:
+        result = clients.add_client("laptop", state_path=env["state_path"])
+        assert "obfs_share_link" not in result
+        assert not any(
+            "obfs" in line for line in env["recorder"].lines
         )
 
 
