@@ -45,6 +45,7 @@
 | G6 Close | ⏳ | — | оркестратор |
 
 ### Открытые пункты цикла (CDN)
+0. **ADR-007 RU-relay (proposed, ждёт владельца):** входной AWG-релей на RU VDS — покрытие mobile-whitelist вектора + дешёвая ротация exit-ноги по v6; [ADR-007](../adr/ADR-007-ru-relay.md); шаги внедрения внутри.
 0. **Новый цикл (REQ готов, ждёт владельца): transport-hardening —** Salamander для Hysteria2 + ротация параметров/порта AWG; REQ: [REQ-20261112-transport-hardening](requirements/REQ-20261112-transport-hardening.md); UDP-over-TCP отложен.
 1. **Девиация FR-4 (SPEC §4.3):** share-link CDN использует порт 2053, не 443 —
    факт CF «edge-порт = origin-порт», 443 занят Reality. Аналитик правит REQ на G5.
