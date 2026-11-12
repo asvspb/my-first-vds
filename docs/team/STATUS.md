@@ -147,8 +147,12 @@
 ## Бэклог идей (вход для intake)
 
 - **Точки роста схем/протоколов:** [docs/GROWTH-POINTS.md](../GROWTH-POINTS.md) —
-  24 пункта (GR-01…GR-24) с фактами, действиями и AC; предложенный порядок волн
-  в §9. Дефекты/долг — по-прежнему [TECHDEBT.md](../../TECHDEBT.md).
+  24 пункта (GR-01…GR-24) с фактами, действиями и AC.
+- **Roadmap v2 (2026-11-13, ревизия архитектора):**
+  [CENSORSHIP-ROADMAP](../CENSORSHIP-ROADMAP.md) — фазы 0–9 переведены в
+  «статус + остаток», остаток разложен на волны **W1–W6**; W1 (hook+healthcheck)
+  и W2 (per-user auth, [ADR-009](../adr/ADR-009-hysteria2-per-client-auth.md) —
+  **proposed**) готовы к intake. Дефекты/долг — [TECHDEBT.md](../../TECHDEBT.md).
 
 ## Архитектурные решения (вне циклов)
 

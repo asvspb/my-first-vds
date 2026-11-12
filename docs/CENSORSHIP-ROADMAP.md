@@ -1,13 +1,18 @@
-# Roadmap: внедрение лучших мировых практик обхода блокировок в VDS Orchestrator
+# Roadmap: VDS Orchestrator — транспортные схемы и развитие
 
-> Дата: 2026-11-07. Статус: **фазы 0–2 реализованы 2026-11-07**
-> (см. [SPEC-20261107-gateway-mvp](team/specs/SPEC-20261107-gateway-mvp.md),
-> [TEST-20261107-gateway-mvp](team/reports/TEST-20261107-gateway-mvp.md));
-> XHTTP/AmneziaWG/подписки/SNI-мультиплексор — **не реализованы**.
-> Связанные документы: [VPN-PROTOCOLS.md](VPN-PROTOCOLS.md), [../TECHDEBT.md](../TECHDEBT.md).
-> Текущее состояние проекта: ZeroTier/ZTNET, WireGuard (классический), Coturn;
-> Xray VLESS Reality (TCP 443) и Hysteria2 (UDP 443, self-signed тестовый режим)
-> — реализованы в MVP; AmneziaWG отсутствует.
+> **Версия:** 2 (ревизия архитектора) · **Дата:** 2026-11-13
+> **База:** `vds` @ `73a0383` (499 unit), `ubuntuInstaller` @ `ea2b662` (vpnm 325 unit),
+> сервер `asv1` (Ubuntu 24.04) — Reality, XHTTP, CDN, Hysteria2(+obfs), AWG, ACME в работе.
+>
+> **Что изменилось против v1:** фазы 0–4 фактически закрыты (включая CDN, ACME,
+> hop/obfs и AmneziaWG), поэтому «план» переписан в «статус + остаток»; остаток
+> разложен на волны W1–W6 и привязан к пунктам
+> [GROWTH-POINTS](GROWTH-POINTS.md) (GR-01…GR-24) и [TECHDEBT](../TECHDEBT.md).
+> Архитектурное решение по per-client auth — [ADR-009](adr/ADR-009-hysteria2-per-client-auth.md).
+>
+> Связанные документы: [VPN-PROTOCOLS.md](VPN-PROTOCOLS.md),
+> [CDN-FRONTS.md](CDN-FRONTS.md), [DEPLOY.md](DEPLOY.md),
+> [docs/team/STATUS.md](team/STATUS.md), [docs/adr/](adr/).
 
 ---
 
@@ -19,437 +24,330 @@
 блокировок**: один сервер раздаёт несколько транспортных профилей, клиент
 переключается автоматически, оператор управляет всем из одного CLI/TUI.
 
-### 1.2. Модель угроз (на что защищаемся)
+### 1.2. Модель угроз
 
-| Угроза | Проявление | Ответ |
+| Угроза | Проявление | Ответ (что уже есть / что в плане) |
 |---|---|---|
-| DPI-детект по фингерпринту | ТСПУ ловит TLS/WS-паттерны | REALITY, XHTTP, NaiveProxy |
-| Троттлинг по протоколу | скорость до ~0 при живом соединении | смена транспорта (TCP↔UDP), CDN-фронт |
-| Блокировка по IP | IP сервера в реестре | CDN/domain fronting, ротация IP |
-| Active probing | цензор сам стучится в порт | fallback на настоящий сайт, decoy-страница |
-| Блокировка UDP целиком | Hysteria2/QIC мёртв | TCP-резерв (Reality/XHTTP) |
-| Блокировка TCP 443 | Reality/XHTTP мёртв | UDP-резерв (Hysteria2/AmneziaWG) |
+| DPI-детект по фингерпринту | ТСПУ ловит TLS/WS-паттерны | Reality ✅, XHTTP ✅, Hysteria2+obfs ✅ |
+| Троттлинг по протоколу | скорость ≈0 при живом соединении | смена L4-типа ✅ (TCP/UDP), hop — W4 |
+| Блокировка по IP | IP сервера в реестре | CDN-фронт ✅ (один домен), пул фронтов — W4 |
+| Active probing | цензор сам стучится в порт | Reality fallback ✅, decoy-маска Hysteria2 ✅, probe-тест — W6 |
+| Блокировка UDP целиком | QUIC/AWG мёртв | TCP-резерв ✅ (Reality/XHTTP/CDN) |
+| Блокировка TCP 443 | Reality/XHTTP/CDN мёртв | UDP-резерв ✅ (Hysteria2/AWG) |
+| Утечка/компрометация ссылки | доступ у постороннего | **нет**: один пароль на всех → W2 (ADR-009) |
+| Тихий сбой сервиса/сертификата | «вчера работало» | healthcheck — W1 |
 
 ### 1.3. Non-goals
 
-- Не строим публичный сервис подписок и не агрегируем чужие конфиги (см. анализ `free-vpn-anti-rkn` — это отдельная модель с чужими серверами).
-- Не делаем «невидимый» протокол против целевого государства — только против пассивного DPI и активного зондирования.
-- Не автоматизируем покупку VPS/домены.
+- Публичный сервис подписок и агрегация чужих конфигов — отдельная модель, не наша.
+- «Невидимый» протокол против целевого государства — только пассивный DPI и
+  активное зондирование.
+- Веб-панель/GUI (решение владельца, STATUS 2026-11-10), покупка VPS/доменов.
+- Замена certbot собственной реализацией ACME — выигрыша нет.
 
-### 1.4. Принципы (мировые практики)
+### 1.4. Принципы
 
-1. **Defense in depth**: минимум два транспорта разного L4-типа + fallback.
-2. **Mimicry over encryption tricks**: трафик должен выглядеть как легитимный (TLS к популярному сайту, HTTP/2, QUIC).
-3. **Probe resistance**: при неверном/отсутствующем аутентификаторе сервер ведёт себя как обычный веб-сервер.
-4. **Автоматизация секретов и ротации**: ключи не руками, конфиги 0600.
-5. **Declarative state**: желаемое состояние в файле, идемпотентное применение (как `topology.json` в reconcile).
-6. **Отказоустойчивость**: healthcheck + watchdog по образцу ZeroTier.
-7. **Проверяемость**: юнит-тесты на генерацию конфигов, e2e-тест «сервер↔клиент» в loopback/Docker.
-8. **Минимальное логирование** PII и секретов.
+1. **Defense in depth** — минимум два транспорта разных L4-типов + fallback.
+2. **Mimicry over encryption tricks** — трафик выглядит как легитимный.
+3. **Probe resistance** — без валидного аутентификатора сервер ведёт себя как веб.
+4. **Отзыв доступа — часть модели**, а не побочный эффект (новое, W2).
+5. **Автоматизация секретов и ротации**; конфиги 0600, атомарная запись.
+6. **Declarative state** — `state.json` как источник истины, идемпотентное применение.
+7. **Отказоустойчивость** — healthcheck + rate-limited restart (по образцу ZeroTier).
+8. **Проверяемость** — unit + Docker-e2e; живая приёмка на VDS по чеклисту.
+9. **Минимальное логирование** PII и секретов.
 
 ---
 
-## 2. Целевая архитектура
+## 2. Фактическая архитектура (as-is, 2026-11-13)
 
 ```
-                         ┌──────────────────────────────┐
-                         │        Клиент (v2rayNG,      │
-                         │  NekoRay, Hiddify, sing-box) │
-                         └──────────────┬───────────────┘
-                                        │ подписка / share-link
-                                        ▼
-┌─────────────────────────── Слой управления (vds CLI) ──────────────────────────┐
-│  gateway init · profile add/list · sub export · status · watchdog · reconcile  │
-└───────────────┬───────────────────────┬───────────────────────┬────────────────┘
-                │                       │                       │
-        ┌───────▼────────┐      ┌───────▼────────┐      ┌───────▼────────┐
-        │  Xray-core     │      │  Hysteria2     │      │  AmneziaWG     │
-        │  TCP 443       │      │  UDP 443       │      │  UDP 51820     │
-        │  Reality/XHTTP │      │  QUIC          │      │  obfuscated WG │
-        └───────┬────────┘      └───────┬────────┘      └───────┬────────┘
-                │                       │                       │
-                └───────────────┬───────┴───────────────────────┘
-                                ▼
-                     ┌─────────────────────┐
-                     │  Nginx stream (SNI) │  ← TLS-мультиплексор:
-                     │  fallback / decoy   │    reality | xhttp | decoy-site
-                     └──────────┬──────────┘
-                                ▼
-                     ┌─────────────────────┐
-                     │  Интернет / VDS     │
-                     └─────────────────────┘
-
-Служебный контур: ACME (сертификаты) · UFW/iptables · BBR/sysctl ·
-healthcheck-timer · JSON-профили (0600) · Prometheus-экспортёр (опц.)
+                    ┌────────────────────────────────────────────┐
+                    │  Клиенты: v2rayNG · Hiddify/NekoBox/SFA ·  │
+                    │  sing-box · AmneziaVPN                     │
+                    └───────────────┬────────────────────────────┘
+                                    │ share-link / QR / pull (ssh)
+                                    ▼
+┌──────────────────── Управление: vds CLI (root) ─────────────────────┐
+│ gateway status|links|blockcheck · xray/hysteria2/amneziawg/acme     │
+│ state: /opt/my-vds/gateway/state.json (0600, version=1)             │
+└──────┬───────────────────┬───────────────────┬─────────────────────┘
+       │                   │                   │
+┌──────▼───────┐   ┌───────▼────────┐   ┌──────▼─────────┐
+│ Xray-core    │   │ Hysteria2      │   │ AmneziaWG      │
+│ TCP 443      │   │ UDP 443        │   │ UDP 51825      │
+│ Reality      │   │  └ obfs 51826  │   │ obfuscated WG  │
+│  └ XHTTP:8443│   │  └ hop 20k-20.5k│  │                │
+│  └ CDN :2053 │   │                │   │                │
+└──────┬───────┘   └───────┬────────┘   └──────┬─────────┘
+       │ fallbacks (SNI)   │                   │
+       └───────────────────┴───────────────────┘
+                           ▼
+              ACME/certbot (LE, HTTP-01, deploy-hook)
+              sysctl/BBR · systemd-юниты из шаблонов
 ```
 
-### 2.1. Слои
+Ключевые отличия от v1-диаграммы: **Nginx stream/SNI-мультиплексор не нужен** —
+сосуществование Reality/XHTTP решено `fallbacks` внутри Xray (ADR-003);
+CDN-транспорт — отдельный origin-инблэнд на TCP 2053 (ADR-006); hop — nat-цепочка
+`VDS_HY2_HOP` (ADR-008).
 
-| Слой | Компонент | Назначение |
+### 2.1. Слои (as-is)
+
+| Слой | Компонент | Состояние |
 |---|---|---|
-| Транспорт | Xray-core, hysteria2, amneziawg | сами протоколы |
-| Мультиплексирование | Nginx stream / Xray fallbacks | один порт 443 на несколько SNI |
-| Оркестрация | `src/gateway/` | профили, генерация конфигов, жизненный цикл |
-| Наблюдаемость | `src/sysinfo/` + timers | статусы юнитов, трафик, ошибки |
-| Дистрибуция | `src/subscriptions/` | share-links, base64, Clash/sing-box JSON |
+| Транспорт | Xray (Reality/XHTTP/CDN), Hysteria2 (+obfs/hop), AWG | ✅ работает на asv1 |
+| Мультиплексирование | Xray fallbacks (SNI), отдельные порты | ✅ |
+| Оркестрация | `src/gateway/` (state, links, blockcheck) | ✅, hub/init — нет (W5) |
+| Наблюдаемость | `src/sysinfo/` (железо), `status`-команды | ⚠️ нет таймера/метрик (W1, W5) |
+| Дистрибуция | share-links, `profile pull` (ssh) | ⚠️ QR/подписки — вручную (W3) |
+| Клиент | `vpnm` схемы proxy/cdn/private/awg | ⚠️ failover вручную (W5) |
 
 ---
 
-## 3. Матрица протоколов и сценариев
+## 3. Матрица протоколов и сценариев (с фактическим статусом)
 
-| # | Профиль | Транспорт | Когда использовать | Приоритет |
-|---|---|---|---|---|
-| 1 | VLESS + Reality (Vision) | TCP 443 | базовый; везде, где жив TCP | **P0** |
-| 2 | Hysteria2 | UDP 443 QUIC | мобильные сети, потери пакетов, высокая скорость | **P0** |
-| 3 | VLESS XHTTP через CDN | TCP + CDN | IP сервера заблокирован / нужен domain fronting | P1 |
-| 4 | AmneziaWG | UDP 51820 | деградация Xray/QUIC; простой резерв | P1 |
-| 5 | NaiveProxy / HTTP/2 CONNECT | TCP 443 | ловля Reality по фингерпринту; максимальная мимикрия | P2 |
-| 6 | TUIC v5 | UDP QUIC | альтернатива Hysteria2 | P2 |
-| 7 | Snowflake / WebRTC | P2P | экстремальные сценарии (нет своего IP) | P3 |
-
----
-
-## 4. Фазы roadmap
-
-Оценки — «идеальные инженерные дни» (без ожидания ревью/тестов на живом VDS).
-Итого: **~30–40 дней** полного объёма; MVP (фазы 0–2) — **~8 дней**.
-
-### Фаза 0 — Фундамент и рефакторинг (3 дня)
-
-**Зачем:** без общих абстракций каждый протокол скопирует логику, и проект
-превратится в набор несовместимых скриптов (см. P1/P3 в TECHDEBT).
-
-**Работы:**
-1. Выполнить P1–P3 из `TECHDEBT.md` (единый `load_env`, `docker_exec` на списках, версии зависимостей).
-2. Вынести общие примитивы в `src/core/`:
-   - `netcheck.py`: `port_free(port, proto)`, `public_ip()`, `resolve(host)`, `cert_days_left(path)`;
-   - `secrets.py`: генерация UUID/паролей/ключей, запись файлов 0600;
-   - `units.py`: установка/включение/остановка systemd-юнитов из шаблона.
-3. Ввести `ProtocolAdapter` (ABC) — единый интерфейс протокола:
-
-```python
-# src/core/protocol.py
-from abc import ABC, abstractmethod
-
-class ProtocolAdapter(ABC):
-    name: str
-    default_port: int
-    transport: str            # "tcp" | "udp"
-
-    @abstractmethod
-    def install(self, opts: dict) -> int: ...
-    @abstractmethod
-    def add_client(self, name: str) -> dict: ...   # -> профиль (dict)
-    @abstractmethod
-    def remove_client(self, name: str) -> int: ...
-    @abstractmethod
-    def status(self) -> dict: ...
-    @abstractmethod
-    def render_share_links(self, profile: dict) -> list[str]: ...
-    @abstractmethod
-    def remove(self) -> int: ...
-```
-
-4. `src/gateway/store.py` — хранилище профилей `/opt/vds-gateway/state.json` (0600), pydantic-модели:
-
-```python
-class ClientProfile(BaseModel):
-    name: str
-    protocol: str          # "vless-reality" | "hysteria2" | ...
-    port: int
-    uuid: str | None
-    password: str | None
-    sni: str | None
-    extra: dict = {}
-
-class GatewayState(BaseModel):
-    version: int = 1
-    domain: str = ""
-    clients: list[ClientProfile] = []
-    protocols: dict[str, dict] = {}   # protocol -> server params
-```
-
-**Deliverables:** `core/protocol.py`, `core/netcheck.py`, `core/secrets.py`, `core/units.py`, `gateway/store.py` + тесты на store.
-**Acceptance:** `pytest` зелёный; `vds gateway status` читает пустое состояние без ошибок.
+| # | Профиль | Транспорт | Когда | Приоритет | Статус |
+|---|---|---|---|---|---|
+| 1 | VLESS + Reality (Vision) | TCP 443 | базовый, жив TCP | P0 | ✅ на asv1 |
+| 2 | Hysteria2 | UDP 443 QUIC | mobile, потери, скорость | P0 | ✅ на asv1 |
+| 3 | Hysteria2 + obfs (salamander) | UDP 51826 | прячется голый QUIC | P0 | ✅ на asv1 |
+| 4 | Hysteria2 + port hopping | UDP 20k–20.5k → 443 | троттлинг по порту | P1 | ⚠️ код есть, не включён (W4) |
+| 5 | VLESS + WS + TLS за CDN | TCP 2053 (origin) | блок IP / fronting | P1 | ✅ на asv1 (1 фронт) |
+| 6 | VLESS XHTTP (fallback) | TCP 8443 (loopback) | TCP-резерв для Xray-клиентов | P1 | ✅, но клиенты ограничены |
+| 7 | AmneziaWG | UDP 51825 | деградация Xray/QUIC | P1 | ✅ на asv1 |
+| 8 | NaiveProxy / HTTP2 CONNECT | TCP 443 | ловля Reality по фингерпринту | P2 | ❌ |
+| 9 | TUIC v5 | UDP QUIC | альтернатива Hysteria2 | P2 | ❌ (не планируем в W1–W6) |
+| 10 | Snowflake/WebRTC | P2P | крайний случай | P3 | ❌ (вне скоупа) |
 
 ---
 
-### Фаза 1 — Xray + VLESS Reality (4 дня) — MVP TCP
+## 4. Фазы 0–9: фактический статус
 
-**Работы:**
-1. `src/xray/install.py`:
-   - установка Xray-core (официальный install-скрипт, но с проверкой контрольной суммы/версии);
-   - генерация `uuid` (`xray uuid`) и `x25519` (`xray x25519`), сохранение приватного ключа 0600;
-   - выбор SNI-маски: по умолчанию `www.google.com`, переопределяемо флагом;
-   - рендер `/usr/local/etc/xray/config.json` (Reality, Vision flow, `dest`, `serverNames`, `shortIds`);
-   - systemd `vds-xray.service` (`Restart=always`).
-2. `src/xray/clients.py`: `add_client(name)` → профиль + share-link:
-
-```
-vless://<uuid>@<ip>:443?security=reality&sni=<sni>&fp=chrome&pbk=<pbk>&sid=<sid>&flow=xtls-rprx-vision#<name>
-```
-
-3. `src/xray/status.py`: `systemctl is-active`, `xray -test -config`, проверка порта, последние ошибки из journal.
-4. CLI: `vds xray install|add-client|status|remove`, пункт в TUI.
-5. Юнит-тест: рендер конфига из параметров → сравнение с эталоном; проверка, что приватный ключ не попадает в share-link.
-
-**Acceptance:**
-- на чистом VDS `vds xray install` → `systemctl is-active vds-xray` = active;
-- клиент (v2rayNG/NekoRay) подключается по сгенерированной ссылке;
-- `curl` с неверным SNI на 443 получает ответ настоящего `dest`, а не Xray (проверка probe resistance).
-
-**Риски:** конфликт TCP 443 с существующим nginx — решается SNI-мультиплексором в фазе 5.
+| Фаза (v1) | Заявлено | Факт 2026-11-13 | Остаток |
+|---|---|---|---|
+| 0 Фундамент | core/*, adapter, store | ✅ core, protocol, store, units, secrets, lock | — |
+| 1 Reality | install/clients/status | ✅ Reality на asv1 | update-путь (W4) |
+| 2 Hysteria2 | install/clients/sysctl | ✅ + obfs + hop-код | per-user auth (W2), hop включить (W4) |
+| 3 XHTTP + CDN | SNI-мультиплексор, CF | ✅ XHTTP-fallback, CDN origin 2053 | пул фронтов + проверка (W4) |
+| 4 AmneziaWG | install/conf/QR | ✅ install/conf/status | QR (W3), ротация/purge (W6) |
+| 5 Hub + подписки | init, sub, reconcile | ❌ нет | W3 (export/sub), W5 (init) |
+| 6 Hardening | ACME, decoy, rotate | ⚠️ ACME HTTP-01 ✅, hook — дефект | hook (W1), DNS-01 (W5), rotate (W2/W6) |
+| 7 Наблюдаемость | healthcheck, metrics, alerts | ❌ нет | W1 (health), W5 (metrics/alerts) |
+| 8 Тесты/CI | unit + Docker-e2e + CI | ⚠️ unit ✅ (499/325), CI/e2e нет | W6 |
+| 9 Дистрибуция | export qr/conf, TUI | ⚠️ links + pull по ssh | W3 (export/sub), W5 (TUI) |
 
 ---
 
-### Фаза 2 — Hysteria2 (3 дня) — MVP UDP
+## 5. Волны развития (W1–W6)
 
-**Работы:**
-1. `src/hysteria2/install.py`: бинарь + `/etc/hysteria/config.yaml`; ACME-сертификат (или self-signed + `insecure` для теста); `masquerade` на локальную decoy-страницу.
-2. `sysctl`: `net.core.rmem_max/wmem_max`, `net.ipv4.tcp_congestion_control=bbr` — отдельный шаблон `/etc/sysctl.d/99-vds-gateway.conf`.
-3. `src/hysteria2/clients.py`: пароль на клиента, share-link `hysteria2://...`.
-4. `status`: порт UDP 443, journal, метрики `/metrics` (встроенный prometheus).
-5. CLI + TUI.
+Оценки — инженерные дни без ревью и живой приёмки. Каждая волна — отдельный цикл
+с гейтами G0–G6 (см. [TEAM.md](TEAM.md)); REQ делает аналитик, SPEC — архитектор.
 
-**Acceptance:**
-- `vds hysteria2 install` → юнит active, UDP 443 слушается;
-- клиент подключается, скорость на мобильном > Reality (замер);
-- отключение UDP на стороне ISP воспроизводит ожидаемый отказ → клиент переключается на Reality-профиль.
+### W1. Страховка от тихих сбоев — P0, ~2 дня
 
----
+**Зачем:** сейчас сбой сертификата или юнита замечается только вручную, а
+deploy-hook ACME обновляет **один** юнит из трёх.
 
-### Фаза 3 — XHTTP и CDN-фронт (5 дней) — P1
+| Пункт | Суть | DoD |
+|---|---|---|
+| GR-01 | hook обновляет `vds-hysteria2`, `vds-hysteria2-obfs`, `vds-xray` | `renew --dry-run` → новые отпечатки у всех трёх |
+| GR-18 | `gateway healthcheck` + `systemd/vds-gateway-health.*` | stop юнита → восстановление ≤2 цикла; rate-limit |
+| GR-12 | срок сертификата в healthcheck (`<14` warning, `<7` error) | симуляция истечения → warning |
 
-**Работы:**
-1. Второй inbound Xray: `network: xhttp`, `mode: auto`, TLS-сертификат (ACME).
-2. Роутинг по SNI/Path между Reality и XHTTP на одном 443:
-   - либо Xray `fallbacks` внутри одного inbound,
-   - либо Nginx `stream` + `ssl_preread` (SNI-мультиплексор) с upstream на 127.0.0.1:8443 (Reality) / :8444 (XHTTP) / :8080 (decoy).
-3. Документированный сценарий Cloudflare (проксирование домена, режим Full (strict), ограничения бесплатного тарифа — только HTTP/WS/XHTTP).
-4. `vds xray add-transport xhttp --domain example.com --path /up`.
-5. Тест: без CDN и через CDN.
+**Файлы:** `src/acme/install.py`, новый `src/gateway/health.py`, `systemd/`, тесты.
+**Гейты:** G2 (SPEC), G4 (живая приёмка на asv1).
 
-**Acceptance:** оба транспорта живут на одном 443, переключаются по SNI; при блокировке IP сервера доступ через CDN сохраняется.
+### W2. Per-client auth Hysteria2 — P0, ~1.5 дня
 
----
+**Зачем:** архитектурный потолок — сейчас нельзя отозвать клиента, утечка одной
+ссылки компрометирует всех.
 
-### Фаза 4 — AmneziaWG (3 дня) — P1
+**Решение (ADR-009, proposed):** `auth.type: http` → локальный агент на loopback,
+пользователи в `state.json` (schema v2), ссылки `user:pass@`.
 
-**Работы:**
-1. `src/amneziawg/`: установка `amneziawg-go`/DKMS-модуля, генерация `Jc/Jmin/Jmax/S1/S2/H1..H4` (обфускационные параметры), конфиг сервера и клиентов.
-2. Раздача клиентских `.conf` + QR (терминальный QR через `qrcode`).
-3. `status`, `remove`.
+| WP | Файлы | DoD |
+|---|---|---|
+| WP-1 store v2 + миграция | `gateway/store.py`, `tests/gateway/` | v1 читается, миграция идемпотентна, `default`-пользователь = старый пароль |
+| WP-2 агент + юнит | новый `hysteria2/auth.py`, `systemd/vds-hy2-auth.service.tpl` | loopback-only, токен из state, лог без паролей |
+| WP-3 config+install | `hysteria2/config.py|install.py` | `auth.http`, бэкап `.bak-pre-auth`, рестарт обоих инстансов |
+| WP-4 clients/rotate | `hysteria2/clients.py`, `main.py` | `add/resolve` user:pass, `rotate-user`, `remove-client` отзывает |
+| WP-5 status+docs | `hysteria2/status.py`, `VPN-PROTOCOLS.md` | «auth: http (N users)», e2e alice/bob |
 
-**Acceptance:** клиент AmneziaVPN/AmneziaWG подключается; при живом Reality работает как резерв; параметры обфускации уникальны на установку.
+**Риски:** fail-closed при падении агента → `Restart=always` + W1-healthcheck.
+**Гейты:** G2 (ADR-009 accepted), G4 (e2e на asv1: alice → remove → 401, bob жив).
 
----
+### W3. Поставка клиентам: QR, конфиги, подписки — P1, ~2.5 дня
 
-### Фаза 5 — Мультипротокольная оркестрация и подписки (4 дня) — P0/P1
+**Зачем:** QR делается руками (`qrencode`), AWG-конфиг не отдаётся содержимым,
+мобильные клиенты не умеют `ssh pull`.
 
-**Работы:**
-1. `src/gateway/init.py`: «hub» — один вызов поднимает Reality + Hysteria2 + (опц.) XHTTP, разводит порты, ставит SNI-мультиплексор, генерирует дефолтную decoy-страницу.
-2. `src/subscriptions/`:
-   - генерация «профиля клиента» сразу для всех включённых протоколов;
-   - форматы: base64-список URI (стандарт подписок), Clash YAML, sing-box JSON, plain text;
-   - локальный HTTP-сервер подписки (опц., с токеном) `vds gateway sub serve --port 8081`.
-3. `vds gateway profile add phone --all-protocols` → выводит links + сохраняет в state.
-4. `vds gateway reconcile` — декларативное состояние как в ZeroTier-reconcile: state.json vs реальные конфиги, dry-run/apply.
+| Пункт | Суть | DoD |
+|---|---|---|
+| GR-15 | `gateway export --format qr\|conf\|uri\|sub\|clash\|singbox` | QR сканируется (`zbarimg`), `sub` импортируется в v2rayNG/Hiddify |
+| GR-17 | `gateway sub serve --port 8081 --token` (systemd) | 401 без токена, логи без секретов |
+| GR-22 | флаги pull в TUI vpnm | TUI импортирует `mob`/`mob@obfs` |
 
-**Acceptance:** одна команда даёт клиенту файл подписки, который v2rayNG/Hiddify понимает целиком; добавление клиента не требует ручных правок конфигов.
+**Файлы:** новый `src/gateway/export.py`, `src/subscriptions/`, `systemd/`,
+`vpnm/tui.py`.
+**Зависимости:** W2 не блокирует; после W2 ссылки становятся `user:pass` — экспорт
+должен уметь оба формата.
 
----
+### W4. Эксплуатация транспортов — P1, ~4 дня
 
-### Фаза 6 — Hardening и безопасность (4 дня)
+| Пункт | Суть | DoD |
+|---|---|---|
+| GR-03 | включить hop на asv1 + матрица клиентов | tcpdump видит смену dst-портов; `status` показывает hop |
+| GR-06 | `xray update [--apply]` | dry-run версий, откат на `.bak-old`, Reality-gate жив |
+| GR-08 | `xray cdn-check` + пул фронтов | мёртвый фронт помечен, ссылка не выдаётся |
+| GR-07 | `xray set-sni` + локальная проба decoy | смена SNI перевыпускает ссылки, `status` алертит мёртвый decoy |
+| GR-09 | XHTTP: зафиксировать «xray-only» в матрице | док + TUI-фильтр |
 
-**Работы:**
-1. **ACME**: `acme.sh` (без остановки сервиса, webroot/standalone по выбору), автопродление timer, проверка `cert_days_left` в `status`.
-2. **UFW**: правила из `server-setup` — 22/443/51820 + UFW limit; Hysteria2 UDP; закрыть всё остальное.
-3. **BBR + sysctl** (см. фазу 2) оформляется в отдельный модуль `system/network_tuning.py`.
-4. **Decoy-сайт**: минимальный статический сайт (nginx), который отдаётся на все «неправильные» запросы к 443.
-5. **Секреты**: state.json и конфиги 0600/0640, владелец root; `secrets.py` пишет атомарно; никаких ключей в логах (фильтр в `core/logger.py`).
-6. **Fail2ban** (опц.) на попытки перебора, **логирование минимизировано**.
-7. Ротация ключей: `vds gateway rotate-keys [--client name]`.
+**Зависимости:** GR-06 — до GR-07 (SNI-команда опирается на актуальный конфиг).
 
-**Acceptance:** внешний сканер (nmap + curl с чужим SNI) видит только HTTPS к decoy/маске; сертификаты продлеваются автоматически; в `journalctl` нет UUID/паролей.
+### W5. Оркестрация, подписки, наблюдаемость — P1/P2, ~5–6 дней
 
----
+| Пункт | Суть | DoD |
+|---|---|---|
+| GR-16 | `gateway init` (hub, `--apply`) | чистая ВМ → ≥3 транспорта; идемпотентно |
+| GR-19 | трафик по клиенту (`xray api stats`, `/metrics`) в `sysinfo` | uuid→имя, `--json` |
+| GR-20 | `gateway backup/restore` + webhook-алерты | restore восстанавливает ссылки 1:1 |
+| GR-11 | ACME DNS-01 + `acme status` | wildcard без порта 80 |
+| GR-21 | `vpn scheme auto` (failover по probe) | блок 443 → переключение на CDN ≤2 цикла |
 
-### Фаза 7 — Наблюдаемость и отказоустойчивость (3 дня)
+**Зависимости:** GR-19 ← W2 (имена пользователей), GR-21 ← W4 (живые профили),
+GR-20 ← W1 (healthcheck-хук для алертов).
 
-**Работы:**
-1. `vds gateway healthcheck` + timer каждые 2–5 минут (по образцу `vds-watchdog`):
-   - порты слушаются, юниты active, сертификат не истёк, Xray/Hysteria отвечают на локальную проверку;
-   - при сбое — перезапуск с лимитом (rate-limit из watchdog переиспользовать).
-2. Экспорт метрик: `xray api stats` (трафик по клиенту) + `hysteria /metrics` → `sysinfo/dashboard.py` показывает:
-   - активные протоколы, аптайм, трафик, число клиентов;
-   - статус сертификата; последние ошибки.
-3. Алерты (опц.): webhook (Telegram/SMTP) при недоступности > N минут.
+### W6. Инженерная гигиена и остаток P2 — ~4 дня
 
-**Acceptance:** dashboard показывает реальные цифры; симуляция падения юнита → watchdog восстанавливает за ≤ 2 цикла.
-
----
-
-### Фаза 8 — Тестирование и валидация (4 дня)
-
-**Работы:**
-1. **Юнит-тесты** (pytest, без сети):
-   - генераторы конфигов Xray/Hysteria2/AmneziaWG (снапшоты);
-   - `ProtocolAdapter`-контракты для всех адаптеров;
-   - `store` (roundtrip, права, миграции версии);
-   - `netcheck` (занятость порта, парсинг).
-2. **E2E в Docker** (`tests/e2e/`): контейнер-сервер (xray) + контейнер-клиент (xray-client/sing-box), проверка сквозного туннеля через loopback — в CI.
-3. **Probe-resistance тест**: скрипт `curl` без/с неверным SNI → ожидается decoy; запомнить как регрессивный тест.
-4. **Leak-тест**: DNS/WebRTC/IPv6 утечки на клиентской стороне (чеклист, не обязательно автоматизировать).
-5. **Нагрузочный smoke** (опц.): iperf3 через каждый протокол, фиксация baseline скорости.
-
-**Acceptance:** CI (GitHub Actions) гоняет unit + e2e; документированы результаты по каждому протоколу.
+| Пункт | Суть |
+|---|---|
+| GR-24 | CI (ruff + pytest 3.10/3.12) + `tests/e2e/` (hysteria2/xray ↔ sing-box, `--check` конфигов) |
+| GR-04 | `hysteria2 rotate-password` (main-инбаунд) |
+| GR-05 | obfs `gecko` опция + `pinSHA256`-ссылки |
+| GR-10 | явный `cert_domain` + миграция state |
+| GR-13/14 | AWG rotate-obfuscation, purge, IPv6-профиль |
+| GR-23 | blockcheck: кэш, локальные контрольные хосты |
 
 ---
 
-### Фаза 9 — Клиентская дистрибуция и документация (3 дня)
-
-**Работы:**
-1. `vds gateway export --format [base64|clash|singbox|qr|conf]` для каждого клиента.
-2. README-раздел «Быстрый старт: свой сервер за 10 минут» + выбор протокола по сценарию.
-3. Документ [VPN-PROTOCOLS.md](VPN-PROTOCOLS.md) обновить фактическими командами.
-4. TUI: единый экран «Gateway» со статусами, добавлением клиента и выдачей ссылок.
-5. Дисклеймер и легальные оговорки в README и при `gateway init`.
-
-**Acceptance:** новый пользователь по README поднимает Reality + Hysteria2 на чистом Ubuntu 24.04 без ручных правок.
-
----
-
-## 5. Детальный дизайн модулей
-
-### 5.1. Структура каталогов (целевая)
+## 6. Целевая структура модулей (обновлено)
 
 ```
 src/
-├── core/
-│   ├── protocol.py        # ProtocolAdapter ABC
-│   ├── netcheck.py        # порты, IP, DNS, сертификаты
-│   ├── secrets.py         # uuid/пароли/ключи, атомарная запись 0600
-│   ├── units.py           # рендер/установка systemd-юнитов
-│   └── ... (существующие)
-├── gateway/
-│   ├── store.py           # GatewayState (pydantic), миграции
-│   ├── init.py            # hub: все протоколы + SNI-мультиплексор
-│   ├── reconcile.py       # state vs реальность, dry-run/apply
-│   ├── healthcheck.py
-│   └── rotate.py
-├── xray/
-│   ├── adapter.py         # ProtocolAdapter
-│   ├── install.py
-│   ├── clients.py
-│   └── config.py          # рендер config.json
-├── hysteria2/
-├── amneziawg/
-├── subscriptions/
-│   ├── formats.py         # base64/clash/singbox
-│   └── serve.py
-└── system/
-    └── network_tuning.py  # BBR, sysctl, UFW
+├── core/            logger, shell, lock, protocol, netcheck, secrets, units
+├── xray/            Reality/XHTTP/CDN: install, config, clients, status, cdn, remove
+│                    + update.py (W4), decoy-проба в status (W4)
+├── hysteria2/       install, config, clients, hop, obfs, sysctl, status, remove
+│                    + auth.py (W2), rotate.py (W2/W6)
+├── amneziawg/       install, clients, config, status, remove
+│                    + obfuscation-ротация/purge (W6)
+├── acme/            install (HTTP-01 hook), apply_cert
+│                    + dns01 (W5), status (W5)
+├── gateway/         paths, store (schema v2 — W2), links, blockcheck
+│                    + health.py (W1), export.py (W3), init.py (W5), backup.py (W5)
+├── subscriptions/   formats + serve (W3)
+├── sysinfo/         dashboard (+ stats W5)
+└── system/          setup, cleanup, network_tuning
+systemd/             vds-xray · vds-hysteria2(-hop/-obfs) · vds-amneziawg
+                     + vds-hy2-auth (W2) · vds-gateway-health (W1) · vds-gateway-sub (W3)
+tests/               unit (есть) + e2e/ Docker (W6)
 ```
-
-### 5.2. CLI (целевой)
-
-```bash
-# установка одного протокола
-vds xray install --sni www.google.com
-vds hysteria2 install --domain vpn.example.com
-vds amneziawg install
-
-# мультипротокольный hub
-vds gateway init --domain vpn.example.com --protocols reality,hysteria2
-vds gateway status
-vds gateway reconcile [--apply]
-vds gateway healthcheck
-
-# клиенты и подписки
-vds gateway profile add phone --all-protocols
-vds gateway profile list
-vds gateway profile remove phone
-vds gateway export phone --format base64
-vds gateway export phone --format qr
-vds gateway sub serve --port 8081
-
-# обслуживание
-vds gateway rotate-keys --client phone
-vds gateway remove
-```
-
-### 5.3. Раскладка портов (один сервер)
-
-| Порт | Протокол | Примечание |
-|---|---|---|
-| TCP 443 | Xray: Reality / XHTTP (SNI-роутинг) | nginx stream `ssl_preread` |
-| TCP 8443 | Xray Reality (за мультиплексором) | localhost |
-| TCP 8444 | Xray XHTTP (за мультиплексором) | localhost |
-| TCP 8080 | Decoy-сайт (nginx) | отвечает всем «неправильным» |
-| UDP 443 | Hysteria2 | QUIC |
-| UDP 51820 | AmneziaWG | обфусцированный WG |
-| TCP 22 | SSH | UFW limit |
-
-### 5.4. Данные и секреты
-
-- `/opt/vds-gateway/state.json` — профили (0600, root).
-- `/usr/local/etc/xray/config.json`, `/etc/hysteria/config.yaml`, `/etc/amnezia/amneziawg/*.conf` — 0600.
-- Приватные ключи никогда не попадают в share-link, логи и `git`.
-- Фильтр логов: маскировать `uuid`, `password`, `privateKey` (`core/logger.py`).
 
 ---
 
-## 6. Риски и меры
+## 7. Раскладка портов (фактическая)
 
-| Риск | Вероятность | Влияние | Мера |
+| Порт | Что | Примечание |
+|---|---|---|
+| TCP 443 | Xray Reality (+ fallbacks на XHTTP) | основной TCP-транспорт |
+| TCP 8443 | Xray XHTTP | **только loopback**, снаружи не слушается |
+| TCP 2053 | CDN origin (VLESS+WS+TLS) | CF HTTPS-порт; edge-порт = origin |
+| TCP 80 | ACME HTTP-01 | только на время выдачи/продления |
+| UDP 443 | Hysteria2 | основной UDP-транспорт |
+| UDP 20000–20500 | hop-диапазон → REDIRECT на 443 | nat-цепочка `VDS_HY2_HOP` (W4) |
+| UDP 51826 | Hysteria2 obfs (salamander) | отдельный инстанс |
+| UDP 51825 | AmneziaWG | awg0, 10.9.0.0/24 |
+| TCP 22 | SSH | UFW limit (политика — DEPLOY) |
+| loopback (W2) | hy2-auth http-agent | порт из `gateway/paths.py` |
+
+---
+
+## 8. Данные и секреты
+
+- `state.json` — `/opt/my-vds/gateway/state.json`, 0600, `version=1` → **v2 (W2)**.
+- Конфиги: `/usr/local/etc/xray/config.json`, `/etc/hysteria/{config,obfs}.yaml`,
+  `/etc/amnezia/awg0.conf` — 0600.
+- Клиентские артефакты: `/opt/my-vds/gateway/clients/amneziawg/*.conf` — 0600.
+- LE: `/etc/letsencrypt/live/<domain>/` + deploy-hook `vds-hysteria2-cert.sh`.
+- Правила: приватные ключи и пароли не попадают в share-link (кроме самого link),
+  логи, git; атомарная запись (`core.secrets.write_secret_atomic`); файловые
+  манифесты не дублируют секреты.
+- **Новое (W2):** пользователи Hysteria2 — в state; агент — только loopback,
+  сравнение паролей — constant-time, токен агента — секрет.
+
+---
+
+## 9. Риски и меры (обновлено)
+
+| Риск | Вер. | Влияние | Мера |
 |---|---|---|---|
-| Конфликт портов на существующем сервере | высокая | блокер установки | `netcheck.port_free` + явные ошибки; SNI-мультиплексор вместо прямого захвата 443 |
-| Reality детектится на конкретном ISP | средняя | профиль не работает | второй транспорт (Hysteria2/AmneziaWG) + документированный переключатель |
-| ACME не выдаёт сертификат (нет домена) | средняя | Hysteria2/XHTTP недоступны | self-signed с `insecure` для теста; чёткая инструкция про домен |
-| Утечка секретов в логи | средняя | компрометация | маскирование + тест на отсутствие ключей в выводе |
-| Требования root ломают тестируемость | высокая | долго отлаживать | Docker-e2e + мок `run()` в unit-тестах |
-| Блокировка IP сервера | средняя | всё падает | CDN-фронт (фаза 3), документированная ротация IP |
-| Живой VDS нужен для приёмки | высокая | долгие циклы | чеклист «проверить на VDS» + минимум e2e в Docker |
+| Сертификат продлился, юнит не перечитал | **высокая** | тихий отказ hy2-obfs/Xray | W1 (GR-01) + healthcheck |
+| Утечка ссылки = доступ всем | высокая | компрометация | W2 (ADR-009), per-user revoke |
+| Per-user auth: агент упал | средняя | fail-closed, все 401 | `Restart=always` + healthcheck W1 |
+| Клиент не поддерживает obfs/hop | средняя | «не работает у пользователя» | матрица клиентов (W4), warning при pull |
+| Дрейф версии Xray-core | средняя | несовместимость с Mihomo/новыми клиентами | W4 (`xray update`), матрица версий |
+| CDN: один фронт, нет проверки | средняя | блок IP = нет резерва | W4 (пул + `cdn-check`) |
+| Нет бэкапа state | средняя | потеря клиентов/секретов | W5 (`backup/restore`) |
+| Регресс схемы конфига (как `obfs.salamander.password`) | средняя | сервис не стартует | W6 (CI + `--check` в e2e) |
+| Живой VDS нужен для приёмки | высокая | долгие циклы | минимум e2e в Docker + чеклист |
 
 ---
 
-## 7. Метрики успеха
+## 10. Метрики успеха (пересмотрено)
 
-1. Чистый Ubuntu 24.04 + `install.sh` + `vds gateway init` → рабочий сервер за ≤ 10 минут.
-2. Минимум два транспорта разных L4-типов включены по умолчанию.
-3. Клиент получает валидную подписку одной командой.
-4. Probe-resistance: внешний сканер не отличает сервер от обычного HTTPS/decoy.
-5. Watchdog восстанавливает сервис при падении за ≤ 2 цикла таймера.
-6. CI зелёный (unit + Docker e2e), покрытие генераторов конфигов ≥ 80 %.
-7. Ноль секретов в логах/git (проверяется тестом).
+1. Чистый Ubuntu 24.04 + `install.sh` + `vds gateway init --apply` → рабочий
+   сервер за ≤ 10 минут (W5).
+2. ≥3 транспорта разных L4-типов по умолчанию; hop и obfs включены осознанно (W4).
+3. **Отзыв клиента работает за одну команду** и подтверждается e2e (W2).
+4. Клиент получает подписку/QR одной командой, без ручного `qrencode` (W3).
+5. Probe-resistance: сканер без SNI/аутентификатора видит decoy (W4/W6).
+6. healthcheck восстанавливает сервис за ≤2 цикла; сертификат не протухает (W1).
+7. CI зелёный (unit + Docker-e2e), включая кейс «конфиг проходит `--check`» (W6).
+8. Ноль секретов в логах/git (тест есть, расширяется на агент W2).
 
 ---
 
-## 8. График (ориентир)
+## 11. График (ориентир, после ревизии)
 
-| Неделя | Фаза | Результат |
+| Неделя | Волна | Результат |
 |---|---|---|
-| 1 | 0 + 1 | Фундамент, рабочий Reality |
-| 2 | 2 + 5 (базово) | Hysteria2, hub + подписки |
-| 3 | 3 + 4 | XHTTP/CDN, AmneziaWG |
-| 4 | 6 + 7 | Hardening, watchdog/metrics |
-| 5 | 8 + 9 | Тесты, документация, релиз |
+| 1 | W1 | hook на все юниты, healthcheck-таймер, срок сертификата |
+| 2 | W2 | per-user auth (ADR-009), schema v2, отзыв клиента |
+| 3 | W3 | `gateway export` (qr/sub/conf), подписка по токену, TUI-флаги |
+| 4 | W4 | hop включён, `xray update`, пул фронтов, decoy-проба |
+| 5 | W5 | `gateway init`, метрики, backup, DNS-01, `vpn scheme auto` |
+| 6 | W6 | CI + Docker-e2e, ротация паролей/обфускации, `cert_domain` |
 
-**Минимальный полезный релиз (MVP):** конец 2-й недели (Reality + Hysteria2 + hub + подписки).
+**Минимальный полезный релиз (MVP-2):** конец 2-й недели — W1+W2 (надёжность +
+управляемый доступ) на уже работающем стеке.
 
 ---
 
-## 9. Что делаем первым действием
+## 12. Что делаем первым действием
 
-1. Закрыть P1–P3 из `TECHDEBT.md` (иначе новые модули унаследуют те же дефекты).
-2. Добавить `core/protocol.py`, `core/netcheck.py`, `core/secrets.py`, `gateway/store.py` и тесты.
-3. Реализовать `src/xray/` — первый транспорт; приёмка на живом VDS.
+1. **W1, GR-01** — правка deploy-hook (наименьшая цена, наибольший риск снят).
+2. **W2, ADR-009 → accepted** — SPEC на per-user auth (WP-1…WP-5), затем код.
+3. **W1, GR-18** — healthcheck-таймер (переиспользует rate-limit ZeroTier-watchdog).
 
-## 10. Источники практик
+Детализация пунктов, файлов и AC — в [GROWTH-POINTS.md](GROWTH-POINTS.md);
+дефекты и долг — в [TECHDEBT.md](../TECHDEBT.md).
+
+## 13. Источники практик
 
 - [Project X / Xray-core](https://github.com/XTLS/Xray-core) — VLESS, REALITY, XHTTP.
 - [SagerNet / sing-box](https://github.com/SagerNet/sing-box) — универсальное ядро и формат подписок.
-- [apernet / hysteria](https://github.com/apernet/hysteria) — Hysteria2, QUIC-транспорт и метрики.
+- [apernet / hysteria](https://github.com/apernet/hysteria) — Hysteria2, QUIC, obfs, auth.
 - [amnezia-vpn / amneziawg-go](https://github.com/amnezia-vpn/amneziawg-go) — обфускация WireGuard.
 - [klzgrad / naiveproxy](https://github.com/klzgrad/naiveproxy) — HTTP/2 CONNECT мимикрия.
-- [TSPU throttling analysis — Habr](https://habr.com/en/articles/990236) — актуальное поведение цензора.
+- [TSPU throttling analysis — Habr](https://habr.com/en/articles/990236) — поведение цензора.
