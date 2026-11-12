@@ -229,6 +229,18 @@ class TestPureFunctions:
         # приватного материала в hook быть не может: только пути и команды
         assert "BEGIN" not in hook and "PRIVATE KEY" not in hook
 
+    def test_render_deploy_hook_restarts_all_units_gr01(self) -> None:
+        """GR-01 (W1): hook перезапускает все три юнита, использующих сертификат."""
+        hook = acme.render_deploy_hook(DOMAIN_OK)
+        # владелец cert/key-путей — безусловный restart
+        assert f"systemctl restart {acme._HOOK_UNIT}\n" in hook
+        # остальные (xray, obfs) — через guard + try-restart
+        for unit in ("vds-xray.service", "vds-hysteria2-obfs.service"):
+            assert unit in hook
+        assert "try-restart" in hook
+        # отсутствующий юнит (obfs опционален) не роняет hook при set -e
+        assert 'systemctl cat "$EXTRA_UNIT" >/dev/null 2>&1' in hook
+
     def test_certbot_issue_args_idempotent_flag(self) -> None:
         args = acme._certbot_issue_args(DOMAIN_OK, EMAIL)
         assert args[0] == "certbot" and "--standalone" in args

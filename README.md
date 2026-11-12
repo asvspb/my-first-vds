@@ -141,6 +141,8 @@ vds gateway status                  # Состояние gateway: state.json, к
 vds gateway links                   # Share-links клиентов (--protocol xray|hysteria2|amneziawg)
 vds gateway links --include-obfs    # + obfs-ссылки hysteria2 (`<name>@obfs`)
 vds gateway blockcheck              # «Блок IP» vs «деградация» vs «локальная проблема»
+vds gateway healthcheck             # Юниты/порты/сертификат (<14 дн. warning, <7 error)
+vds gateway healthcheck --install-timer  # Таймер vds-gateway-health (каждые 5 мин)
 
 vds xray install                    # Установить Xray VLESS Reality (TCP 443)
 vds xray install --sni www.cloudflare.com   # Сайт-маска (по умолчанию www.google.com)
@@ -218,6 +220,11 @@ Gateway-протоколы — статические сервисы, без т�
 `vds-xray.service`, `vds-hysteria2.service`, `vds-hysteria2-hop.service`
 (oneshot, восстанавливает nat-цепочку после ребута), `vds-hysteria2-obfs.service`,
 `vds-amneziawg.service`. Юниты ставятся из шаблонов `systemd/*.tpl`.
+
+Таймер `vds-gateway-health.timer` (W1 GR-18) — healthcheck gateway-юнитов,
+портов и срока сертификата; ставится вручную:
+`vds gateway healthcheck --install-timer` (каждые 5 мин, rate-limited рестарт
+упавших юнитов).
 
 Таймеры — только для ZeroTier (архив):
 

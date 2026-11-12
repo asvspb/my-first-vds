@@ -453,6 +453,46 @@ def gateway_blockcheck(
     raise typer.Exit(0)
 
 
+@gateway_app.command("healthcheck")
+def gateway_healthcheck(
+    restart: bool = typer.Option(
+        True,
+        "--restart/--no-restart",
+        help="Рестартовать упавшие юниты (rate-limit: 3/час на юнит)",
+    ),
+    install_timer: bool = typer.Option(
+        False,
+        "--install-timer",
+        help="Установить и запустить systemd-таймер vds-gateway-health.timer "
+        "(healthcheck каждые 5 мин; root)",
+    ),
+    unit_mode: bool = typer.Option(
+        False,
+        "--unit",
+        help="Режим из systemd-таймера: exit 0 всегда, кроме нечитаемого "
+        "state.json (в ручном режиме exit 1 при error-находке)",
+    ),
+):
+    """Проверка здоровья gateway: юниты, порты (по state), срок сертификата
+    (<14 дн. warning, <7 error). Read-only, кроме рестарта упавшего юнита."""
+    from src.core.logger import console
+    from src.gateway.health import install_health_timer, run_healthcheck
+
+    if install_timer:
+        import os
+
+        if os.geteuid() != 0:
+            console.print(
+                "[error][gateway] Установка таймера требует root (sudo).[/error]"
+            )
+            raise typer.Exit(1)
+        if not install_health_timer():
+            raise typer.Exit(1)
+        return
+
+    raise typer.Exit(run_healthcheck(restart=restart, unit_mode=unit_mode))
+
+
 @gateway_app.command("links")
 def gateway_links(
     protocol: str = typer.Option(

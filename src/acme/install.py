@@ -30,7 +30,9 @@ from src.gateway.paths import (
     ACME_LETSENCRYPT_LIVE,
     HYSTERIA2_CERT_PATH,
     HYSTERIA2_KEY_PATH,
+    HYSTERIA2_OBFS_UNIT,
     HYSTERIA2_UNIT,
+    XRAY_UNIT,
 )
 from src.gateway.store import StoreError, load_state, save_state
 
@@ -44,6 +46,11 @@ FULLCHAIN_NAME = "fullchain.pem"
 PRIVKEY_NAME = "privkey.pem"
 
 _HOOK_UNIT = HYSTERIA2_UNIT.removesuffix(".service")
+
+# GR-01 (W1): сертификат LE используют и другие юниты gateway — hook обязан
+# обновить их все. obfs-инстанс опционален (юнита может не быть) — guard в
+# render_deploy_hook пропускает отсутствующие, hook не падает (set -e).
+_HOOK_EXTRA_UNITS = (XRAY_UNIT, HYSTERIA2_OBFS_UNIT)
 
 
 class AcmeError(Exception):
@@ -178,7 +185,14 @@ def render_deploy_hook(domain: str) -> str:
 
     Секретов в hook нет (только домен и пути); приватный материал копируется
     с 0600 на месте назначения.
+
+    GR-01 (W1): после подмены сертификата перезапускаются все юниты, которые
+    его используют: безусловно vds-hysteria2 (владелец cert/key-путей) и
+    try-restart для остальных (vds-xray — LE-сертификат CDN-origin;
+    vds-hysteria2-obfs — опциональный инстанс, отсутствующий юнит или
+    неактивный пропускается, hook не падает при `set -e`).
     """
+    extra_units = " ".join(_HOOK_EXTRA_UNITS)
     return (
         "#!/bin/sh\n"
         "# Автосгенерировано `vds acme issue` (ADR-004, SPEC WP-1); править руками\n"
@@ -198,6 +212,14 @@ def render_deploy_hook(domain: str) -> str:
         "install -m 0600 \"$CERT_DIR/" + FULLCHAIN_NAME + "\" \"$HYS_CERT\"\n"
         "install -m 0600 \"$CERT_DIR/" + PRIVKEY_NAME + "\" \"$HYS_KEY\"\n"
         f"systemctl restart {_HOOK_UNIT}\n"
+        "# GR-01: обновить остальные юниты, использующие сертификат. Юнит есть\n"
+        "# (systemctl cat ok), но не активен — try-restart молча пропустит;\n"
+        "# юнита нет (obfs опционален) — guard пропускает, hook не падает.\n"
+        'for EXTRA_UNIT in ' + extra_units + '; do\n'
+        '    if systemctl cat "$EXTRA_UNIT" >/dev/null 2>&1; then\n'
+        '        systemctl try-restart "$EXTRA_UNIT"\n'
+        '    fi\n'
+        'done\n'
     )
 
 
