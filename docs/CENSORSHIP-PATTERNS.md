@@ -65,7 +65,14 @@ NS на уровне реестра, недоступную владельцу �
   `sysctl net.ipv4.{all,<iface>}.rp_filter=0` в скрипте.
 Команды: `vpn scheme awg` / `vpn start`; демонтаж `vpn reset`.
 Открытый gap: паттерн имени интерфейса в monitor (исправлен: источник истины
-`awg show interfaces`). ⚠️ Утечка браузерного DoH (ревью 2026-11-11): если
+`awg show interfaces`). **Третий root cause (2026-11-12): DNS-based split слеп
+к хардкод-IP-приложениям.** Telegram — уникальный случай: клиент коннектится
+к захардкоженным DC-адресам (149.154.x, 91.108.x) МИМО DNS → доменный split
+(nftset через dnsmasq) их не видит → трафик напрямую → блок (симптом: TG мёртв
+при живом youtube — youtube DNS-разрешим). Фикс: статические официальные
+диапазоны TG в nft-set (`STATIC_ROUTES_NETS` в 15_domain-split.sh: 91.108.4-20/22,
+91.108.56/22, 149.154.160.0/20 + 3×IPv6) — вне DNS-механики. Принцип общий:
+любое приложение с вшитыми адресами требует статических диапазонов в set. ⚠️ Утечка браузерного DoH (ревью 2026-11-11): если
 Chrome/Firefox резолвят встроенным DoH в обход dnsmasq — nft-set голодает и
 браузер идёт напрямую в блок. Закрыто системными managed-политиками
 (`/etc/opt/chrome/policies/managed/vpn-manager.json`: DnsOverHttpsMode off,
