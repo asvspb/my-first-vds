@@ -18,6 +18,7 @@ state.json (0600), а каждый клиент получает профиль 
 
 from urllib.parse import quote
 
+from src.acme.install import cert_exists
 from src.core.logger import console
 from src.core.netcheck import public_ip
 from src.gateway.store import (
@@ -71,10 +72,27 @@ def render_share_link(
     )
 
 
-def _le_domain(state) -> str:
-    """Домен с выданным LE-сертификатом из state (WP-1); пусто — его нет."""
+def le_domain(state) -> str:
+    """Домен, для которого LE-сертификат реально развёрнут на hysteria2.
+
+    `state.domain` — имя сервера (Reality/XHTTP-ссылки), `acme.domain` — домен
+    последнего `vds acme issue`. Они могут расходиться: acme.domain нередко
+    уходит на CDN-фронт (Cloudflare proxy) и hysteria2 его не обслуживает, а
+    TLS завершается сертификатом `state.domain`. Ссылка с чужим sni даёт
+    `CRYPTO_ERROR 0x150`. Поэтому при расхождении берём `state.domain`, но
+    только если для него есть live-каталог LE; иначе — прежнее поведение
+    (acme.domain).
+    """
     meta = state.protocols.get("acme") or {}
-    return str(meta.get("domain") or "")
+    acme_domain = str(meta.get("domain") or "")
+    if not acme_domain:
+        return ""
+    domain = str(getattr(state, "domain", "") or "")
+    if not domain or domain == acme_domain:
+        return acme_domain
+    if cert_exists(domain):
+        return domain
+    return acme_domain
 
 
 def _hysteria2_meta(state) -> dict:
@@ -101,11 +119,11 @@ def add_client(name: str, state_path: str | None = None) -> dict:
             "`vds hysteria2 install`."
         )
 
-    le_domain = _le_domain(state)
-    if le_domain:
+    tls_domain = le_domain(state)
+    if tls_domain:
         # LE-сертификат выдан (WP-1): адрес — домен, sni=домен, без insecure=1
         # (SPEC WP-2). Самоподменённый сертификат: подмена через apply-cert.
-        host = le_domain
+        host = tls_domain
         insecure = False
     else:
         host = public_ip() or meta.get("cert_cn") or "SERVER_IP"
@@ -118,7 +136,7 @@ def add_client(name: str, state_path: str | None = None) -> dict:
         port=port,
         password=password,  # общий пароль инбаунда (см. docstring модуля)
         sni=host,           # sni = IP (self-signed) или домен (LE)
-        extra={"tls": "le"} if le_domain else {},
+        extra={"tls": "le"} if tls_domain else {},
     )
     new_state = store_add_client(state, profile)  # StoreError: дубликат имени
     save_state(new_state, state_path)

@@ -91,7 +91,11 @@ def render_all_links(
             if not password:
                 continue
             port = int(client.port if client.port else meta.get("port", 443))
-            le_domain = str((state.protocols.get("acme") or {}).get("domain") or "")
+            # Хост LE-ссылки — общий резолвер hysteria2 (acme.domain может быть
+            # CDN-фронтом, а сертификат выпущен на state.domain).
+            from src.hysteria2.clients import le_domain as hy_le_domain
+
+            le_domain = hy_le_domain(state)
             if le_domain:
                 link = render_hy_link(
                     host=le_domain, password=password, name=client.name,

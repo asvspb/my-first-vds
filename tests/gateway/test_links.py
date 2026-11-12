@@ -169,6 +169,24 @@ class TestHysteria2Link:
         assert result[0][2] == f"hysteria2://{PASSWORD}@{DOMAIN}:443/?sni={DOMAIN}#mob"
         assert "insecure" not in result[0][2]
 
+    def test_state_domain_wins_when_acme_domain_is_cdn_front(
+        self, state_path: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Регресс asv1: acme.domain — CDN-фронт за Cloudflare, сертификат
+        hysteria2 выписан на state.domain; sni обязан быть state.domain."""
+        import src.hysteria2.clients as hy_clients
+
+        monkeypatch.setattr(hy_clients, "cert_exists", lambda d: d == DOMAIN)
+        state = _full_state()
+        state.domain = DOMAIN
+        state.protocols["acme"] = {"installed": True, "domain": "cdn.example.ru"}
+        state.clients = [state.clients[1]]
+        _save(state, state_path)
+
+        result = render_all_links(state_path, protocol="hysteria2")
+        assert result[0][2] == f"hysteria2://{PASSWORD}@{DOMAIN}:443/?sni={DOMAIN}#mob"
+        assert "insecure" not in result[0][2]
+
 
 class TestAllAndFilter:
     def test_all_three_clients(self, state_path: str, monkeypatch: pytest.MonkeyPatch) -> None:

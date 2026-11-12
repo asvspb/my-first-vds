@@ -186,6 +186,15 @@ obfs:
 2. `vds hysteria2 apply-cert --apply` — подмена self-signed на LE (бэкап
    `.bak-pre-le`), рестарт.
 3. `vds hysteria2 add-client NAME` — ссылка БЕЗ `insecure=1`, sni=домен.
+
+Хост LE-ссылки резолвит `hysteria2.clients.le_domain(state)` (общий для
+`add-client` и `gateway links`): если `state.domain` расходится с `acme.domain`
+и для `state.domain` есть live-каталог LE — берётся `state.domain`. Это
+типовой случай, когда `acme.domain` — CDN-фронт за Cloudflare (UDP там не
+обслуживается), а TLS hysteria2 завершается сертификатом домена сервера;
+ссылка с чужим sni даёт у клиента `CRYPTO_ERROR 0x150`. Если live-каталога для
+`state.domain` нет — fallback на `acme.domain`; без ACME вообще — legacy
+IP + `insecure=1`.
 4. `vds hysteria2 apply-cert --restore` — откат к self-signed; старые
    insecure-ссылки снова валидны.
 

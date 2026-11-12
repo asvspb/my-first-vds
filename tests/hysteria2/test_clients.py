@@ -201,6 +201,61 @@ class TestAddClient:
         )
 
 
+class TestLeDomainResolution:
+    """Хост LE-ссылки: сертификат hysteria2 может быть выпущен не для
+    `acme.domain` (тот уходит на CDN-фронт), а для `state.domain`; чужой sni в
+    клиенте даёт CRYPTO_ERROR 0x150 (найдено на asv1)."""
+
+    def _with_acme(self, env: dict, acme_domain: str, state_domain: str) -> None:
+        state = load_state(env["state_path"])
+        state.protocols["acme"] = {"installed": True, "domain": acme_domain}
+        state.domain = state_domain
+        save_state(state, env["state_path"])
+
+    def test_acme_domain_when_same_as_state_domain(
+        self, env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._with_acme(env, "vpn.example.com", "vpn.example.com")
+        monkeypatch.setattr(clients, "cert_exists", lambda d: True)
+        result = clients.add_client("laptop", state_path=env["state_path"])
+        assert result["sni"] == "vpn.example.com"
+        assert "insecure=1" not in result["share_link"]
+        assert "@vpn.example.com:443/?sni=vpn.example.com" in result["share_link"]
+
+    def test_state_domain_wins_when_acme_domain_is_cdn_front(
+        self, env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Регресс asv1: acme.domain=CDN-фронт, сертификат — на state.domain."""
+        self._with_acme(env, "asvpersonal.ru", "vds.example.com")
+        checked: list[str] = []
+
+        def _cert_exists(domain: str) -> bool:
+            checked.append(domain)
+            return True
+
+        monkeypatch.setattr(clients, "cert_exists", _cert_exists)
+        result = clients.add_client("laptop", state_path=env["state_path"])
+        assert checked == ["vds.example.com"]
+        assert result["sni"] == "vds.example.com"
+        assert result["share_link"].startswith(
+            f"hysteria2://{PASSWORD}@vds.example.com:443/?sni=vds.example.com"
+        )
+        assert "insecure=1" not in result["share_link"]
+
+    def test_falls_back_to_acme_domain_without_state_domain_cert(
+        self, env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._with_acme(env, "vpn.example.com", "other.example.com")
+        monkeypatch.setattr(clients, "cert_exists", lambda d: False)
+        result = clients.add_client("laptop", state_path=env["state_path"])
+        assert result["sni"] == "vpn.example.com"
+
+    def test_legacy_ip_link_without_acme(self, env) -> None:
+        result = clients.add_client("laptop", state_path=env["state_path"])
+        assert result["sni"] == IP
+        assert "insecure=1" in result["share_link"]
+
+
 class TestRemoveClient:
     def test_remove_only_hysteria2_client(self, env) -> None:
         clients.add_client("laptop", state_path=env["state_path"])
