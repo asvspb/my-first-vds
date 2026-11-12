@@ -75,7 +75,12 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
 class TestRenderObfsConfig:
     def test_obfs_block_rendered(self) -> None:
         rendered = obfs._render_obfs_config(AUTH_PW, 51826, OBFS_PW)
-        assert "obfs:\n  type: salamander\n" f'  password: "{OBFS_PW}"\n' in rendered
+        assert (
+            "obfs:\n"
+            "  type: salamander\n"
+            "  salamander:\n"
+            f'    password: "{OBFS_PW}"\n'
+        ) in rendered
         assert rendered.startswith("listen: :51826\n")
 
     def test_no_obfs_block_without_password(self) -> None:

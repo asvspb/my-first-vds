@@ -166,6 +166,17 @@ vds hysteria2 remove-obfs [--apply]     # dry-run по умолчанию
 Ссылка obfs-клиента (её печатает `add-client` второй строкой):
 `hysteria2://<password>@<ip>:51826/?sni=<ip>&obfs=salamander&obfs-password=<obfs>&insecure=1#name`.
 
+Серверный YAML: пароль обфускатора вложен в ключ типа — hysteria v2 читает
+схему `obfs.salamander.password`, плоский `obfs.password` игнорируется и
+ядро падает с `obfs.salamander.password: PSK must be at least 4 bytes`:
+
+```yaml
+obfs:
+  type: salamander
+  salamander:
+    password: "<obfs-пароль>"
+```
+
 ### 2.3.3. TLS/ACME fallback-флоу и masquerade (фактическое состояние)
 
 Код ACME — SPEC-20261109/ADR-004, нового кода в WP-1 нет; фактический флоу:

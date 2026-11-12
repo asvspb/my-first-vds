@@ -57,9 +57,13 @@ def render_config(params: Hysteria2ConfigParams) -> str:
         + (
             # Блок obfs — только при заданном пароле (SPEC-20261112 WP-1);
             # без поля рендер байт-в-байт прежний (золотой тест).
+            # Схема hysteria v2: пароль вложен в ключ типа обфускатора
+            # (`obfs.salamander.password`), плоский `obfs.password` ядро
+            # игнорирует и падает с «PSK must be at least 4 bytes».
             "obfs:\n"
             "  type: salamander\n"
-            f'  password: "{params.obfs_password}"\n'
+            "  salamander:\n"
+            f'    password: "{params.obfs_password}"\n'
             "\n"
             if params.obfs_password
             else ""

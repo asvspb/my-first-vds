@@ -72,7 +72,8 @@ class TestObfsRender:
         assert (
             "obfs:\n"
             "  type: salamander\n"
-            f'  password: "{self.OBFS_PASSWORD}"\n'
+            "  salamander:\n"
+            f'    password: "{self.OBFS_PASSWORD}"\n'
         ) in rendered
 
     def test_obfs_block_position_after_auth(self) -> None:
