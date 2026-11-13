@@ -307,6 +307,45 @@ def check_ports(state: GatewayState) -> list[Finding]:
                 findings.append(
                     Finding("error", f"порт {port}/{proto} не слушается ({target.label})")
                 )
+    findings.extend(check_awg_nat())
+    return findings
+
+
+def _awg_installed() -> bool:
+    """AWG-сервер присутствует (конфиг на месте)."""
+    return Path("/etc/amnezia/awg0.conf").is_file()
+
+
+def check_awg_nat(subnet: str = "10.9.0.0/24") -> list[Finding]:
+    """AWG NAT: MASQUERADE-правило на месте? (инцидент 2026-11-13).
+
+    Ловит класс «юнит active, порт слушается, но туннель без интернета»:
+    runtime-правило пропало при ребуте (ufw-персистентность не сработала
+    при inactive ufw). Read-only: парсинг iptables-save, без привязки
+    к имени WAN-интерфейса.
+    """
+    findings: list[Finding] = []
+    if not _awg_installed():
+        return findings  # AWG не установлен — не наша забота
+    dump = run_list(["iptables-save"], timeout=15)
+    if not dump.ok:
+        return [
+            Finding("warning", "AWG NAT: iptables-save не выполнился — не проверено")
+        ]
+    has_rule = any(
+        f"-s {subnet}" in line and "MASQUERADE" in line
+        for line in dump.stdout.splitlines()
+    )
+    if has_rule:
+        findings.append(Finding("ok", f"AWG NAT: MASQUERADE {subnet} на месте"))
+    else:
+        findings.append(
+            Finding(
+                "error",
+                f"AWG NAT: MASQUERADE {subnet} ОТСУТСТВУЕТ — туннель без "
+                "интернета (восстановление: systemctl start vds-amneziawg-nat)",
+            )
+        )
     return findings
 
 

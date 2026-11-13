@@ -174,12 +174,19 @@ class TestFullInstall:
             json.loads(Path(env.state_path).read_text(encoding="utf-8"))
         )
 
-        # Юнит из нашего шаблона с ctx путей
-        assert env.units == [(
-            "vds-amneziawg.service.tpl",
-            "vds-amneziawg.service",
-            {"config_path": str(env.awg_config), "iface": "awg0"},
-        )]
+        # Юниты из наших шаблонов с ctx путей (nat-юнит — GR-инцидент 2026-11-13)
+        assert env.units == [
+            (
+                "vds-amneziawg.service.tpl",
+                "vds-amneziawg.service",
+                {"config_path": str(env.awg_config), "iface": "awg0"},
+            ),
+            (
+                "vds-amneziawg-nat.service.tpl",
+                "vds-amneziawg-nat.service",
+                {"subnet": "10.9.0.0/24", "wan_if": "eth0"},
+            ),
+        ]
 
         # UFW + enable + restart
         assert env.ufw_calls == [["ufw", "allow", "51825/udp"]]
@@ -249,6 +256,9 @@ class TestIdempotency:
             ["ip", "route", "get", "1.1.1.1"],
             ["iptables", "-t", "nat", "-C", "POSTROUTING", *NAT_ARGS_IDEMP],
             ["iptables", "-t", "nat", "-A", "POSTROUTING", *NAT_ARGS_IDEMP],
+            # GR-инцидент 2026-11-13: идемпотентный прогон также проверяет
+            # NAT-юнит (oneshot start безвреден при живом правиле).
+            ["systemctl", "start", "vds-amneziawg-nat.service"],
         ]
         assert env.awg_config.read_bytes() == conf_before  # ключи не перегенерированы (E7)
         assert env.before_rules.read_bytes() == before_rules_before  # NAT persist идемпотентен
@@ -280,7 +290,7 @@ class TestIdempotency:
 
         assert install.run_install(state_path=env.state_path) == 0
         assert _apt_seq(env) != []  # полный install выполнен
-        assert len(env.units) == 1  # юнит переустановлен
+        assert len(env.units) == 2  # юниты переустановлены (awg + nat)
         assert "FIXTURE_PW_X" not in env.awg_config.read_text(encoding="utf-8")
 
     def test_missing_binary_reinstalls(self, env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -456,3 +466,51 @@ class TestRoutingSetup:
         with pytest.raises(install.InstallError, match="dev"):
             install._detect_wan_iface()
 
+
+class TestNatPersistUnit:
+    """GR-инцидент 2026-11-13: MASQUERADE должен персистить независимо от ufw."""
+
+    def test_ensure_nat_persist_unit_installs_and_starts(self, monkeypatch):
+        import src.amneziawg.install as install
+
+        calls: list[tuple] = []
+
+        def _install_unit(template, name, ctx=None, root="/"):
+            calls.append(("install", template, name, ctx))
+            return True
+
+        def _run_list(args, timeout=10):
+            calls.append(("run", args))
+            from src.core.shell import ShellResult
+
+            return ShellResult("", "", 0)
+
+        monkeypatch.setattr(install, "install_unit", _install_unit)
+        monkeypatch.setattr(install, "run_list", _run_list)
+        ok = install._ensure_nat_persist_unit("10.9.0.0/24", "enp6s18")
+        assert ok is True
+        install_calls = [c for c in calls if c[0] == "install"]
+        assert len(install_calls) == 1
+        assert install_calls[0][1] == "vds-amneziawg-nat.service.tpl"
+        assert install_calls[0][2] == "vds-amneziawg-nat.service"
+        assert install_calls[0][3] == {"subnet": "10.9.0.0/24", "wan_if": "enp6s18"}
+        run_calls = [c[1] for c in calls if c[0] == "run"]
+        assert ["systemctl", "start", "vds-amneziawg-nat.service"] in run_calls
+
+    def test_setup_routing_calls_persist(self, monkeypatch):
+        import src.amneziawg.install as install
+
+        called: list[tuple] = []
+        monkeypatch.setattr(install, "_ensure_ip_forward", lambda: None)
+        monkeypatch.setattr(install, "_detect_wan_iface", lambda: "enp6s18")
+        monkeypatch.setattr(
+            install, "_ensure_nat_masquerade",
+            lambda subnet, wan_if: called.append(("runtime", subnet, wan_if)),
+        )
+        monkeypatch.setattr(
+            install, "_ensure_nat_persist_unit",
+            lambda subnet, wan_if: called.append(("persist", subnet, wan_if)) or True,
+        )
+        assert install._setup_routing() == "enp6s18"
+        assert ("runtime", "10.9.0.0/24", "enp6s18") in called
+        assert ("persist", "10.9.0.0/24", "enp6s18") in called

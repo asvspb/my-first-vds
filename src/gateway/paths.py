@@ -31,6 +31,8 @@ HYSTERIA2_KEY_PATH = Path("/etc/hysteria/key.pem")
 # kernel-модуль из PPA ppa:amnezia/ppa; подсеть 10.9.0.0/24 (RFC1918, вне
 # используемых подсетей zerotier/wireguard/xray).
 AWG_UNIT = "vds-amneziawg.service"
+# NAT-юнит: персистентность MASQUERADE независимо от ufw (инцидент 2026-11-13).
+AWG_NAT_UNIT = "vds-amneziawg-nat.service"
 AWG_CONFIG_PATH = Path("/etc/amnezia/awg0.conf")
 AWG_CLIENTS_DIR = GATEWAY_DIR / "clients" / "amneziawg"
 AWG_PORT_DEFAULT = 51825

@@ -429,3 +429,28 @@ class TestCertSniMatch:
         state = self._state(tmp_path, "")
         state.protocols["hysteria2"]["cert_cn"] = "203.0.113.10"
         assert health.check_cert_sni_match(state) == []
+
+    def test_awg_nat_rule_present_ok(self, tmp_path, monkeypatch):
+        """MASQUERADE в iptables-save → ok (инцидент 2026-11-13)."""
+        monkeypatch.setattr(health, "_awg_installed", lambda: True)
+        dump = "-A POSTROUTING -s 10.9.0.0/24 -o enp6s18 -j MASQUERADE\n"
+        monkeypatch.setattr(
+            health, "run_list",
+            lambda args, timeout=10: ShellResult(dump, "", 0),
+        )
+        findings = health.check_awg_nat()
+        assert len(findings) == 1 and findings[0].level == "ok"
+
+    def test_awg_nat_rule_missing_error(self, monkeypatch):
+        """Правила нет → error с подсказкой восстановления."""
+        monkeypatch.setattr(health, "_awg_installed", lambda: True)
+        monkeypatch.setattr(
+            health, "run_list", lambda args, timeout=10: ShellResult("-A OTHER\n", "", 0)
+        )
+        findings = health.check_awg_nat()
+        assert len(findings) == 1 and findings[0].level == "error"
+        assert "vds-amneziawg-nat" in findings[0].text
+
+    def test_awg_not_installed_no_findings(self, monkeypatch):
+        monkeypatch.setattr(health, "_awg_installed", lambda: False)
+        assert health.check_awg_nat() == []

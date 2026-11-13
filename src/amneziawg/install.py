@@ -48,6 +48,7 @@ from src.gateway.paths import (
     AWG_ADDRESS_SUBNET,
     AWG_CONFIG_PATH,
     AWG_IFACE,
+    AWG_NAT_UNIT,
     AWG_PORT_DEFAULT,
     AWG_SYSCTL_FORWARD_CONF,
     AWG_UNIT,
@@ -205,7 +206,41 @@ def _setup_routing() -> str:
     _ensure_ip_forward()
     wan_if = _detect_wan_iface()
     _ensure_nat_masquerade(AWG_ADDRESS_SUBNET, wan_if)
+    _ensure_nat_persist_unit(AWG_ADDRESS_SUBNET, wan_if)
     return wan_if
+
+
+def _ensure_nat_persist_unit(subnet: str, wan_if: str) -> bool:
+    """Персистентность MASQUERADE независимо от ufw: oneshot-юнит (ADR-008-паттерн).
+
+    ufw before.rules грузится ТОЛЬКО активным ufw — на серверах с inactive ufw
+    правило было runtime-only и молча пропадало при ребуте (инцидент
+    2026-11-13: AWG «жив», туннель без интернета). Юнит идемпотентно
+    восстанавливает правило на каждой загрузке. Не рестартует работающий AWG.
+    """
+    ctx = {"subnet": subnet, "wan_if": wan_if}
+    if not install_unit("vds-amneziawg-nat.service.tpl", AWG_NAT_UNIT, ctx=ctx):
+        console.print(
+            f"[warning][amneziawg] NAT-юнит {AWG_NAT_UNIT} не установлен — "
+            "MASQUERADE может пропасть после ребута (ufw-путь персистентности "
+            "недостаточен при inactive ufw).[/warning]"
+        )
+        return False
+    # Юнит oneshot c RemainAfterExit: старт добавляет правило, если его нет
+    # (runtime уже активен — вызов безвреден и ничего не прерывает).
+    start = run_list(["systemctl", "start", AWG_NAT_UNIT], timeout=30)
+    if not start.ok:
+        console.print(
+            f"[warning][amneziawg] {AWG_NAT_UNIT}: старт не удался "
+            f"({start.stderr.strip() or start.stdout.strip()}); правило "
+            "проверьте вручную.[/warning]"
+        )
+        return False
+    console.print(
+        f"[change][amneziawg] NAT-юнит {AWG_NAT_UNIT}: MASQUERADE {subnet} -> "
+        f"{wan_if} теперь восстанавливается при загрузке.[/change]"
+    )
+    return True
 
 
 def _installed() -> bool:
