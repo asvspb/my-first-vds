@@ -148,11 +148,13 @@
 
 - **Точки роста схем/протоколов:** [docs/GROWTH-POINTS.md](../GROWTH-POINTS.md) —
   24 пункта (GR-01…GR-24) с фактами, действиями и AC.
-- **Цикл CDN-usability:** [SPEC-20261113-cdn-usability](specs/SPEC-20261113-cdn-usability.md)
-  — **G4 FAIL** ([TEST-20261113-cdn-mux](reports/TEST-20261113-cdn-mux.md)):
-  WP-2 (TTFB) и WP-3 (bench) приняты; WP-1 (mux) откатить — mux через CF
-  нестабилен (1/5 запросов против 5/5 без mux). Следующий шаг — WP-1 revert
-  и отдельная SPEC «XHTTP through CF».
+- **Цикл CDN-usability — G4 CLOSED 2026-11-13:**
+  [SPEC-20261113-cdn-usability](specs/SPEC-20261113-cdn-usability.md),
+  отчёт [TEST-20261113-cdn-mux](reports/TEST-20261113-cdn-mux.md) §9.
+  Принято: TTFB p50/p95 в `vpn speed` (WP-2), CDN-baseline с контролем и
+  smoke (WP-3). Откачено: mux через CF (1/5 против 5/5).
+  **Следующий шаг:** новая SPEC `cdn-xhttp-cf` (XHTTP через Cloudflare
+  вместо Mux.Cool; опционально cloudflared tunnel/Argo).
 - **Roadmap v2 (2026-11-13, ревизия архитектора):**
   [CENSORSHIP-ROADMAP](../CENSORSHIP-ROADMAP.md) — фазы 0–9 переведены в
   «статус + остаток», остаток разложен на волны **W1–W6**; W1 (hook+healthcheck)

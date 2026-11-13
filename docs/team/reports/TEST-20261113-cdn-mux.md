@@ -105,3 +105,34 @@ bulk 0 байт — статус честно «только задержка» 
 | `--include-cdn` не ломает дефолт | ✅ |
 | `vpn reset` чистый | ✅ |
 | секреты/права | ✅ (отчёт 0600, лог без секретов) |
+
+---
+
+## 9. Повторная приёмка после отката (2026-11-13 ~20:00)
+
+Кодер выполнил возврат по §6: `711c2bd` (revert WP-1), `5c22f96` (bench:
+контроль+smoke, без mux), `e87280b` (docs). Плюс ревью-правка архитектора
+`641bfd9` (парсинг `elapsed` при таймауте bulk — косметика, цифры не менялись).
+
+Проверки архитектора:
+
+| Проверка | Результат |
+|---|---|
+| `grep -rn "mux" vpnm/ tests/` | пусто (остался только doc-контекст «mux отклонён») |
+| `vpn --help` / `vpn up --help` | команды `mux` и флагов `--mux/--no-mux` нет |
+| `pytest -q` vpnm | **349 passed** |
+| `pytest -q` vds | **540 passed** |
+| `bash -n scripts/bench-cdn-mux.sh` | ok |
+| bench `SAMPLES=1` | контроль p50 TLS **0.55 с**, smoke **HTTP 200**, bulk timeout — корректный формат |
+| early-fail (неверный socks-порт 2099) | «канал не поднялся/не отвечает», baseline не запускается, `vpn reset` |
+| после прогонов | `no active profile`, iface `laptop` нет, socks-порты не слушают |
+
+**Итоговый вердикт цикла:** WP-2 (TTFB) и WP-3 (bench: контроль+smoke)
+приняты; WP-1 (mux) откачен. G4 закрыт.
+
+Файл `scripts/bench-cdn-mux.sh` сохранил историческое имя; в шапке объяснено,
+что это CDN baseline, а не A/B mux.
+
+**Follow-up:** отдельная SPEC `cdn-xhttp-cf` — мультиплексирование через
+XHTTP поверх Cloudflare (вместо Mux.Cool), опционально cloudflared tunnel /
+Argo. Mux.Cool + WS + CF признан непригодным (1/5 против 5/5).
