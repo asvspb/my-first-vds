@@ -261,3 +261,34 @@ systemctl restart vds-hysteria2 vds-hysteria2-obfs
    раздел «И26» в `docs/CENSORSHIP-PATTERNS.md` §9, чек-лист в
    `docs/DEPLOY.md` и `doc/vds.md` (ubuntuInstaller).
 4. Поправить таймстемпы §4/§6 (см. 8.1) — не сделано.
+
+## 9. Улучшенная версия пересобрана и развёрнута 2026-11-13 ~08:25 UTC (после отката)
+
+Цель владельца: «так чтобы после этого трафик не переставал идти». Выполнено (коммит `266443c`):
+
+**Root cause MASQUERADE-грабли найден в коде:** `_ensure_nat_masquerade` персистила
+правило ТОЛЬКО в ufw before.rules — при inactive ufw (наш случай) правило было
+runtime-only и молча пропадало при ребуте. Код честно предупреждал (warning), но
+персистентности не обеспечивал.
+
+**Что сделано:**
+- `systemd/vds-amneziawg-nat.service.tpl` — oneshot, идемпотентный `-C||-A`
+  MASQUERADE при каждой загрузке, НЕ зависит от ufw (ADR-008-паттерн);
+- `install.py::_ensure_nat_persist_unit` — устанавливает юнит, не рестартует живой AWG;
+- `health.py::check_awg_nat` — ловит класс «юнит active, туннель без интернета»
+  (iptables-save → error с подсказкой восстановления);
+- W1-код (healthcheck/таймер/hook GR-01) возвращён на сервер тем же деплоем;
+- **Деплой безостановочный**: только additive-действия (oneshot start безвреден при
+  живом правиле, таймер новый, CLI-код не влияет на демонов) — трафик AWG шёл
+  непрерывно (transfer рос на каждом замере: 2.97 → 3.04 MiB received).
+
+**Reboot-гейт улучшенной версии: PASS** (~08:20 UTC):
+- `vds-amneziawg-nat` active (exited) после загрузки, **MASQUERADE восстановлена
+  сама, без ручных действий** — персистентность подтверждена;
+- 5 юнитов active, все порты, healthcheck: AWG NAT ok, cert 88 дн., SNI-match ok;
+- data-plane сквозной пробой: `curl --interface laptop https://youtube/generate_204`
+  → **204** через AWG-туннель (ping 10.9.0.1 loss — известная норма, данные ходят).
+
+Грабля закрыта насовсем: ребут больше не рвёт AWG-туннель молча; если правило
+исчезнет по любой другой причине — healthcheck-таймер покажет error в течение
+5 минут с подсказкой восстановления.
