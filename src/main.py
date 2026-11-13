@@ -493,6 +493,52 @@ def gateway_healthcheck(
     raise typer.Exit(run_healthcheck(restart=restart, unit_mode=unit_mode))
 
 
+@gateway_app.command("init")
+def gateway_init(
+    protocols: str = typer.Option(
+        "reality,hysteria2",
+        "--protocols",
+        help="CSV из reality,hysteria2,obfs,hop,xhttp,cdn,awg",
+    ),
+    domain: str = typer.Option(None, "--domain", help="Домен для ACME/CDN/ссылок"),
+    email: str = typer.Option(None, "--email", help="Email Let's Encrypt (не сохраняется)"),
+    sni: str = typer.Option("www.google.com", "--sni", help="SNI для Reality (dest/serverNames)"),
+    hop_range: str = typer.Option(
+        "20000-20500", "--hop-range", help="Диапазон port hopping при hop"
+    ),
+    cdn_domain: str = typer.Option(
+        None, "--cdn-domain", help="Origin-домен CDN (по умолчанию = --domain)"
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Исполнить (по умолчанию dry-run)"),
+    demo_clients: bool = typer.Option(
+        False, "--demo-clients", help="Создать phone/mob/laptop и напечатать ссылки"
+    ),
+    require_domain: bool = typer.Option(
+        False,
+        "--require-domain",
+        help="Строгий режим: DNS не подтверждён → exit 1 вместо skip с warning",
+    ),
+):
+    """Идемпотентное развёртывание gateway с нуля (SPEC-20261114):
+    reality + hysteria2 (+obfs/hop/xhttp/cdn/awg) + healthcheck-таймер.
+    Dry-run по умолчанию: план + проверки портов/DNS без мутаций."""
+    from src.gateway.init import run_init
+
+    raise typer.Exit(
+        run_init(
+            protocols=protocols,
+            domain=domain,
+            email=email,
+            sni=sni,
+            hop_range=hop_range,
+            cdn_domain=cdn_domain,
+            apply=apply,
+            demo_clients=demo_clients,
+            require_domain=require_domain,
+        )
+    )
+
+
 @gateway_app.command("links")
 def gateway_links(
     protocol: str = typer.Option(

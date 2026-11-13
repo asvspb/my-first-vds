@@ -70,6 +70,7 @@ STEP_UNIT = {
     "xhttp": XRAY_UNIT,
     "cdn": XRAY_UNIT,
     "acme": None,
+    "xray-domain": None,
     "healthcheck": None,
 }
 
@@ -251,6 +252,13 @@ def build_plan(
                 _cli(["hysteria2", "apply-cert", "--apply"]),
             )
         )
+        plan.steps.append(
+            Step(
+                "xray-domain",
+                f"Адрес ссылок = {domain} (state.domain)",
+                _cli(["xray", "use-domain", "--domain", domain]),
+            )
+        )
     if "xhttp" in protocols:
         if domain:
             plan.steps.append(
@@ -366,7 +374,7 @@ def preflight(plan: InitPlan, domain: str | None, state_path: str | None = None)
                 "шаги отработают)."
             )
             for step in plan.steps:
-                if step.name in ("acme", "hy2-cert", "xhttp", "cdn") and not step.skip_reason:
+                if step.name in ("acme", "hy2-cert", "xray-domain", "xhttp", "cdn") and not step.skip_reason:
                     step.skip_reason = f"DNS {domain} не резолвится в публичный IP"
 
     _preflight_ports(plan, state_path)
@@ -486,6 +494,7 @@ _ROLLBACK = {
     "hysteria2": "vds hysteria2 remove --apply",
     "acme": "certbot delete --cert-name <домен>",
     "hy2-cert": "vds hysteria2 apply-cert --restore",
+    "xray-domain": "vds xray use-domain --domain ''  # не поддерживается — правьте state.json",
     "xhttp": "vds xray remove-transport xhttp --apply",
     "cdn": "vds xray remove-cdn --apply",
     "obfs": "vds hysteria2 remove-obfs --apply",

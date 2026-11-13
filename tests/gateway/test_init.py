@@ -157,7 +157,8 @@ class TestBuildPlan:
         names = [s.name for s in plan.steps]
         assert names.index("reality") < names.index("hysteria2")
         assert names.index("acme") < names.index("hy2-cert")
-        assert names.index("hy2-cert") < names.index("xhttp")
+        assert names.index("hy2-cert") < names.index("xray-domain")
+        assert names.index("xray-domain") < names.index("xhttp")
         assert names.index("xhttp") < names.index("cdn")
         assert names.index("cdn") < names.index("obfs")
         assert names.index("obfs") < names.index("hop")
