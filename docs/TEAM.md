@@ -30,8 +30,10 @@
 | Тестировщик | `vds-tester` | Независимо проверяет по AC, пишет TEST-REPORT, заводит дефекты | Не правит продовый код |
 | Документатор | `vds-docs` | Синхронизирует README/docs/CHANGELOG/AGENTS после изменений | Не придумывает поведение |
 | Оркестратор | `vds-orchestrator` | Ведёт поток, запускает роли, держит гейты, ведёт STATUS и финальный отчёт | Не подменяет роли |
+| Метагент | `vds-agent-smith` | Проектирует и создаёт новых `vds-*` агентов: интейк → проверка уникальности → файл агента | Не создаёт агентов вне конвейера (одноразка = скрипт); не редактирует существующих без запроса |
+| Скаут | `vds-youtube-scout` | Разбирает YouTube по теме обхода блокировок → research-digest в `docs/research/` (вход G0) | Не проектирует решение и не меняет код; слова блогера не переносит в проектные документы без метки источника |
 
-**Модели:** `vds-architect`, `vds-tester` — `glm-5.3` · `vds-debugger` — `deepseek-flash` · остальные — `glm-5.3-flash`. У всех `thoughtLevel: low`. Смена модели — только в frontmatter агента (`.zcode/agents/*.md`).
+**Модели:** `vds-architect`, `vds-tester`, `vds-agent-smith` — `glm-5.3` · `vds-debugger` — `deepseek-flash` · остальные — `glm-5.3-flash`. `thoughtLevel: high` — у `vds-agent-smith`, у остальных `low`. Смена модели — только в frontmatter агента (`.zcode/agents/*.md`).
 
 ---
 
@@ -133,7 +135,11 @@ SPEC → коммиты → TEST/DOC».
 
 Оркестратор запускает роли через инструмент Agent с `subagent_type`:
 `vds-owner`, `vds-analyst`, `vds-architect`, `vds-coder`, `vds-debugger`,
-`vds-tester`, `vds-docs`, `vds-orchestrator`.
+`vds-tester`, `vds-docs`, `vds-orchestrator`. До G0 владелец может запустить
+`vds-youtube-scout` — research-digest из `docs/research/` как вход для идеи.
+Владелец при необходимости
+расширения команды запускает `vds-agent-smith` — тот создаёт файл нового
+агента, который затем добавляется в этот реестр и таблицу ролей (§2).
 
 Кодеров можно запускать параллельно (несколько копий `vds-coder`) на независимых WP;
 WP, затрагивающие одни и те же файлы, выполняются последовательно.

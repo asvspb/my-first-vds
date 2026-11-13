@@ -7,3 +7,9 @@ __pycache__/
 venv/
 *.pyc
 .env
+
+# Локальные артефакты сессий (не часть проекта)
+*.bak
+*.log
+zerotier_dump.txt
+upload-ssh-cert.sh
