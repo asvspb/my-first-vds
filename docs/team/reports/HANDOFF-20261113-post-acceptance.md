@@ -139,3 +139,101 @@ Reality-gate (openssl на 443 с чужим SNI → CN google) — probe resist
 - ADR-009 per-client auth: отложен «на подумать»
 - И20: тикет хостеру о dest/SNI той же AS — не отправлен
 - И26-инвариант «серийные пробы» — зафиксировать в probe после этого окна
+
+---
+
+## 8. Addendum (2026-11-13 05:40 UTC): инцидент №2 закрыт, найден и исправлен инцидент №3
+
+### 8.1. Инцидент №2 (TSPU-окно): H-2 опровергнут, H-1 подтверждён с уточнением
+
+**Проверено преемником сразу после чтения отчёта.**
+
+Состояние сервера (SSH с ноутбука, РФ):
+
+```
+uptime: up 33 min, boot 2026-11-13 05:02 (это плановый reboot для AWG-фикса)
+юниты: xray, hysteria2, hysteria2-obfs, hysteria2-hop, amneziawg, health.timer — все active
+порты: 443tcp/8443tcp/2053tcp/443udp/51826udp/51825udp слушаются; hop-цепочка на месте
+healthcheck: прогон 05:31:27, rc 0, сертификат 88 дн.
+```
+
+Внешняя проверка (check-host.net, 51 узел, 05:36–05:39 UTC):
+
+| Проба | Результат |
+|---|---|
+| ICMP `103.45.247.172` | **51/51 OK** (0.018–0.2 с) |
+| TCP 22 / 443 / 2053 | **0/51**: `Connection refused` / `timeout` с большинства узлов |
+| TCP `1.1.1.1:443` (контроль) | 51/51 OK — API исправен |
+| С ноутбука (РФ): 22/443/2053 | open; TLS на 443 → `CN=*.google.com` (Reality-decoy жив) |
+
+На сервере **файрвола нет**: `ufw inactive`, `iptables -P INPUT ACCEPT`, в nft только
+nat-цепочка `VDS_HY2_HOP`. Значит TCP-фильтрация по источнику — **на стороне
+провайдера/апстрима** (гео/anti-DDoS), не сервера.
+
+**Вывод:**
+- **H-2 (сервер упал) — опровергнут**: сервер непрерывно работал, рестартов юнитов
+  после boot нет.
+- **H-1 (сетевой эпизод) — подтверждён**, но формулировка в §4 требует уточнения:
+  блок был **по источнику**, а не «сервер мёртв». РФ-клиент был отрезан ~10–30 мин,
+  а не-РФ источники **не проходят TCP постоянно** (ICMP при этом проходит для всех).
+- Практический инвариант: «сервер недоступен» проверять тремя осями — **ICMP, TCP,
+  страна/AS источника**. Отсутствие TCP с check-host ≠ смерть сервера.
+- ⚠️ Таймстемпы §4/§6 сдвинуты: фактические события ~**05:2x–05:3x UTC**, а не
+  «05:5x/06:00». Отчёт писался в 05:32 UTC (mtime).
+
+### 8.2. Инцидент №3 (НОВЫЙ, исправлен 05:37): подмена сертификата Hysteria2 сломала ссылки
+
+**Симптом:** `gateway links` отдаёт `sni=103-45-247-172.eu-cloud-xip.com`, а
+`/etc/hysteria/cert.pem` после приёмки W1 стал `subject=CN=asvpersonal.ru`
+(deploy-hook применяет сертификат своего домена). Проверка локальным
+`hysteria client`:
+
+```
+sni=103-45-247-172.eu-cloud-xip.com -> FATAL (TLS), туннель не поднимается
+sni=asvpersonal.ru                  -> curl через туннель OK
+```
+
+То есть **все hy2-ссылки (main и obfs) были нерабочими** для клиентов, пока не
+поправлен сертификат. Xray не затронут: XHTTP-инбаунд использует cert xip.com
+(`config.json:50`), CDN-origin — cert asvpersonal.ru (`config.json:80`).
+
+**Фикс (сделан):**
+
+```
+cp -a /etc/hysteria/cert.pem /etc/hysteria/cert.pem.bak-asvpersonal
+cp -a /etc/hysteria/key.pem  /etc/hysteria/key.pem.bak-asvpersonal
+install -m 0600 /etc/letsencrypt/live/103-45-247-172.eu-cloud-xip.com/fullchain.pem /etc/hysteria/cert.pem
+install -m 0600 /etc/letsencrypt/live/103-45-247-172.eu-cloud-xip.com/privkey.pem   /etc/hysteria/key.pem
+systemctl restart vds-hysteria2 vds-hysteria2-obfs
+```
+
+Проверено: `subject=CN=103-45-247-172.eu-cloud-xip.com`, `notAfter=Feb 7 2027`,
+оба юнита active, handshake с `sni=xip.com` проходит (curl через туннель →
+`103.45.247.172`). Ссылки менять не пришлось.
+
+**Причина и рецидив:** hook доменно-зависим (`DOMAIN="asvpersonal.ru"`), а
+`state.domain = xip.com` — именно этот домен попадает в ссылки. Следующее
+продление asvpersonal.ru снова подменит `/etc/hysteria/cert.pem` → hy2 опять
+сломается. Нужен **GR-10**: раздельные `host`/`sni` в ссылке (host = адрес
+сервера, sni = домен развёрнутого сертификата) либо единый домен для hy2; до
+реализации — добавить в healthcheck проверку «subject cert.pem == sni из links».
+
+### 8.3. §3 (AWG PSK-truncation): подтверждено на живом пире
+
+`awg show awg0 dump`:
+
+```
+10.9.0.2/32  last handshake 05:35:15 UTC  (ноутбук)
+10.9.0.3/32  last handshake 05:09:35 UTC  (мобильный пир — ПОСЛЕ reboot 05:02)
+```
+
+Мобильный пир подключался после фикса PSK — открытый вопрос из §3 закрыт.
+
+### 8.4. Что делать дальше (приоритет)
+
+1. **Владельцу:** проверить в панели хостера anti-DDoS/гео-фильтр TCP (ICMP
+   проходит, TCP с не-РФ AS — refused). Это влияет и на CDN-цепочку CF→origin.
+2. **Код:** healthcheck-инвариант «cert subject == sni в ссылках» (дешёвый детект
+   инцидента №3); затем GR-10 (host/sni).
+3. Зафиксировать И26 (серийные пробы с паузами) в `probe`/приёмке.
+4. Поправить таймстемпы §4/§6 (см. 8.1).
