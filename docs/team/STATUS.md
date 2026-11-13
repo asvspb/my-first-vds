@@ -165,6 +165,12 @@
   откачена (туннель disabled и удалён, конфиг восстановлен).
   **CDN остаётся каналом выживания.** Возвращаться к CF-оптимизации не
   планируем; альтернатива — CDN с PoP в РФ или прямые XHTTP/Reality.
+- **Цикл fresh-install-v3 (SPEC approved, ждёт кодера):**
+  [SPEC-20261114-fresh-install-v3](specs/SPEC-20261114-fresh-install-v3.md) —
+  `vds gateway init` (dry-run/--apply): reality, hysteria2, acme, xhttp, cdn,
+  obfs, hop, awg, healthcheck-таймер одной идемпотентной командой;
+  `11_vds-deploy.sh` переводится на init (env `VDS_PROTOCOLS`).
+  Закрывает GR-16 (hub) и убирает ручные шаги fresh install.
 - **Roadmap v2 (2026-11-13, ревизия архитектора):**
   [CENSORSHIP-ROADMAP](../CENSORSHIP-ROADMAP.md) — фазы 0–9 переведены в
   «статус + остаток», остаток разложен на волны **W1–W6**; W1 (hook+healthcheck)
