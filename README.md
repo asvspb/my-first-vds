@@ -175,7 +175,9 @@ vds acme issue --domain vpn.example.ru --email admin@example.ru   # LE (HTTP-01)
 ```
 
 Ссылки импортируются в v2rayNG / NekoRay / Hiddify / sing-box; AmneziaWG-конфиг —
-в AmneziaVPN. Состояние
+в AmneziaVPN. Клиентская сторона: `vpn profile pull` (импорт ссылок) и
+`vpn speed` (живой замер скорости всех каналов, несколько эндпоинтов).
+Состояние
 клиентов — `$INSTALL_DIR/gateway/state.json` (0600); приватные ключи — только
 в конфигах сервера, никогда в share-link и логах. Порты TCP/UDP 443 должны
 быть открыты в UFW. Обзор протоколов — [docs/VPN-PROTOCOLS.md](docs/VPN-PROTOCOLS.md),
