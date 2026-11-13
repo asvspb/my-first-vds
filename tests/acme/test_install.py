@@ -238,6 +238,9 @@ class TestPureFunctions:
         for unit in ("vds-xray.service", "vds-hysteria2-obfs.service"):
             assert unit in hook
         assert "try-restart" in hook
+        # GR-10: после подмены сертификата домен фиксируется в state,
+        # чтобы ссылки рендерили sni=<домен> (а не прежний).
+        assert 'vds hysteria2 set-cert-domain "$DOMAIN"' in hook
         # отсутствующий юнит (obfs опционален) не роняет hook при set -e
         assert 'systemctl cat "$EXTRA_UNIT" >/dev/null 2>&1' in hook
 

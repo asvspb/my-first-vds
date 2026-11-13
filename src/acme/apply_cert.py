@@ -32,7 +32,7 @@ from src.gateway.paths import (
     HYSTERIA2_KEY_PATH,
     HYSTERIA2_UNIT,
 )
-from src.gateway.store import StoreError, load_state
+from src.gateway.store import StoreError, load_state, save_state
 
 LOCK_FILE = "/var/run/vds-acme-apply.lock"
 
@@ -115,6 +115,26 @@ def _copy_0600(source: Path, target: Path) -> None:
     os.replace(tmp, target)
 
 
+def _set_state_cert_domain(domain: str, state_path: str | None) -> None:
+    """Зафиксировать домен развёрнутого сертификата в state (GR-10).
+
+    Ссылки рендерят `sni=<domain>`, а `host` — адрес сервера; без этой записи
+    клиенты получат TLS-mismatch, если домен сертификата ≠ state.domain.
+    """
+    try:
+        state = load_state(state_path)
+    except StoreError:
+        return  # state недоступен — подмена сертификата уже выполнена
+    meta = state.protocols.get("hysteria2") or {}
+    if not meta.get("installed"):
+        return
+    meta["cert_domain"] = domain
+    try:
+        save_state(state, state_path)
+    except (StoreError, OSError):
+        return
+
+
 def apply_certificate(dry_run: bool = True, state_path: str | None = None) -> dict:
     """Подменить self-signed сертификат Hysteria2 на LE (REQ FR-2.2).
 
@@ -159,6 +179,7 @@ def apply_certificate(dry_run: bool = True, state_path: str | None = None) -> di
                 f"Откат: `vds hysteria2 apply-cert --restore` "
                 f"(бэкапы {plan['backup_cert']}, {plan['backup_key']})."
             )
+        _set_state_cert_domain(domain, state_path)
 
     result["days_left"] = _days_left(Path(plan["target_cert"]))
     result["restarted"] = True
@@ -192,6 +213,7 @@ def restore_self_signed(state_path: str | None = None) -> dict:
                 f"systemctl restart {plan['unit']} не удался: "
                 f"{restart.stderr.strip() or restart.stdout.strip()}."
             )
+        _set_state_cert_domain("", state_path)
 
     return dict(plan, dry_run=False, restored=True)
 

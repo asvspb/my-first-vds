@@ -187,7 +187,7 @@ Xray-клиентов (v2rayNG/FoXray) и убрать из рекомендац
 
 ## 3. ACME / сертификаты
 
-### GR-10. Явная привязка «домен → протокол» (`cert_domain`) — **P1**
+### GR-10. Явная привязка «домен → протокол» (`cert_domain`) — **P1** — ✅ 2026-11-13
 
 **Факт.** На asv1 `acme.domain = asvpersonal.ru` (DNS → Cloudflare, это CDN-фронт),
 а сертификат hysteria2 — LE на `103-45-247-172.eu-cloud-xip.com`. Сегодня ссылки
@@ -210,6 +210,12 @@ fallback. Миграция state: при загрузке, если `cert_domain
 
 **Оценка.** 3–4 ч. **Файлы.** `src/gateway/store.py`, `src/acme/*`,
 `src/hysteria2/clients.py`, `tests/`.
+
+**Сделано (2026-11-13):** `render_share_link(..., sni=)` — host и sni разведены;
+`tls_params()` — единый резолвер для `add-client` и `gateway links`;
+`cert_domain` в мете hysteria2, его пишут `apply-cert`, ACME-hook
+(`hysteria2 set-cert-domain "$DOMAIN"`) и новая CLI-команда; `healthcheck`
+сверяет CN сертификата со sni ссылок (error при расхождении).
 
 ### GR-11. Только HTTP-01 — **P2**
 

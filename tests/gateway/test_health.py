@@ -400,3 +400,32 @@ class TestCertCheck:
             )
         assert rc == 0
         assert sleeps == [health.PORT_GRACE_SECONDS]
+
+
+class TestCertSniMatch:
+    """GR-10: CN развёрнутого сертификата обязан совпадать с sni ссылок."""
+
+    def _state(self, tmp_path: Path, cert_domain: str) -> "object":
+        state = health.GatewayState()
+        state.protocols["hysteria2"] = {
+            "installed": True, "port": 443, "cert_domain": cert_domain,
+        }
+        return state
+
+    def test_match_is_ok(self, tmp_path: Path, monkeypatch) -> None:
+        state = self._state(tmp_path, "vpn.example.com")
+        monkeypatch.setattr(health, "cert_subject_cn", lambda path=None: "vpn.example.com")
+        findings = health.check_cert_sni_match(state)
+        assert [f.level for f in findings] == ["ok"]
+
+    def test_mismatch_is_error(self, tmp_path: Path, monkeypatch) -> None:
+        state = self._state(tmp_path, "vpn.example.com")
+        monkeypatch.setattr(health, "cert_subject_cn", lambda path=None: "front.example.ru")
+        findings = health.check_cert_sni_match(state)
+        assert [f.level for f in findings] == ["error"]
+        assert "set-cert-domain" in findings[0].text
+
+    def test_self_signed_skipped(self, tmp_path: Path) -> None:
+        state = self._state(tmp_path, "")
+        state.protocols["hysteria2"]["cert_cn"] = "203.0.113.10"
+        assert health.check_cert_sni_match(state) == []

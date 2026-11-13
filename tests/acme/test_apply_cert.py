@@ -227,3 +227,18 @@ class TestCliEntry:
         monkeypatch.setattr(apply_mod, "console", recorder)
         assert apply_mod.run_apply(restore=True) == 0
         assert env.cert.read_text(encoding="utf-8") == SELF_CERT
+
+
+class TestCertDomainInState:
+    """GR-10: apply фиксирует домен сертификата, restore очищает."""
+
+    def test_apply_sets_cert_domain(self, env: Env) -> None:
+        apply_mod.apply_certificate(dry_run=False, state_path=str(env.state_path))
+        state = apply_mod.load_state(str(env.state_path))
+        assert state.protocols["hysteria2"]["cert_domain"] == DOMAIN
+
+    def test_restore_clears_cert_domain(self, env: Env) -> None:
+        apply_mod.apply_certificate(dry_run=False, state_path=str(env.state_path))
+        apply_mod.restore_self_signed(state_path=str(env.state_path))
+        state = apply_mod.load_state(str(env.state_path))
+        assert state.protocols["hysteria2"]["cert_domain"] == ""

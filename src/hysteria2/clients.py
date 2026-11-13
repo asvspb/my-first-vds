@@ -19,6 +19,7 @@ state.json (0600), а каждый клиент получает профиль 
 from urllib.parse import quote
 
 from src.acme.install import cert_exists
+from src.core.lock import FileLock
 from src.core.logger import console
 from src.core.netcheck import public_ip
 from src.gateway.store import (
@@ -43,6 +44,7 @@ def render_share_link(
     insecure: bool = True,
     mport: str | None = None,
     obfs_password: str | None = None,
+    sni: str | None = None,
 ) -> str:
     """Клиентская ссылка Hysteria2 (SPEC §3, VPN-PROTOCOLS §2.3).
 
@@ -59,8 +61,14 @@ def render_share_link(
       hysteria2://<password>@<host>:<port>/?sni=<host>&obfs=salamander
       &obfs-password=<obfs>[&insecure=1][&mport=..]#<name>
 
+    `sni` (GR-10): имя из развёрнутого сертификата, если оно не совпадает с
+    адресом подключения (host). Типовой случай: cert выпущен на asvpersonal.ru,
+    а подключение идёт по домену/IP сервера — клиент проверяет сертификат по
+    `sni`, а TCP/UDP открывает на `host`.
+
     Пароли — буквенно-цифровые (gen_password), URL-экранирование не требуется.
     """
+    sni_value = sni or host
     insecure_part = "&insecure=1" if insecure else ""
     mport_part = f"&mport={mport}" if mport else ""
     obfs_part = (
@@ -68,7 +76,7 @@ def render_share_link(
     )
     return (
         f"hysteria2://{password}@{host}:{port}/"
-        f"?sni={host}{obfs_part}{insecure_part}{mport_part}#{quote(name)}"
+        f"?sni={sni_value}{obfs_part}{insecure_part}{mport_part}#{quote(name)}"
     )
 
 
@@ -83,6 +91,12 @@ def le_domain(state) -> str:
     только если для него есть live-каталог LE; иначе — прежнее поведение
     (acme.domain).
     """
+    hy_meta = state.protocols.get("hysteria2") or {}
+    declared = str(hy_meta.get("cert_domain") or "").strip()
+    if declared:
+        # Явно зафиксированный домен сертификата (пишет apply-cert и
+        # ACME deploy-hook через `hysteria2 set-cert-domain`, GR-10).
+        return declared
     meta = state.protocols.get("acme") or {}
     acme_domain = str(meta.get("domain") or "")
     if not acme_domain:
@@ -93,6 +107,55 @@ def le_domain(state) -> str:
     if cert_exists(domain):
         return domain
     return acme_domain
+
+
+def tls_params(state) -> tuple[str, str, bool]:
+    """(host, sni, insecure) для share-link Hysteria2.
+
+    host — куда клиент открывает UDP (домен сервера или публичный IP),
+    sni — имя из развёрнутого сертификата. Для self-signed режима совпадают.
+    """
+    meta = state.protocols.get("hysteria2") or {}
+    cert_dom = le_domain(state)
+    if cert_dom:
+        # Адрес подключения — домен сервера (state.domain), иначе сам домен
+        # сертификата. Публичный IP здесь не нужен: он может не совпадать с
+        # DNS-именем и ломать проверку сертификата.
+        host = str(getattr(state, "domain", "") or "") or cert_dom
+        return host, cert_dom, False
+    # self-signed: CN сертификата (IP) — адрес и sni одновременно.
+    host = str(meta.get("cert_cn") or "") or public_ip() or "SERVER_IP"
+    return host, host, True
+
+
+CERT_DOMAIN_LOCK = "/var/run/vds-hy2-cert-domain.lock"
+
+
+def set_cert_domain(domain: str | None = None,
+                    state_path: str | None = None) -> int:
+    """Зафиксировать домен развёрнутого LE-сертификата (GR-10). 0 — успех.
+
+    `domain` — CN/SAN сертификата в /etc/hysteria (как в ссылке sni);
+    `None` или пустая строка — очистить (self-signed/legacy-режим).
+    Вызывается ACME deploy-hook после подмены сертификата; руками —
+    `vds hysteria2 set-cert-domain <domain>`.
+    """
+    with FileLock(CERT_DOMAIN_LOCK):
+        state = load_state(state_path)
+        meta = _hysteria2_meta(state)
+        meta["cert_domain"] = (domain or "").strip()
+        save_state(state, state_path)
+    if domain:
+        console.print(
+            f"[change][hysteria2] cert_domain={domain}: ссылки рендерят "
+            f"sni={domain}, host — адрес сервера. Клиентам с прежним sni нужен "
+            f"ре-импорт ссылки.[/change]"
+        )
+    else:
+        console.print(
+            "[change][hysteria2] cert_domain очищен (self-signed режим).[/change]"
+        )
+    return 0
 
 
 def _hysteria2_meta(state) -> dict:
@@ -119,15 +182,9 @@ def add_client(name: str, state_path: str | None = None) -> dict:
             "`vds hysteria2 install`."
         )
 
-    tls_domain = le_domain(state)
-    if tls_domain:
-        # LE-сертификат выдан (WP-1): адрес — домен, sni=домен, без insecure=1
-        # (SPEC WP-2). Самоподменённый сертификат: подмена через apply-cert.
-        host = tls_domain
-        insecure = False
-    else:
-        host = public_ip() or meta.get("cert_cn") or "SERVER_IP"
-        insecure = True
+    # host — адрес подключения, sni — домен сертификата (GR-10); для
+    # self-signed режима совпадают и insecure=True.
+    host, sni, insecure = tls_params(state)
     # Port hopping (SPEC-20261112 WP-1): mport в ссылку iff hop_ports в state.
     hop_ports = str(meta.get("hop_ports") or "") or None
     profile = ClientProfile(
@@ -135,15 +192,15 @@ def add_client(name: str, state_path: str | None = None) -> dict:
         protocol="hysteria2",
         port=port,
         password=password,  # общий пароль инбаунда (см. docstring модуля)
-        sni=host,           # sni = IP (self-signed) или домен (LE)
-        extra={"tls": "le"} if tls_domain else {},
+        sni=sni,            # sni = IP (self-signed) или домен сертификата (LE)
+        extra={"tls": "le"} if not insecure else {},
     )
     new_state = store_add_client(state, profile)  # StoreError: дубликат имени
     save_state(new_state, state_path)
 
     share_link = render_share_link(
         host=host, password=password, name=name, port=port, insecure=insecure,
-        mport=hop_ports,
+        mport=hop_ports, sni=sni,
     )
     console.print(f"[success][hysteria2] Клиент '{name}' добавлен.[/success]")
     console.print(f"[change]{share_link}[/change]")
@@ -161,6 +218,7 @@ def add_client(name: str, state_path: str | None = None) -> dict:
             insecure=insecure,
             mport=hop_ports,
             obfs_password=str(obfs_meta["obfs_password"]),
+            sni=sni,
         )
         console.print(f"[change]{obfs_link}[/change]")
 
@@ -169,7 +227,7 @@ def add_client(name: str, state_path: str | None = None) -> dict:
         "protocol": "hysteria2",
         "port": port,
         "password": password,
-        "sni": host,
+        "sni": sni,
         "share_link": share_link,
     }
     if obfs_link:

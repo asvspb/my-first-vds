@@ -220,6 +220,12 @@ def render_deploy_hook(domain: str) -> str:
         '        systemctl try-restart "$EXTRA_UNIT"\n'
         '    fi\n'
         'done\n'
+        "# GR-10: зафиксировать домен сертификата в state, чтобы ссылки рендерили\n"
+        "# sni=<домен>, а host — адрес сервера. Сбой команды не должен ронять\n"
+        "# продление (set -e не должен срабатывать) — guard с || true.\n"
+        'if command -v vds >/dev/null 2>&1; then\n'
+        '    vds hysteria2 set-cert-domain "$DOMAIN" || true\n'
+        'fi\n'
     )
 
 

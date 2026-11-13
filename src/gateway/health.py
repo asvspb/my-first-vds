@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -35,6 +36,7 @@ from src.core.shell import run_list
 from src.core.units import unit_active
 from src.gateway.paths import (
     CDN_ORIGIN_PORT_DEFAULT,
+    HYSTERIA2_CERT_PATH,
     HYSTERIA2_OBFS_PORT_DEFAULT,
     HYSTERIA2_OBFS_UNIT,
     HYSTERIA2_UNIT,
@@ -322,6 +324,52 @@ def check_cert(state: GatewayState) -> list[Finding]:
     return [Finding(level, text)]
 
 
+def cert_subject_cn(path: Path = HYSTERIA2_CERT_PATH) -> Optional[str]:
+    """CN сертификата (openssl -subject); None — не прочитан."""
+    result = run_list(
+        ["openssl", "x509", "-noout", "-subject", "-in", str(path)], timeout=10
+    )
+    if not result.ok:
+        return None
+    match = re.search(r"CN\s*=\s*([^,/\n]+)", result.stdout)
+    return match.group(1).strip() if match else None
+
+
+def check_cert_sni_match(state: GatewayState) -> list[Finding]:
+    """GR-10: CN развёрнутого сертификата должен совпадать с sni в ссылках.
+
+    Инцидент 2026-11-13: ACME-hook подменил cert.pem на домен CDN-фронта, а
+    ссылки остались с прежним sni → все hy2-клиенты получали TLS-ошибку.
+    Проверка ловит это до жалоб пользователей.
+    """
+    meta = state.protocols.get("hysteria2") or {}
+    if not meta.get("installed"):
+        return []
+    from src.hysteria2.clients import le_domain  # лениво: gateway не тянет hy2
+
+    expected = le_domain(state)
+    if not expected:
+        return []  # self-signed режим: sni = адрес, сверять нечего
+    cn = cert_subject_cn()
+    if not cn:
+        return [
+            Finding(
+                "warning",
+                "hysteria2: CN сертификата не прочитан — sni ссылок не сверен",
+            )
+        ]
+    if cn != expected:
+        return [
+            Finding(
+                "error",
+                f"hysteria2: сертификат CN={cn}, ссылки рендерят sni={expected} — "
+                f"у клиентов TLS-ошибка; исправить: "
+                f"`vds hysteria2 set-cert-domain {cn}` (или apply-cert)",
+            )
+        ]
+    return [Finding("ok", f"hysteria2: sni ссылок совпадает с сертификатом ({cn})")]
+
+
 # ---------------------------------------------------------------------------
 # Таймер (systemd-шаблоны systemd/vds-gateway-health.*.tpl)
 # ---------------------------------------------------------------------------
@@ -416,6 +464,7 @@ def run_healthcheck(
         time.sleep(PORT_GRACE_SECONDS)
     findings.extend(check_ports(state))
     findings.extend(check_cert(state))
+    findings.extend(check_cert_sni_match(state))
 
     if not findings:
         console.print(

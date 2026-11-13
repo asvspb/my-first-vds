@@ -233,7 +233,10 @@ systemctl restart vds-hysteria2 vds-hysteria2-obfs
 
 1. **Владельцу:** проверить в панели хостера anti-DDoS/гео-фильтр TCP (ICMP
    проходит, TCP с не-РФ AS — refused). Это влияет и на CDN-цепочку CF→origin.
-2. **Код:** healthcheck-инвариант «cert subject == sni в ссылках» (дешёвый детект
-   инцидента №3); затем GR-10 (host/sni).
-3. Зафиксировать И26 (серийные пробы с паузами) в `probe`/приёмке.
-4. Поправить таймстемпы §4/§6 (см. 8.1).
+2. ✅ **Сделано 2026-11-13:** healthcheck-инвариант «cert CN == sni ссылок»
+   (`vds gateway healthcheck` → error при расхождении) и GR-10: раздельные
+   `host`/`sni` в ссылке, `cert_domain` в state, его пишут `apply-cert` и
+   ACME-hook (`vds hysteria2 set-cert-domain "$DOMAIN"`); hook на asv1
+   перегенерирован, `cert_domain` выставлен, e2e-handshake проверен.
+3. Зафиксировать И26 (серийные пробы с паузами) в `probe`/приёмке — не сделано.
+4. Поправить таймстемпы §4/§6 (см. 8.1) — не сделано.

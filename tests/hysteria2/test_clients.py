@@ -256,6 +256,49 @@ class TestLeDomainResolution:
         assert "insecure=1" in result["share_link"]
 
 
+class TestCertDomainSplit:
+    """GR-10: host (адрес) и sni (домен сертификата) — разные поля ссылки."""
+
+    def test_render_link_with_separate_sni(self) -> None:
+        link = clients.render_share_link(
+            host="vds.example.com", password=PASSWORD, name="n",
+            port=443, insecure=False, sni="vpn.example.com",
+        )
+        assert link == (
+            f"hysteria2://{PASSWORD}@vds.example.com:443/"
+            f"?sni=vpn.example.com#n"
+        )
+
+    def test_le_domain_prefers_cert_domain(self, env) -> None:
+        """cert_domain важнее эвристики state.domain/acme.domain (инцидент asv1)."""
+        state = load_state(env["state_path"])
+        state.domain = "vds.example.com"
+        state.protocols["acme"] = {"installed": True, "domain": "front.example.ru"}
+        state.protocols["hysteria2"]["cert_domain"] = "vpn.example.com"
+        save_state(state, env["state_path"])
+
+        result = clients.add_client("laptop", state_path=env["state_path"])
+        assert result["sni"] == "vpn.example.com"
+        assert "@vds.example.com:443/?sni=vpn.example.com" in result["share_link"]
+        assert "insecure=1" not in result["share_link"]
+
+    def test_set_cert_domain_roundtrip(
+        self, env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            clients, "CERT_DOMAIN_LOCK", str(tmp_path / "cert-domain.lock")
+        )
+        assert clients.set_cert_domain("vpn.example.com", env["state_path"]) == 0
+        assert (
+            load_state(env["state_path"]).protocols["hysteria2"]["cert_domain"]
+            == "vpn.example.com"
+        )
+        assert clients.set_cert_domain(None, env["state_path"]) == 0
+        assert (
+            load_state(env["state_path"]).protocols["hysteria2"]["cert_domain"] == ""
+        )
+
+
 class TestRemoveClient:
     def test_remove_only_hysteria2_client(self, env) -> None:
         clients.add_client("laptop", state_path=env["state_path"])

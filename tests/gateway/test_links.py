@@ -250,6 +250,39 @@ class TestHysteria2ObfsLinks:
         assert [name for name, _, _ in result] == ["mob"]
 
 
+class TestCertDomainSplit:
+    """GR-10: host = адрес сервера, sni = домен развёрнутого сертификата."""
+
+    def test_cert_domain_becomes_sni(self, state_path: str) -> None:
+        state = _full_state()
+        state.domain = DOMAIN
+        state.protocols["acme"] = {"installed": True, "domain": "front.example.ru"}
+        state.protocols["hysteria2"]["cert_domain"] = "vpn.example.com"
+        state.clients = [state.clients[1]]
+        _save(state, state_path)
+
+        result = render_all_links(state_path, protocol="hysteria2")
+        assert result[0][2] == (
+            f"hysteria2://{PASSWORD}@{DOMAIN}:443/?sni=vpn.example.com#mob"
+        )
+        assert "insecure" not in result[0][2]
+
+    def test_obfs_link_uses_same_sni(self, state_path: str) -> None:
+        state = _full_state()
+        state.domain = DOMAIN
+        state.protocols["hysteria2"]["cert_domain"] = "vpn.example.com"
+        state.protocols["hysteria2-obfs"] = {
+            "installed": True, "port": 51826, "obfs_password": "FIXTURE_PW_Obfs",
+        }
+        state.clients = [state.clients[1]]
+        _save(state, state_path)
+
+        result = render_all_links(state_path, protocol="hysteria2", include_obfs=True)
+        obfs = result[1][2]
+        assert "@%s:51826/?sni=vpn.example.com" % DOMAIN in obfs
+        assert "obfs=salamander" in obfs
+
+
 class TestAllAndFilter:
     def test_all_three_clients(self, state_path: str, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("src.core.netcheck.public_ip", lambda: IP)

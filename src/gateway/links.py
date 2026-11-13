@@ -37,8 +37,8 @@ def render_all_links(
     """
     from src.core.netcheck import public_ip
     from src.gateway.paths import HYSTERIA2_OBFS_PORT_DEFAULT
-    from src.hysteria2.clients import le_domain as hy_le_domain
     from src.hysteria2.clients import render_share_link as render_hy_link
+    from src.hysteria2.clients import tls_params as hy_tls_params
     from src.xray.clients import render_share_link as render_reality_link
     from src.xray.clients import render_xhttp_share_link
     from src.xray.config import render_cdn_share_link
@@ -98,23 +98,18 @@ def render_all_links(
             if not password:
                 continue
             port = int(client.port if client.port else meta.get("port", 443))
-            # Хост LE-ссылки — общий резолвер hysteria2 (acme.domain может быть
-            # CDN-фронтом, а сертификат выпущен на state.domain).
-            le_domain = hy_le_domain(state)
+            # host — адрес подключения, sni — домен сертификата (GR-10):
+            # общий резолвер с add-client, чтобы pull и ручной add не расходились.
+            host, sni, insecure = hy_tls_params(state)
             # port hopping: mport в ссылке iff hop_ports в state (как add-client).
             mport = str(meta.get("hop_ports") or "") or None
-            if le_domain:
-                host, insecure = le_domain, False
-            else:
-                host = client.sni or meta.get("cert_cn") or "SERVER_IP"
-                insecure = True
             result.append(
                 (
                     client.name,
                     "hysteria2",
                     render_hy_link(
                         host=host, password=password, name=client.name,
-                        port=port, insecure=insecure, mport=mport,
+                        port=port, insecure=insecure, mport=mport, sni=sni,
                     ),
                 )
             )
@@ -141,6 +136,7 @@ def render_all_links(
                             insecure=insecure,
                             mport=mport,
                             obfs_password=str(obfs_meta["obfs_password"]),
+                            sni=sni,
                         ),
                     )
                 )

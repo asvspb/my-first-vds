@@ -838,6 +838,18 @@ def hysteria2_apply_cert(
     raise typer.Exit(run_apply(apply=apply, restore=restore))
 
 
+@hysteria2_app.command("set-cert-domain")
+def hysteria2_set_cert_domain(
+    domain: str = typer.Argument(
+        None,
+        help="Домен из развёрнутого сертификата (sni ссылок); без аргумента — очистить",
+    ),
+):
+    """Зафиксировать домен LE-сертификата Hysteria2 (host/sni в ссылках, GR-10)"""
+    from src.hysteria2.clients import set_cert_domain
+    raise typer.Exit(set_cert_domain(domain))
+
+
 @hysteria2_app.command("remove")
 def hysteria2_remove(
     apply: bool = typer.Option(False, "--apply", help="Применить удаление (по умолчанию dry-run)"),

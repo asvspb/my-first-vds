@@ -188,6 +188,23 @@ obfs:
    `.bak-pre-le`), рестарт.
 3. `vds hysteria2 add-client NAME` — ссылка БЕЗ `insecure=1`, sni=домен.
 
+### 2.3.4. host и sni в ссылке — разные поля (GR-10, 2026-11-13)
+
+`hysteria2://` позволяет указать адрес подключения (`host`) отдельно от имени
+в сертификате (`sni`). `vds` рендерит именно так:
+
+- `host` — `state.domain` (или домен сертификата, если `state.domain` пуст);
+- `sni` — домен развёрнутого сертификата, зафиксированный в
+  `state.protocols["hysteria2"]["cert_domain"]`;
+- `insecure=1` — только в self-signed режиме (host == sni).
+
+`cert_domain` пишут: `vds hysteria2 apply-cert --apply`, ACME deploy-hook
+(`vds hysteria2 set-cert-domain "$DOMAIN"` после подмены) и вручную
+`vds hysteria2 set-cert-domain <domain>` (без аргумента — очистить).
+`gateway healthcheck` сверяет CN `/etc/hysteria/cert.pem` с `sni` ссылок и
+даёт error при расхождении — детект инцидента 2026-11-13, когда hook подменил
+сертификат на домен CDN-фронта, а ссылки остались с прежним `sni`.
+
 Хост LE-ссылки резолвит `hysteria2.clients.le_domain(state)` (общий для
 `add-client` и `gateway links`): если `state.domain` расходится с `acme.domain`
 и для `state.domain` есть live-каталог LE — берётся `state.domain`. Это
