@@ -148,6 +148,10 @@
 
 - **Точки роста схем/протоколов:** [docs/GROWTH-POINTS.md](../GROWTH-POINTS.md) —
   24 пункта (GR-01…GR-24) с фактами, действиями и AC.
+- **Цикл CDN-usability (SPEC approved, ждёт кодера):**
+  [SPEC-20261113-cdn-usability](specs/SPEC-20261113-cdn-usability.md) —
+  Mux для CDN-профиля, TTFB p50/p95 в `vpn speed`, A/B-бенчмарк; WP-1…WP-3
+  в `ubuntuInstaller/scripts/vpn-manager`.
 - **Roadmap v2 (2026-11-13, ревизия архитектора):**
   [CENSORSHIP-ROADMAP](../CENSORSHIP-ROADMAP.md) — фазы 0–9 переведены в
   «статус + остаток», остаток разложен на волны **W1–W6**; W1 (hook+healthcheck)
