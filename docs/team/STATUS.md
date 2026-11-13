@@ -158,8 +158,12 @@
   CF проксирует 2083, но XHTTP (auto/packet-up/stream-up, h1/h2) — 0/2,
   таймауты; при этом XHTTP **напрямую** даёт TTFB 0.40 с (WS-CF — 2.45–2.88 с).
   Вывод: причина — маршрут CF, а не транспорт.
-  **Следующий шаг (нужен владелец):** cloudflared tunnel / Argo / CDN с PoP
-  в РФ; либо оставить WS как канал выживания.
+  **Туннель проверен (2026-11-13):** [TEST-20261113-cf-tunnel](reports/TEST-20261113-cf-tunnel.md)
+  — cloudflared работает (WS 101), но TTFB 2.97–4.64 с (хуже прямого CF
+  2.45–2.88 с), bulk 0; клиентский PoP HKG, туннель AMS, origin NL.
+  Туннель откачен/disabled.
+  **Следующий шаг (нужен владелец):** Argo Smart Routing или CDN с PoP в РФ;
+  либо оставить WS как канал выживания.
 - **Roadmap v2 (2026-11-13, ревизия архитектора):**
   [CENSORSHIP-ROADMAP](../CENSORSHIP-ROADMAP.md) — фазы 0–9 переведены в
   «статус + остаток», остаток разложен на волны **W1–W6**; W1 (hook+healthcheck)
