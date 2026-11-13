@@ -12,7 +12,8 @@
 >   [docs/team/STATUS.md](team/STATUS.md) (живой цикл), [docs/adr/](adr/)
 >
 > **Разложение по волнам** — [CENSORSHIP-ROADMAP §5](CENSORSHIP-ROADMAP.md)
-> (W1–W6); архитектурное решение по GR-02 —
+> (W1–W6); разбор «какой транспорт может стать основным со split» —
+> [SPLIT-TRANSPORTS](SPLIT-TRANSPORTS.md); архитектурное решение по GR-02 —
 > [ADR-009](adr/ADR-009-hysteria2-per-client-auth.md) (proposed).
 
 ## 0. Как читать

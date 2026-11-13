@@ -107,6 +107,7 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 фронтов CDN; `docs/CENSORSHIP-ROADMAP.md` — roadmap (статус фаз + волны W1–W6);
 `docs/CENSORSHIP-PATTERNS.md` — паттерны обхода (с живыми доказательствами);
 `docs/GROWTH-POINTS.md` — точки роста схем/протоколов (вход для intake);
+`docs/SPLIT-TRANSPORTS.md` — системный split: AWG и аналоги (Reality/Hy2/XHTTP/CDN);
 `docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…009;
 `TECHDEBT.md` — бэклог. При изменении поведения обновлять соответствующий документ
 (новый протокол/транспорт — ADR + VPN-PROTOCOLS + README + AGENTS).

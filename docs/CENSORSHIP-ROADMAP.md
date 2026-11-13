@@ -11,6 +11,7 @@
 > Архитектурное решение по per-client auth — [ADR-009](adr/ADR-009-hysteria2-per-client-auth.md).
 >
 > Связанные документы: [VPN-PROTOCOLS.md](VPN-PROTOCOLS.md),
+> [SPLIT-TRANSPORTS.md](SPLIT-TRANSPORTS.md) (AWG и аналоги в split-схеме),
 > [CDN-FRONTS.md](CDN-FRONTS.md), [DEPLOY.md](DEPLOY.md),
 > [docs/team/STATUS.md](team/STATUS.md), [docs/adr/](adr/).
 

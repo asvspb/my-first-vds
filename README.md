@@ -183,7 +183,8 @@ vds acme issue --domain vpn.example.ru --email admin@example.ru   # LE (HTTP-01)
 быть открыты в UFW. Обзор протоколов — [docs/VPN-PROTOCOLS.md](docs/VPN-PROTOCOLS.md),
 план развития — [docs/CENSORSHIP-ROADMAP.md](docs/CENSORSHIP-ROADMAP.md),
 паттерны обхода с живыми доказательствами — [docs/CENSORSHIP-PATTERNS.md](docs/CENSORSHIP-PATTERNS.md),
-точки роста схем/протоколов (для техлида) — [docs/GROWTH-POINTS.md](docs/GROWTH-POINTS.md).
+точки роста схем/протоколов (для техлида) — [docs/GROWTH-POINTS.md](docs/GROWTH-POINTS.md),
+системный split и его аналоги — [docs/SPLIT-TRANSPORTS.md](docs/SPLIT-TRANSPORTS.md).
 
 > **Hysteria2 TLS/ACME:** без домена — self-signed сертификат и `insecure=1`
 > в клиентской ссылке. С доменом: `vds acme issue <domain>` (HTTP-01,
