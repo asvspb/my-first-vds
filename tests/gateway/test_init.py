@@ -49,6 +49,16 @@ def _installed_state(state_path: str, protocols: list[str]) -> GatewayState:
     return state
 
 
+@pytest.fixture(autouse=True)
+def _no_host_systemd(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Юнит-тесты не дёргают systemctl: по умолчанию таймер не установлен.
+
+    Тесты идемпотентности переопределяют `_health_timer_installed` на True.
+    """
+    monkeypatch.setattr(init, "unit_active", lambda name: False)
+    monkeypatch.setattr(init, "_health_timer_installed", lambda: False)
+
+
 @pytest.fixture()
 def _root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(init.os, "geteuid", lambda: 0)
@@ -185,17 +195,47 @@ class TestBuildPlan:
         )
         assert any("20000" in e or "Диапазон" in e for e in plan.errors)
 
-    def test_skip_installed_by_state(
-        self, _units_up: None, state_path: str
+    def test_awg_only_has_no_unrequested_transports(self, state_path: str) -> None:
+        # --protocols awg не должен ставить Xray/Hysteria2/ACME-шаги.
+        plan = build_plan(["awg"], None, None, state_path=state_path)
+        names = {s.name for s in plan.steps}
+        assert names == {"awg", "healthcheck"}
+        assert not names & {"reality", "hysteria2", "acme", "hy2-cert", "xray-domain"}
+        assert not plan.errors
+
+    def test_domain_steps_follow_requested_transports(self, state_path: str) -> None:
+        # reality+cdn: ACME и xray-domain есть, hy2-cert (и hysteria2) — нет.
+        plan = build_plan(
+            ["reality", "cdn"], "vpn.example.ru", "admin@example.ru",
+            state_path=state_path,
+        )
+        names = [s.name for s in plan.steps]
+        assert "acme" in names
+        assert "xray-domain" in names
+        assert "cdn" in names
+        assert "hysteria2" not in names
+        assert "hy2-cert" not in names
+        assert not plan.errors
+
+    def test_domain_without_domain_transport_has_no_acme(
+        self, state_path: str
     ) -> None:
+        plan = build_plan(["awg"], "vpn.example.ru", "admin@example.ru",
+                          state_path=state_path)
+        names = {s.name for s in plan.steps}
+        assert not names & {"acme", "hy2-cert", "xray-domain"}
+
+    def test_skip_installed_by_state(
+        self, _units_up: None, state_path: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(init, "_health_timer_installed", lambda: True)
         _installed_state(state_path, ["reality", "hysteria2"])
         plan = build_plan(
             ["reality", "hysteria2"], None, None, state_path=state_path
         )
-        # healthcheck-таймер не имеет state-ключа — исполняется всегда;
-        # транспортные шаги скипаются целиком.
-        assert all(s.skip_reason for s in plan.steps if s.name != "healthcheck")
-        assert not next(s for s in plan.steps if s.name == "healthcheck").skip_reason
+        # Повторный init: и транспорты, и healthcheck уже на месте.
+        assert all(s.skip_reason for s in plan.steps)
+        assert next(s for s in plan.steps if s.name == "healthcheck").skip_reason
 
     def test_hop_skip_by_state(self, state_path: str, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(init, "unit_active", lambda name: True)
@@ -347,16 +387,56 @@ class TestRunInit:
     def test_apply_idempotent_skips_all(
         self, _root: None, _net_ok: None, _dns_ok: None, _units_up: None,
         state_path: str, recorded: list[list[str]],
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
     ) -> None:
+        monkeypatch.setattr(init, "_health_timer_installed", lambda: True)
         _installed_state(state_path, ["reality", "hysteria2", "awg"])
         rc = run_init(
             protocols="reality,hysteria2,awg",
             apply=True, state_path=state_path,
         )
         assert rc == 0
-        # healthcheck-таймер не имеет state-скипа — он единственный исполняемый
-        assert len(recorded) == 1
-        assert "healthcheck" in " ".join(recorded[0])
+        # Второй init с теми же аргументами — ни одной мутации/вызова run_list.
+        assert recorded == []
+        assert "изменений не требуется" in capsys.readouterr().out
+
+    def test_second_init_with_domain_is_noop(
+        self, _root: None, _net_ok: None, _dns_ok: None, _units_up: None,
+        state_path: str, recorded: list[list[str]], tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        domain = "vpn.example.ru"
+        le_dir = tmp_path / "le" / domain
+        le_dir.mkdir(parents=True)
+        (le_dir / "fullchain.pem").write_text("FIXTURE_CERT", encoding="utf-8")
+        cert = tmp_path / "hysteria2-cert.pem"
+        cert.write_text("FIXTURE_CERT", encoding="utf-8")
+        monkeypatch.setattr(
+            init, "ACME_LETSENCRYPT_LIVE", lambda d: tmp_path / "le" / d
+        )
+        monkeypatch.setattr(init, "HYSTERIA2_CERT_PATH", cert)
+        monkeypatch.setattr(init, "_health_timer_installed", lambda: True)
+
+        state = _installed_state(state_path, ["reality", "hysteria2"])
+        state.domain = domain
+        state.protocols["hysteria2"]["cert_domain"] = domain
+        state.protocols["acme"] = {
+            "installed": True,
+            "domain": domain,
+            "cert_path": str(le_dir / "fullchain.pem"),
+        }
+        _save_state(state, state_path)
+
+        rc = run_init(
+            protocols="reality,hysteria2",
+            domain=domain,
+            email="admin@example.ru",
+            apply=True,
+            state_path=state_path,
+        )
+        assert rc == 0
+        assert recorded == []
+        assert "изменений не требуется" in capsys.readouterr().out
 
     def test_fail_fast_stops_chain(
         self, _root: None, _net_ok: None, _dns_ok: None, _units_up: None,

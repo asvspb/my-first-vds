@@ -35,6 +35,7 @@ from src.gateway.paths import (
     AWG_PORT_DEFAULT,
     AWG_UNIT,
     CDN_ORIGIN_PORT_DEFAULT,
+    HYSTERIA2_CERT_PATH,
     HYSTERIA2_HOP_UNIT,
     HYSTERIA2_OBFS_PORT_DEFAULT,
     HYSTERIA2_OBFS_UNIT,
@@ -88,6 +89,11 @@ STEP_PORTS: dict[str, list[tuple[int, str]]] = {
 
 # Владелец порта «наш» (уже установленная служба gateway, а не чужой процесс).
 _OWN_OWNER_HINTS = ("xray", "hysteria", "awg", "vds-")
+
+# Транспорты, которым для работы нужен домен (ACME выпускается, если запрошен
+# хотя бы один из них). XHTTP/CDN требуют reality — это валидирует
+# parse_protocols, здесь только гейт по --protocols.
+DOMAIN_TRANSPORTS = ("reality", "hysteria2", "xhttp", "cdn")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -169,6 +175,16 @@ def _state_hop_ports(state: GatewayState) -> str | None:
     return meta.get("hop_ports") or None
 
 
+def _health_timer_installed() -> bool:
+    """Healthcheck-таймер уже активен или включён — повторная установка не нужна."""
+    from src.gateway.health import HEALTH_TIMER_UNIT
+
+    if unit_active(HEALTH_TIMER_UNIT):
+        return True
+    result = run_list(["systemctl", "is-enabled", HEALTH_TIMER_UNIT], timeout=10)
+    return result.ok and result.output.strip() in ("enabled", "enabled-runtime")
+
+
 def _skip_by_state(state: GatewayState, protocol: str, plan: InitPlan, name: str) -> str:
     """Причина скипа шага по state + живость юнита; '' — шаг нужно выполнить."""
     key = STATE_KEY.get(protocol)
@@ -229,15 +245,22 @@ def build_plan(
         except ValueError as exc:
             plan.errors.append(str(exc))
 
-    # Порядок шагов — SPEC §2 (1–9). ACME/CDN добавляются по домену.
-    plan.steps.append(
-        Step("reality", "Xray VLESS Reality (TCP 443)", _cli(["xray", "install", "--sni", sni]))
-    )
-    plan.steps.append(
-        Step("hysteria2", "Hysteria2 QUIC (UDP 443)", _cli(["hysteria2", "install"]))
-    )
+    # Порядок шагов — SPEC §2 (1–9). Базовые шаги гейтятся по --protocols:
+    # запросили только awg — Xray/Hysteria2 не ставим.
+    if "reality" in protocols:
+        plan.steps.append(
+            Step("reality", "Xray VLESS Reality (TCP 443)",
+                 _cli(["xray", "install", "--sni", sni]))
+        )
+    if "hysteria2" in protocols:
+        plan.steps.append(
+            Step("hysteria2", "Hysteria2 QUIC (UDP 443)", _cli(["hysteria2", "install"]))
+        )
 
-    if domain:
+    # ACME — только при домене и хотя бы одном доменном транспорте; hy2-cert
+    # нужен только Hysteria2, xray-domain — только Reality.
+    has_domain_transport = any(p in protocols for p in DOMAIN_TRANSPORTS)
+    if domain and has_domain_transport:
         plan.steps.append(
             Step(
                 "acme",
@@ -245,20 +268,22 @@ def build_plan(
                 _cli(["acme", "issue", "--domain", domain, "--email", email or ""]),
             )
         )
-        plan.steps.append(
-            Step(
-                "hy2-cert",
-                "LE-сертификат → Hysteria2",
-                _cli(["hysteria2", "apply-cert", "--apply"]),
+        if "hysteria2" in protocols:
+            plan.steps.append(
+                Step(
+                    "hy2-cert",
+                    "LE-сертификат → Hysteria2",
+                    _cli(["hysteria2", "apply-cert", "--apply"]),
+                )
             )
-        )
-        plan.steps.append(
-            Step(
-                "xray-domain",
-                f"Адрес ссылок = {domain} (state.domain)",
-                _cli(["xray", "use-domain", "--domain", domain]),
+        if "reality" in protocols:
+            plan.steps.append(
+                Step(
+                    "xray-domain",
+                    f"Адрес ссылок = {domain} (state.domain)",
+                    _cli(["xray", "use-domain", "--domain", domain]),
+                )
             )
-        )
     if "xhttp" in protocols:
         if domain:
             plan.steps.append(
@@ -328,11 +353,36 @@ def build_plan(
 
     # Скипы по state (после сборки шагов, чтобы warnings ложились на шаги).
     for step in plan.steps:
-        if step.name == "hy2-cert":
-            # apply-cert идемпотентен; скипаем, если LE-файлы домена отсутствуют.
+        if step.name == "acme":
+            meta = state.protocols.get("acme") or {}
             live = ACME_LETSENCRYPT_LIVE(domain or "")
-            if not (live / "fullchain.pem").is_file():
+            if (
+                meta.get("installed")
+                and str(meta.get("domain") or "") == (domain or "")
+                and (live / "fullchain.pem").is_file()
+            ):
+                step.skip_reason = "сертификат уже выпущен (state.protocols['acme'])"
+            continue
+        if step.name == "hy2-cert":
+            # Сертификат уже применён к Hysteria2 и LE-файлы на месте — apply-cert
+            # (с рестартом юнита) не нужен. Нет LE-файлов — ACME не выполнен.
+            meta = state.protocols.get("hysteria2") or {}
+            live_cert = ACME_LETSENCRYPT_LIVE(domain or "") / "fullchain.pem"
+            if (
+                HYSTERIA2_CERT_PATH.is_file()
+                and str(meta.get("cert_domain") or "") == (domain or "")
+            ):
+                step.skip_reason = f"LE-сертификат уже применён ({domain})"
+            elif not live_cert.is_file():
                 step.skip_reason = "LE-файлы домена отсутствуют (ACME не выполнен)"
+            continue
+        if step.name == "xray-domain":
+            if state.domain == (domain or ""):
+                step.skip_reason = "домен ссылок уже установлен (state.domain)"
+            continue
+        if step.name == "healthcheck":
+            if _health_timer_installed():
+                step.skip_reason = "healthcheck-таймер уже установлен"
             continue
         reason = _skip_by_state(state, step.name, plan, step.title)
         if reason:
