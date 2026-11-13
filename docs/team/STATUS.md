@@ -153,8 +153,13 @@
   отчёт [TEST-20261113-cdn-mux](reports/TEST-20261113-cdn-mux.md) §9.
   Принято: TTFB p50/p95 в `vpn speed` (WP-2), CDN-baseline с контролем и
   smoke (WP-3). Откачено: mux через CF (1/5 против 5/5).
-  **Следующий шаг:** новая SPEC `cdn-xhttp-cf` (XHTTP через Cloudflare
-  вместо Mux.Cool; опционально cloudflared tunnel/Argo).
+  **Проверено (2026-11-13):** XHTTP через Cloudflare **не работает** —
+  [TEST-20261113-cdn-xhttp-cf](reports/TEST-20261113-cdn-xhttp-cf.md):
+  CF проксирует 2083, но XHTTP (auto/packet-up/stream-up, h1/h2) — 0/2,
+  таймауты; при этом XHTTP **напрямую** даёт TTFB 0.40 с (WS-CF — 2.45–2.88 с).
+  Вывод: причина — маршрут CF, а не транспорт.
+  **Следующий шаг (нужен владелец):** cloudflared tunnel / Argo / CDN с PoP
+  в РФ; либо оставить WS как канал выживания.
 - **Roadmap v2 (2026-11-13, ревизия архитектора):**
   [CENSORSHIP-ROADMAP](../CENSORSHIP-ROADMAP.md) — фазы 0–9 переведены в
   «статус + остаток», остаток разложен на волны **W1–W6**; W1 (hook+healthcheck)
