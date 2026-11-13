@@ -43,7 +43,7 @@ src/
 ├── hysteria2/           # QUIC (443): adapter, install, clients, config, hop, obfs, status, sysctl, remove
 ├── amneziawg/           # AmneziaWG (UDP 51825): install, clients, status, remove
 ├── acme/                # ACME/LE: issue (HTTP-01) + deploy-hook для Hysteria2
-├── gateway/             # paths, store (state.json 0600), links, blockcheck
+├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание)
 ├── sysinfo/             # dashboard
 └── system/              # setup, cleanup
 systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg .service.tpl; sysctl/99-vds-gateway.conf.tpl

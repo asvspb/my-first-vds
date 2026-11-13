@@ -17,11 +17,19 @@
 
 Скрипт `scripts/11_vds-deploy.sh` из репозитория [ubuntuInstaller](../../../ubuntuInstaller)
 запускается на **локальной** машине. Он спрашивает IP, пользователя, домен и email —
-и делает всё остальное:
+и делает всё остальное. Список протоколов можно задать env'ом
+(`VDS_PROTOCOLS`, по умолчанию `reality,hysteria2`), также как `VDS_IP` /
+`VDS_DOMAIN` / `VDS_EMAIL` для неинтерактивного запуска:
 
 ```bash
 bash ~/Dev/ubuntuInstaller/scripts/11_vds-deploy.sh
+VDS_PROTOCOLS=reality,hysteria2,obfs,hop,xhttp,cdn,awg \
+VDS_DOMAIN=vpn.example.ru VDS_EMAIL=admin@example.ru \
+    bash ~/Dev/ubuntuInstaller/scripts/11_vds-deploy.sh
 ```
+
+Установка протоколов идёт одной идемпотентной командой `vds gateway init --apply`
+(SPEC-20261114) — см. [«Полное развёртывание: vds gateway init»](#полное-развёртывание-vds-gateway-init).
 
 Что делает скрипт по шагам:
 
@@ -32,12 +40,60 @@ bash ~/Dev/ubuntuInstaller/scripts/11_vds-deploy.sh
 | 3 | `INSTALL_DIR=/opt/my-vds bash /opt/my-vds/install.sh` на сервере |
 | 4 | Не-root юзер `vpn-accept` (idempotent) + `authorized_keys` от root |
 | 5 | Авто-детект GitHub: недоступен → `VDS_GITHUB_MIRROR` в `/etc/environment` |
-| 6 | `vds xray install` + `vds hysteria2 install`, проверка `systemctl is-active` обоих |
-| 7 | Если домен задан: `acme issue` → XHTTP (port 8443) → `use-domain` |
-| 8 | Демо-клиенты `phone` (Xray) и `mob` (Hysteria2) |
+| 6–8 | `vds gateway init --apply --protocols <VDS_PROTOCOLS> [--domain/--email] --demo-clients` — Reality, Hysteria2, ACME/use-domain (при домене), выбранные транспорты, демо-клиенты, healthcheck-таймер |
 | 9 | Печать полных share-links для импорта в клиентские приложения |
 
 При ошибке на любом шаге скрипт печатает номер шага и однострочную команду докатки вручную.
+
+---
+
+## Полное развёртывание: vds gateway init
+
+`vds gateway init` (SPEC-20261114) — идемпотентная команда установки всего gateway
+с нуля: preflight (root, публичный IP, DNS, занятость портов) **до** мутаций,
+затем последовательные шаги через существующие команды. Dry-run по умолчанию:
+план и проверки без изменений; мутации только с `--apply`.
+
+```bash
+vds gateway init                                  # dry-run: план + проверки
+vds gateway init --apply                          # reality + hysteria2 (как раньше)
+vds gateway init --apply \
+    --protocols reality,hysteria2,obfs,hop,xhttp,cdn,awg \
+    --domain vpn.example.ru --email admin@example.ru \
+    --sni www.cloudflare.com --hop-range 20000-20500 \
+    --demo-clients
+```
+
+| Флаг | Default | Смысл |
+|---|---|---|
+| `--protocols` | `reality,hysteria2` | csv из `reality,hysteria2,obfs,hop,xhttp,cdn,awg` |
+| `--domain` | — | домен для ACME/CDN/ссылок (обязателен вместе с `--email`) |
+| `--email` | — | ACME (не сохраняется) |
+| `--sni` | `www.google.com` | Reality dest/serverNames |
+| `--hop-range` | `20000-20500` | диапазон port hopping при `hop` |
+| `--cdn-domain` | = `--domain` | origin-домен CDN |
+| `--demo-clients` | off | создать phone/mob/laptop и напечатать ссылки |
+| `--apply` | off | исполнить (иначе dry-run) |
+| `--require-domain` | off | DNS не подтверждён → exit 1 вместо skip с warning |
+
+Шаги: Reality → Hysteria2 → (домен) ACME → apply-cert → use-domain → XHTTP → CDN
+→ obfs → hop → AmneziaWG → healthcheck-таймер. Уже установленное скипается по
+state (расхождение state/мёртвый юнит — warning и переустановка); при DNS,
+не резолвящемся в публичный IP, доменные шаги (ACME/XHTTP/CDN) пропускаются с
+warning, остальное ставится. Занятый чужим процессом порт → fail **до** любых
+изменений, с владельцем порта. Повторный вызов — «изменений не требуется», exit 0.
+
+### Приёмка на чистой VM/VDS (чеклист)
+
+1. `vds gateway init --apply --domain … --email … --protocols reality,hysteria2,obfs,hop,xhttp,cdn,awg`
+   → юниты `vds-xray` / `vds-hysteria2` / `vds-hysteria2-obfs` / `vds-hysteria2-hop` /
+   `vds-amneziawg` active; порты 443/tcp, 443/udp, 8443/tcp, 2053/tcp, 51825/udp,
+   51826/udp (+ hop-диапазон) слушаются; `vds gateway links --include-obfs`
+   непустой; `vds-gateway-health.timer` активен.
+2. Повторный тот же вызов — ни одной мутации, «изменений не требуется», exit 0.
+3. Без `--domain`: acme/cdn пропущены с понятным warning, reality/hy2/awg работают.
+4. Занятый порт (`python -m http.server 8443`) → init падает до установки,
+   сообщает порт/владельца, ничего не ломает.
 
 ---
 

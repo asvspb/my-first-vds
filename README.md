@@ -137,6 +137,11 @@ AmneziaWG — UDP 51825. Все команды требуют root; `remove` б�
 показывает только план (dry-run).
 
 ```bash
+vds gateway init                     # Идемпотентное развёртывание с нуля (dry-run: план+проверки)
+vds gateway init --apply             # Установить reality + hysteria2 + healthcheck-таймер
+vds gateway init --apply --protocols reality,hysteria2,obfs,hop,xhttp,cdn,awg \
+    --domain vpn.example.ru --email admin@example.ru --demo-clients  # всё сразу
+
 vds gateway status                  # Состояние gateway: state.json, клиенты, протоколы
 vds gateway links                   # Share-links клиентов (--protocol xray|hysteria2|amneziawg)
 vds gateway links --include-obfs    # + obfs-ссылки hysteria2 (`<name>@obfs`)
