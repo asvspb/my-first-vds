@@ -237,7 +237,14 @@ Masquerade — `type: proxy` на `https://download.microsoft.com/` (зонди�
   «потолка одного TCP-потока»);
 - серийные пробы (И26), egress-проверка каждого туннеля, отчёт
   `~/.local/share/vpn-manager/last-speed.json` (0600);
-- live-таблица: статус → latency → Мбит/с → готово.
+- live-таблица: статус → latency → Мбит/с → готово;
+- CDN-профили по умолчанию **пропускаются** (CF не отдаёт bulk; включаются
+  флагом `vpn speed --include-cdn`).
+
+**Потолок CDN-через-CF (2026-11-13, закрыто):** TTFB 2.4–2.9 с, bulk 1 МБ —
+timeout; Mux, XHTTP-через-CF и `cloudflared tunnel` выигрыша не дают (см.
+[CDN-FRONTS](CDN-FRONTS.md), отчёты TEST-20261113-*). Дальнейшая оптимизация
+CF не планируется; альтернатива — CDN с PoP в РФ (отдельный цикл).
 
 Эталонный прогон на asv1 (2026-11-13, OVH): xhttp **106.3**, Reality **74.6**,
 AWG **66.2**, Hy2 **41.4** Мбит/с; CDN — latency 2.39 с, bulk не отдался

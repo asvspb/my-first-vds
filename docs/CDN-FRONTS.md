@@ -1,5 +1,15 @@
 # Пул CDN-фронтов (SPEC-20261112 WP-2, ADR-006 «Дополнение»)
 
+> **Итог CF-экспериментов (2026-11-13, закрыто):** оптимизация CDN через
+> Cloudflare исчерпана — Mux (1/5 против 5/5), XHTTP через CF (0/2, CF не
+> пропускает XHTTP), `cloudflared tunnel` (TTFB 2.97–4.64 с vs 2.45–2.88 с,
+> bulk 0; клиентский PoP HKG, туннель AMS, origin NL). Пул фронтов остаётся
+> полезен только как резервирование при блоке IP; скорость CF не растёт.
+> Отчёты: [TEST-cdn-mux](team/reports/TEST-20261113-cdn-mux.md),
+> [TEST-cdn-xhttp-cf](team/reports/TEST-20261113-cdn-xhttp-cf.md),
+> [TEST-cf-tunnel](team/reports/TEST-20261113-cf-tunnel.md).
+> Следующий шаг — CDN с PoP в РФ (владелец) или прямые транспорты.
+
 > Схема резервирования CDN-канала: несколько orange-записей одного домена в
 > Cloudflare вместо единственной (SPOF, наблюдён на asv1 в эпизодах
 > 2026-11-11..12). Серверная часть — в VDS Orchestrator; healthcheck и
