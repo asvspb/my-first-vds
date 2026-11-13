@@ -148,10 +148,11 @@
 
 - **Точки роста схем/протоколов:** [docs/GROWTH-POINTS.md](../GROWTH-POINTS.md) —
   24 пункта (GR-01…GR-24) с фактами, действиями и AC.
-- **Цикл CDN-usability (SPEC approved, ждёт кодера):**
-  [SPEC-20261113-cdn-usability](specs/SPEC-20261113-cdn-usability.md) —
-  Mux для CDN-профиля, TTFB p50/p95 в `vpn speed`, A/B-бенчмарк; WP-1…WP-3
-  в `ubuntuInstaller/scripts/vpn-manager`.
+- **Цикл CDN-usability:** [SPEC-20261113-cdn-usability](specs/SPEC-20261113-cdn-usability.md)
+  — **G4 FAIL** ([TEST-20261113-cdn-mux](reports/TEST-20261113-cdn-mux.md)):
+  WP-2 (TTFB) и WP-3 (bench) приняты; WP-1 (mux) откатить — mux через CF
+  нестабилен (1/5 запросов против 5/5 без mux). Следующий шаг — WP-1 revert
+  и отдельная SPEC «XHTTP through CF».
 - **Roadmap v2 (2026-11-13, ревизия архитектора):**
   [CENSORSHIP-ROADMAP](../CENSORSHIP-ROADMAP.md) — фазы 0–9 переведены в
   «статус + остаток», остаток разложен на волны **W1–W6**; W1 (hook+healthcheck)
