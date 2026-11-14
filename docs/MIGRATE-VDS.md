@@ -64,6 +64,9 @@ bash ubuntuInstaller/scripts/20_vds-migrate.sh root@старый root@новый
          оставить proxied, для direct — DNS-only)
    - [ ] `dig +short <домен>` → новый IP
 4. **Ноутбук (vpn-manager):**
+   - [ ] `vpn profile export -o ~/vpn-profiles.json` — бэкап профилей до
+         миграции; на новой машине — `vpn profile restore ~/vpn-profiles.json`
+         (бандл 0600, содержит секреты: передавать scp/age)
    - [ ] `vpn profile pull -H root@<новый>` (обновит ssh-host в settings)
    - [ ] AWG-конфиг: `Endpoint = <новый IP>:51825` (одна строка)
    - [ ] `vpn probe` → все профили ok; `vpn start` (Reality-split) → youtube 204
