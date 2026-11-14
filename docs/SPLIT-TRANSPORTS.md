@@ -94,7 +94,12 @@ XHTTP). **Вердикт:** «незаметный основной» для б�
 ### 3.3. XHTTP — тот же xray, но клиенты ограничены
 
 > **План реализации:** [SPEC-20261114-xhttp-split](team/specs/SPEC-20261114-xhttp-split.md)
-> (WP-1..4, acceptance, риски).
+> (WP-1..4, acceptance, риски). **Реализовано 2026-11-14 (WP-1..3 кодером):**
+> `vpn scheme xhttp-split` — tun `xray0` (xray 26.1.23+, отдельный бинарь
+> `/usr/local/lib/vpn-xray-split`, socks-профили остаются на 25.1.1),
+> mark 0x23000/table 23000/nft `xray_split`, kill-switch через ExecStopPost.
+> OQ-1 закрыт: tun-инбаунд появился в v26.1.23 (PR #5464/#5509), схема
+> проверена `xray -test` под root. Приёмка на ноутбуке — тестер.
 
 **Плюсы:** самая высокая скорость (106), xray-core уже есть.
 
@@ -148,7 +153,7 @@ sing-box/Hiddify — нет); сервер отдаёт его отдельны�
 | 1 | Параметризовать `15_domain-split.sh`: `--dev/--mark/--table` | одна механика для AWG/Reality/XHTTP | 0.5 д |
 | 2 | **Hy2-split** (`tun` + `acl`) | самый дешёвый новый «основной» | 0.5–1 д |
 | 3 | **Reality-split** (`tun xray0` + общий split + kill-switch) | незаметный основной для браузинга | 1 д |
-| 4 | **XHTTP-split** ([SPEC](team/specs/SPEC-20261114-xhttp-split.md)) | скоростной вариант для xray-клиентов | 0.5 д (после 1 и 3) |
+| 4 | **XHTTP-split** ([SPEC](team/specs/SPEC-20261114-xhttp-split.md)) — **реализовано 2026-11-14** | скоростной вариант для xray-клиентов | сделано (WP-1..3) |
 | 5 | CDN | не делать; оставить выживание | — |
 
 Критерии приёмки шага 2/3 (одинаковые): youtube/telegram через туннель, RU
