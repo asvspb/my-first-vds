@@ -214,3 +214,19 @@ Reality и XHTTP; `xhttp-split` оставлен алиасом (автовыб�
 - `start awg` снимает xray-split, `start reality|xhttp` — AWG (взаимоисключение);
 - `vpn speed` для AWG-канала вызывает `vpn start awg` (не голый `start`);
 - тесты: **392 passed** (+4 на дефолт/диспетчеризацию/ошибку).
+
+
+---
+
+## 13. Возврат дефолта `vpn start` на AWG (2026-11-14)
+
+По требованию владельца `vpn start` без аргумента снова поднимает **AWG +
+доменный split**; Reality/XHTTP — явно:
+
+| Команда | Схема |
+|---|---|
+| `vpn start` / `vpn start awg` | AWG + split (по умолчанию) |
+| `vpn start reality` | Reality-split (tun xray0, TCP 443) |
+| `vpn start xhttp` | XHTTP-split (tun xray0, TCP 8443) |
+
+`vpn speed` для AWG-канала по-прежнему зовёт `vpn start awg` (явно).

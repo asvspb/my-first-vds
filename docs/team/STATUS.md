@@ -180,8 +180,8 @@
   через split, example.com 200, ya.ru напрямую, `vpn monitor` ok,
   kill-switch и `vpn reset` — PASS. Схема обобщена: `vpn scheme xray-split
   [profile]` работает и для Reality (`phone`), и для XHTTP (`xhttp-web`);
-  `xhttp-split` — алиас. Быстрый вход: `vpn start` = Reality-split
-  (по умолчанию), `vpn start xhttp`, `vpn start awg`. Исправлены: петля
+  `xhttp-split` — алиас. Быстрый вход: `vpn start reality`,
+  `vpn start xhttp` (`vpn start` по умолчанию — AWG). Исправлены: петля
   xray→свой tun (sockopt.mark),
   порядок DoH + ожидание готовности, один dnsmasq-конфиг,
   mkdir /etc/vpn-manager.
