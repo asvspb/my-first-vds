@@ -8,9 +8,10 @@
   [MIGRATE-VDS](../../MIGRATE-VDS.md), [DEPLOY](../../DEPLOY.md).
 - **Автор:** архитектор (vds-architect)
 - **Дата:** 2026-11-14
-- **Статус:** **G4: code accepted 2026-11-14** (unit + live dry-run PASS);
-  приёмка на чистой VM (AC-1/3/4) — за владельцем; см.
-  [TEST-20261114-fresh-install-v3](../reports/TEST-20261114-fresh-install-v3.md)
+- **Статус:** **G4: code accepted 2026-11-14** (unit + live dry-run + чистое
+  Ubuntu 24.04 в systemd-контейнере: Reality+Hy2, AC-1/2/3/4 подмножества
+  PASS); полноценная VM-приёмка AWG/obfs/hop/CDN/ACME — за владельцем; см.
+  [TEST-20261114-fresh-install-v3](../reports/TEST-20261114-fresh-install-v3.md) §6
 - **ADR:** не требуется (аддитивная оркестрация существующих идемпотентных
   команд; публичные контракты install/add-* не меняются)
 
