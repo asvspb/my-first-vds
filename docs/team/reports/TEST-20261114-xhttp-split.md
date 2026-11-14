@@ -82,3 +82,82 @@ Xray tun появился только в **26.1.23** (в 25.1.1 его нет),
    blackhole, переключение AWG↔xsplit» на ноутбуке.
 3. При B: SPEC-патч на второй инбаунд (порт 8445, отдельный юнит, состояние,
    ссылка профиля), затем повторный прогон §2.
+
+
+---
+
+## 8. Stage 2: обновление серверного Xray до 26.1.23 (вариант A)
+
+Решение владельца: A. Выполнено на asv1 2026-11-14:
+
+- бэкапы: `/usr/local/bin/xray.bak-25.1.1`, `/usr/local/etc/xray/config.json.bak-xray25`;
+- скачан 26.1.23, SHA256 из `.dgst` совпал;
+- **старый конфиг проходит `xray -test`** под 26 (менять не пришлось);
+- рестарт `vds-xray`: active, 443/8443/2053 слушаются; `state.protocols["xray"].version` обновлён на `v26.1.23`.
+
+Проверки после апгрейда (клиент на ноутбуке — Xray 25.1.1):
+
+| Канал | Результат |
+|---|---|
+| Reality `phone` | 200, TTFB 0.35 с |
+| XHTTP `xhttp-web` (25-клиент → 26-сервер) | 200, TTFB 0.81 с |
+| CDN `cdn-home` | 200, TTFB 3.05 с (без изменений) |
+| Hysteria2 `mob` | 200, TTFB 0.29 с (не затронут) |
+| 26.1.23-клиент → 26-сервер XHTTP | **200** (ранее 400) |
+| XHTTP-split в контейнере (26-клиент, 8443) | **200** через `xray0` |
+
+Откат: вернуть `xray.bak-25.1.1` → `systemctl restart vds-xray` (конфиг не
+менялся). ADR: [ADR-010](../../adr/ADR-010-xray-core-upgrade-26.md).
+
+### Найдено на ноутбуке (follow-up)
+
+`vpn scheme xhttp-split` на живом ноутбуке применился (unit/tun/addr/rules
+поднялись, `dig @127.0.0.1 www.youtube.com` отвечал), но общий DNS перестал
+резолвить не-split домены: `curl https://example.com` → timeout, при этом
+`ya.ru` (прямой) работал. После `vpn reset` сеть/DNS восстановились.
+Причина не изолирована: dnsmasq использует `server=127.0.0.1#5053` (DoH), а
+`vpn scheme xhttp-split` не поднимает DoH-цепочку (в отличие от AWG-схемы,
+где это делал `vpn start`). Кандидат в фикс: `17`/`xsplit` должен вызывать
+`vpn doh on` (или 15 — проверять/поднимать cloudflared) до записи
+dnsmasq-конфига; иначе `strict-order` уходит в мёртвый 5053.
+
+Итог stage 2: **core PASS** (сервер 26 + tun/rules/kill-switch + e2e в
+контейнере), **laptop full acceptance — conditional** до фикса DoH-цепочки.
+
+---
+
+## 9. Stage 3: финальная приёмка на ноутбуке (PASS)
+
+После stage 2 (`vpn scheme xhttp-split`) всплыли три дефекта, все исправлены
+и перепроверены:
+
+| Дефект | Симптом | Фикс |
+|---|---|---|
+| **петля xray→свой tun** | домен сервера в зоне `com` попадал в nft-set → сокет xray к серверу маркировался 0x23000 и уходил в xray0; `proxy/tun: connection was refused`, таймауты | `sockopt.mark=0xca6c` в tun-конфиге; nft уже делает `meta mark 0xca6c return` |
+| **DoH включался до снятия AWG** | `15 --off` внутри `_stop_awg_scheme` гасил dnsmasq/DoH, split оставался без DNS | `_ensure_doh` перенесён после снятия AWG |
+| **два dnsmasq-конфига** | `awg-split.conf` + `xray_split.conf` → `illegal repeated keyword`, dnsmasq не стартует | один split-конфиг (`awg-split.conf`), `xray_split.conf` удаляется |
+| `/etc/vpn-manager` отсутствовал | `install: No such file or directory` при записи конфига | `sudo install -d -m 0700` перед install |
+
+Итоговые проверки (живой ноутбук, сервер 26.1.23):
+
+| Проверка | Результат |
+|---|---|
+| `vpn scheme xhttp-split` | unit active, iface `xray0`, `10.66.0.1/30`, mark 0x23000/table 23000 |
+| youtube через split | **204** |
+| `example.com` (зона `com`) через split | **200** |
+| `ya.ru` (RU) | **302**, маршрут через `wlp44s0` (напрямую) |
+| `vpn monitor` | `xray-split: ok`, `dns-doh: ok` |
+| kill-switch (`systemctl stop`) | rule/table сняты, `example.com` напрямую **200** |
+| `vpn reset` | unit/iface/rules/DNS сняты, интернет **200**, dnsmasq/cloudflared inactive |
+
+**Итог: G4 PASS.** XHTTP-split работает как системная схема «как AWG»:
+split-зоны через tun xray0 → VLESS+XHTTP, RU/исключения — напрямую, kill-switch
+без blackhole, `vpn reset` возвращает чистое состояние.
+
+## 10. Follow-up (не блокирует)
+
+- `vpn scheme awg` ↔ `xhttp-split` — проверить на живом ноутбуке (unit-тесты
+  mutual exclusion есть; полный цикл не гонялся после финального фикса).
+- `vpn speed` для xsplit (системный канал не socks) — измерять прямым curl;
+  можно добавить канал в speed по аналогии с AWG.
+- UDP-over-TCP остаётся ограничением XHTTP; для звонков/игр — AWG.

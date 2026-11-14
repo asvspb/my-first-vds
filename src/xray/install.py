@@ -53,7 +53,7 @@ from src.xray.config import (
 )
 
 # Пин версии Xray-core (ADR-001): обновляется только коммитом.
-XRAY_VERSION = "v25.1.1"
+XRAY_VERSION = "v26.1.23"
 
 XRAY_PORT = 443
 GITHUB_BASE = "https://github.com/XTLS/Xray-core/releases/download"
@@ -145,8 +145,8 @@ def _installed() -> bool:
     if not (XRAY_BIN_PATH.is_file() and XRAY_CONFIG_PATH.is_file()):
         return False
     result = run_list([str(XRAY_BIN_PATH), "version"], timeout=15)
-    # Реальный вывод `xray version` — «Xray 25.1.1 ...» без ведущего «v»;
-    # пин хранится как «v25.1.1» (тег release). Сравниваем без «v».
+    # Реальный вывод `xray version` — «Xray 26.1.23 ...» без ведущего «v»;
+    # пин хранится как «v26.1.23» (тег release). Сравниваем без «v».
     return result.ok and XRAY_VERSION.lstrip("v") in result.stdout
 
 

@@ -123,7 +123,7 @@ sing-box 1.14 подключается; pin-ссылка работает при
 
 ### GR-06. Нет пути обновления Xray-core — **P1**
 
-**Факт.** На asv1 `Xray 25.1.1`; клиенты идут на 26.x. Отдельной команды обновления
+**Факт.** На asv1 Xray обновлён до **26.1.23** (2026-11-14, ADR-010); команды `xray update` по-прежнему нет. Отдельной команды обновления
 нет (`install` только ставит, если нет бинаря). Известно: Reality нового Xray
 (≥26.7.11) несовместим с Mihomo; Mihomo-клиентам нужен `x25519mlkem768`, который
 Xray включает начиная с 26.9.8.
@@ -474,7 +474,7 @@ GR-21 ← GR-03/GR-08 (нужны живые профили для failover).
 | `state.json` на asv1 | obfs active (udp/51826), hop `None`, CDN `fronts: None`, `acme.domain=asvpersonal.ru` |
 | `/etc/hysteria/cert.pem` | LE, SAN `103-45-247-172.eu-cloud-xip.com` (≠ `acme.domain`) |
 | hook `vds-hysteria2-cert.sh` | `systemctl restart vds-hysteria2` — только main |
-| `xray version` | 25.1.1 |
+| `xray version` | 26.1.23 (обновлено 2026-11-14) |
 | `src/hysteria2/clients.py` | один auth-пароль на инбаунд |
 | `src/hysteria2/config.py` | обфускатор только `salamander` |
 | `docs/CENSORSHIP-ROADMAP.md` | фазы 5–8 (подписки, hardening, наблюдаемость, e2e) не закрыты |

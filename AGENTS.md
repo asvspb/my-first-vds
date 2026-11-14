@@ -109,7 +109,7 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 `docs/GROWTH-POINTS.md` — точки роста схем/протоколов (вход для intake);
 `docs/SERVER-BASELINE.md` — настройки ОС/сервера: авто vs вручную, чеклист восстановления;
 `docs/SPLIT-TRANSPORTS.md` — системный split: AWG и аналоги (Reality/Hy2/XHTTP/CDN);
-`docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…009;
+`docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…010;
 `TECHDEBT.md` — бэклог. При изменении поведения обновлять соответствующий документ
 (новый протокол/транспорт — ADR + VPN-PROTOCOLS + README + AGENTS).
 

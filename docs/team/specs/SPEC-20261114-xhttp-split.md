@@ -5,10 +5,10 @@
   запрос владельца 2026-11-14 «xray-xhttp на подобие AWG».
 - **Автор:** архитектор (vds-architect)
 - **Дата:** 2026-11-14
-- **Статус:** approved (G2); **G4 BLOCKED 2026-11-14** — код принят
-  условно, end-to-end упирается в версию серверного Xray (25.1.1 vs клиент
-  26.1.23, xhttp 400); варианты A/B/C — в
-  [TEST-20261114-xhttp-split](../reports/TEST-20261114-xhttp-split.md)
+- **Статус:** **G4 PASS 2026-11-14** — серверный Xray 26.1.23
+  ([ADR-010](../../adr/ADR-010-xray-core-upgrade-26.md)); tun/rules/kill-switch,
+  youtube 204/example 200 через split, RU напрямую, `vpn reset` — PASS.
+  Отчёт: [TEST-20261114-xhttp-split](../reports/TEST-20261114-xhttp-split.md) §9
 - **ADR:** не требуется: клиентская схема, обратима; серверные контракты
   XHTTP (ADR-003) не меняются. CF-вариант закрыт (TEST-20261113-cdn-xhttp-cf).
 

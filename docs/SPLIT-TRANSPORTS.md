@@ -94,8 +94,9 @@ XHTTP). **Вердикт:** «незаметный основной» для б�
 ### 3.3. XHTTP — тот же xray, но клиенты ограничены
 
 > **План реализации:** [SPEC-20261114-xhttp-split](team/specs/SPEC-20261114-xhttp-split.md)
-> (WP-1..4, acceptance, риски). **Статус:** код принят, G4 заблокирован
-> версией серверного Xray — [TEST-20261114-xhttp-split](team/reports/TEST-20261114-xhttp-split.md). **Реализовано 2026-11-14 (WP-1..3 кодером):**
+> (WP-1..4, acceptance, риски). **Статус:** **G4 PASS** (2026-11-14): сервер Xray 26.1.23 (ADR-010), tun/rules/
+> kill-switch, youtube 204/example 200 через split, RU напрямую, `vpn reset`;
+> [TEST-20261114-xhttp-split](team/reports/TEST-20261114-xhttp-split.md). **Реализовано 2026-11-14 (WP-1..3 кодером):**
 > `vpn scheme xhttp-split` — tun `xray0` (xray 26.1.23+, отдельный бинарь
 > `/usr/local/lib/vpn-xray-split`, socks-профили остаются на 25.1.1),
 > mark 0x23000/table 23000/nft `xray_split`, kill-switch через ExecStopPost.

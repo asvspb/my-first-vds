@@ -273,7 +273,7 @@ class TestReleaseUrlsMirror:
 
 class TestInstalledVersionFormat:
     """P12: `_installed()` сверяет версию с реальным форматом вывода
-    `xray version` («Xray 25.1.1 ...» — без ведущего «v», в отличие от пина)."""
+    `xray version` («Xray 26.1.23 ...» — без ведущего «v», в отличие от пина)."""
 
     def _setup_installed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stdout: str
@@ -292,11 +292,11 @@ class TestInstalledVersionFormat:
     def test_real_version_output_matches(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Реальный формат `xray version` v25.1.1 → True (было False из-за «v»)."""
+        """Реальный формат `xray version` без «v» → True (было False из-за «v»)."""
         self._setup_installed(
             tmp_path,
             monkeypatch,
-            "Xray 25.1.1 (Xray, Penetrates Everything.) e80ca67 (go1.23.4 linux/amd64)\n",
+            f"Xray {install.XRAY_VERSION.lstrip('v')} (Xray, Penetrates Everything.) e80ca67 (go1.23.4 linux/amd64)\n",
         )
         assert install._installed() is True
 
