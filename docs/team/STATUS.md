@@ -172,11 +172,13 @@
   obfs, hop, awg, healthcheck + `use-domain`; `11_vds-deploy.sh` → init
   (env `VDS_PROTOCOLS`). Закрыт GR-16 (hub). Осталось: приёмка на чистой VM
   (AC-1/3/4) — владелец.
-- **XHTTP-split (SPEC approved, ждёт кодера):**
-  [SPEC-20261114-xhttp-split](specs/SPEC-20261114-xhttp-split.md) — системный
-  split для прямого XHTTP по образцу AWG (tun xray0, mark 0x23000/table 23000,
-  параметризация `15_domain-split.sh`, root-скрипт/юнит, mutual exclusion с AWG,
-  kill-switch). WP-1..4; CF-вариант закрыт.
+- **XHTTP-split — code accepted, G4 BLOCKED (2026-11-14):**
+  [SPEC-20261114-xhttp-split](specs/SPEC-20261114-xhttp-split.md),
+  [TEST-20261114-xhttp-split](reports/TEST-20261114-xhttp-split.md).
+  tun/unit/rules/kill-switch PASS; vpnm 379 тестов. Блокер: xray 26.1.23
+  (клиент) ↔ 25.1.1 (сервер) XHTTP = 400; 26↔26 = 200. Варианты: A) обновить
+  серверный Xray, B) второй 26-инбаунд на 8445, C) xsplit поверх Reality.
+  Рекомендация — B.
 - **OS baseline (2026-11-14):** [SERVER-BASELINE](../SERVER-BASELINE.md) —
   инвентарь настроек ОС/сервера (авто vs вручную), UFW-матрица портов,
   чеклист восстановления агентом, дрейф asv1 (UFW off, swap 0, SSH-пароли,
