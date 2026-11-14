@@ -75,3 +75,38 @@ AWG и healthcheck-таймер распознаны как установлен
   --clear` в будущем.
 - `docs/research/youtube-ideas-2026-11.md` в vds — правка владельца, не
   входит в этот цикл.
+
+---
+
+## 6. Приёмка на чистом окружении (Ubuntu 24.04, systemd-контейнер)
+
+Собрано чистое окружение: Ubuntu 24.04 + systemd (privileged, host-network),
+`install.sh` с нуля, затем `vds gateway init --apply --protocols
+reality,hysteria2 --demo-clients` (без домена).
+
+### Найдено и исправлено по ходу
+
+| Баг | Симптом | Фикс |
+|---|---|---|
+| **`hysteria2 install` — ложная идемпотентность** | после сорванной установки (бинарь+конфиг есть, юнита/state нет) install печатал «уже установлен», возвращал 0 → init «успешен», но Hy2 не работает | `_installed_complete()`: бинарь+конфиг+юнит+state+активный сервис; чужой порт блокирует, свой (hysteria) — нет |
+| **late binding в demo-клиентах** | `phone` создавался через hysteria2-модуль (обе ссылки hysteria2) | обработчики фиксируются default-arg в lambda; регресс-тест |
+| **init не проверял результат шага** | шаг мог вернуть 0, но state/юнит не появились | `_verify_step()` после каждого шага: state/unit/сертификат/домен; иначе fail + rollback-подсказки |
+
+### Результаты
+
+| Критерий | Результат |
+|---|---|
+| AC-1 (подмножество: Reality+Hy2, без домена) | **PASS**: оба юнита active, 443/tcp и 443/udp слушаются, клиенты `phone` (vless) и `mob` (hy2), healthcheck-таймер active |
+| AC-2 (повторный init) | **PASS**: все шаги SKIP, `ActiveEnterTimestamp` юнитов не изменился, sha256 state.json не изменился |
+| AC-3 (без домена) | **PASS**: ACME/CDN/XHTTP-шаги отсутствуют/скипнуты с warning |
+| AC-4 (занятый порт) | **PASS**: `python -m http.server 443` → init rc=1, сообщение «порт 443/tcp занят (владелец: python3)», state не изменён |
+
+**Не проверено в контейнере:** AWG (kernel-модуль/PPA), obfs/hop, XHTTP/CDN,
+ACME (нужен домен) — это остаётся для приёмки на реальной чистой VM. Также
+контейнер в bridge-сети не имеет `/proc/sys/net/core/rmem_max` — для Hy2
+пришлось запускать с `--network host` (артефакт окружения, не кода).
+
+**CLI-замечание:** у `vds hysteria2` нет `remove-client` (есть `add-client`
+и `remove` целиком) — при тесте state приходилось чистить вручную.
+Кандидат в TECHDEBT (симметрия с `xray remove-client`/`amneziawg
+remove-client`).

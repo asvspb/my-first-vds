@@ -136,6 +136,29 @@ def _installed() -> bool:
     return result.ok and _VERSIONplain in result.stdout
 
 
+def _unit_file() -> Path:
+    """Путь установленного юнита (тот же, что пишет core.units)."""
+    return Path("/etc/systemd/system") / HYSTERIA2_UNIT
+
+
+def _installed_complete(state_path: str | None = None) -> bool:
+    """Полная идемпотентность: бинарь+конфиг+юнит+state+активный сервис.
+
+    Частичное состояние (бинарь/конфиг есть, но юнит/state потеряны — например,
+    после сорванной установки) не считается установкой: run_install должен
+    дойти до _install_locked и восстановить юнит/state.
+    """
+    if not _installed() or not _unit_file().is_file():
+        return False
+    try:
+        state = load_state(state_path)
+    except StoreError:
+        return False
+    if not state.protocols.get("hysteria2", {}).get("installed"):
+        return False
+    return unit_active(HYSTERIA2_UNIT)
+
+
 def _fetch_and_install_binary() -> None:
     """Скачать бинарь, сверить SHA256 (hashes.txt), установить в /usr/local/bin."""
     bin_url, hashes_url = _release_urls()
@@ -330,22 +353,26 @@ def run_install(
     # Идемпотентность (ADR-001): пиннутая версия на месте — не перекачиваем.
     # ДО проверки порта: активный сервис владеет udp/443 сам, «порт занят»
     # на повторном install — ложный отказ и блокировка восстановления state.
-    if _installed():
+    if _installed_complete(state_path):
         console.print(
             f"[success][hysteria2] Hysteria2 {HYSTERIA2_VERSION} уже установлен "
-            "(бинарь и конфиг на месте) — повторная установка не требуется.[/success]"
+            "(бинарь, конфиг, юнит, state, сервис) — повторная установка "
+            "не требуется.[/success]"
         )
         return 0
 
     # Проверка порта — ДО любых изменений (SPEC §5, AC E1); QUIC = UDP.
     if not port_free(port, "udp"):
-        owner = port_owner(port, "udp")
-        owner_info = f" (владелец: {owner})" if owner else ""
-        console.print(
-            f"[error][hysteria2] Порт {port}/udp занят{owner_info}. "
-            "Освободите порт или остановите сервис и повторите.[/error]"
-        )
-        return 1
+        owner = port_owner(port, "udp") or ""
+        # Свой (частично установленный) сервис не блокирует восстановление:
+        # _install_locked перезапишет конфиг и перезапустит юнит.
+        if "hysteria" not in owner.lower():
+            owner_info = f" (владелец: {owner})" if owner else ""
+            console.print(
+                f"[error][hysteria2] Порт {port}/udp занят{owner_info}. "
+                "Освободите порт или остановите сервис и повторите.[/error]"
+            )
+            return 1
 
     ip = public_ip()
     if not ip:

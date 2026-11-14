@@ -475,17 +475,22 @@ def _demo_clients(protocols: list[str], state_path: str | None) -> list[str]:
 
     jobs: list[tuple[str, str, callable]] = []
     if "reality" in protocols:
-        from src.xray.clients import add_client as _add
+        from src.xray.clients import add_client as xray_add
 
-        jobs.append(("phone", "xray", lambda: _add("phone")))
+        # default-arg фиксирует функцию: без него позднее связывание имени
+        # подменило бы обработчик hysteria2 (баг найден на чистой VM).
+        jobs.append(("phone", "xray", lambda add=xray_add: add("phone")))
     if "hysteria2" in protocols:
-        from src.hysteria2.clients import add_client as _add
+        from src.hysteria2.clients import add_client as hy2_add
 
-        jobs.append(("mob", "hysteria2", lambda: _add("mob")))
+        jobs.append(("mob", "hysteria2", lambda add=hy2_add: add("mob")))
     if "awg" in protocols:
-        from src.amneziawg.clients import add_client as _add
+        from src.amneziawg.clients import add_client as awg_add
 
-        jobs.append(("laptop", "amneziawg", lambda: _add("laptop", no_psk=False)))
+        jobs.append((
+            "laptop", "amneziawg",
+            lambda add=awg_add: add("laptop", no_psk=False),
+        ))
 
     for name, proto, fn in jobs:
         try:
@@ -552,6 +557,54 @@ _ROLLBACK = {
     "awg": "vds amneziawg remove --apply",
     "healthcheck": "systemctl disable --now vds-gateway-health.timer",
 }
+
+
+_POST_STATE = {
+    "reality": "xray",
+    "hysteria2": "hysteria2",
+    "obfs": "hysteria2-obfs",
+    "xhttp": "xhttp",
+    "cdn": "xray-cdn",
+    "awg": "amneziawg",
+}
+
+
+def _verify_step(step: Step, domain: str | None, state_path: str | None) -> bool:
+    """Постпроверка шага: state/юнит/сертификат реально на месте.
+
+    Защита от «успешного» no-op (например, install вернул 0, но юнит/state не
+    появились — найдено на чистой VM в контейнере 2026-11-14).
+    """
+    name = step.name
+    try:
+        state = load_state(state_path)
+    except StoreError:
+        return False
+
+    if name in _POST_STATE:
+        key = _POST_STATE[name]
+        if not state.protocols.get(key, {}).get("installed"):
+            return False
+        unit = STEP_UNIT.get(name)
+        return True if unit is None else unit_active(unit)
+
+    if name == "hop":
+        return bool((state.protocols.get("hysteria2") or {}).get("hop_ports")) \
+            and unit_active(HYSTERIA2_HOP_UNIT)
+
+    if name == "acme":
+        return bool(domain) and (ACME_LETSENCRYPT_LIVE(domain) / "fullchain.pem").is_file()
+
+    if name == "hy2-cert":
+        return str((state.protocols.get("hysteria2") or {}).get("cert_domain")) == (domain or "")
+
+    if name == "xray-domain":
+        return str(state.domain or "") == (domain or "")
+
+    if name == "healthcheck":
+        return unit_active("vds-gateway-health.timer")
+
+    return True
 
 
 def run_init(
@@ -635,6 +688,18 @@ def run_init(
                 console.print(f"  [warning]откат выполненного: {_ROLLBACK.get(done.name, '?')}[/warning]")
             return 1
         executed.append(step)
+        if not _verify_step(step, (domain or "").strip() or None, state_path):
+            console.print(
+                f"[error][init] Шаг '{step.title}' вернул успех, но состояние "
+                "не подтверждено (state/юнит/сертификат). Проверьте вручную: "
+                f"{' '.join(step.command)}[/error]"
+            )
+            for done in executed:
+                console.print(
+                    f"  [warning]откат выполненного: "
+                    f"{_ROLLBACK.get(done.name, '?')}[/warning]"
+                )
+            return 1
         console.print(f"[success][init] Шаг готов: {step.title}[/success]")
 
     if not executed:

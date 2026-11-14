@@ -146,6 +146,8 @@ class TestPreconditions:
                 stdout=f"hysteria version {install._VERSIONplain}\n", stderr="", returncode=0
             ),
         )
+        # полная идемпотентность: бинарь+конфиг+юнит+state+активный сервис
+        monkeypatch.setattr(install, "_installed_complete", lambda *_a, **_k: True)
 
         port_checks: list[tuple[int, str]] = []
 
@@ -236,6 +238,7 @@ class TestIdempotency:
                 stdout=f"hysteria version {install._VERSIONplain}\n", stderr="", returncode=0
             ),
         )
+        monkeypatch.setattr(install, "_installed_complete", lambda *_a, **_k: True)
         downloads: list[str] = []
         monkeypatch.setattr(
             install.requests, "get",

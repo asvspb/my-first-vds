@@ -371,7 +371,9 @@ class TestRunInit:
     def test_apply_runs_all_steps(
         self, _root: None, _net_ok: None, _dns_ok: None, _units_up: None,
         state_path: str, recorded: list[list[str]],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        monkeypatch.setattr(init, "_verify_step", lambda *_a, **_k: True)
         rc = run_init(
             protocols="reality,hysteria2,awg",
             apply=True, state_path=state_path,
@@ -470,6 +472,7 @@ class TestRunInit:
         state_path: str, monkeypatch: pytest.MonkeyPatch, recorded: list[list[str]],
     ) -> None:
         demo_calls: list[str] = []
+        monkeypatch.setattr(init, "_verify_step", lambda *_a, **_k: True)
         import src.xray.clients as xray_clients
 
         monkeypatch.setattr(
@@ -509,3 +512,25 @@ class TestRunInit:
         out = capsys.readouterr().out + capsys.readouterr().err
         assert secret not in out
         assert "auth_password" not in out
+
+
+class TestDemoClientHandlers:
+    def test_phone_and_mob_use_their_own_modules(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Регресс: late binding не должен подменять xray-обработчик hysteria2."""
+        import src.hysteria2.clients as hy2_clients
+        import src.xray.clients as xray_clients
+
+        calls: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            xray_clients, "add_client",
+            lambda name, **kw: calls.append(("xray", name)) or {},
+        )
+        monkeypatch.setattr(
+            hy2_clients, "add_client",
+            lambda name, **kw: calls.append(("hysteria2", name)) or {},
+        )
+        created = init._demo_clients(["reality", "hysteria2"], None)
+        assert calls == [("xray", "phone"), ("hysteria2", "mob")]
+        assert created == ["phone", "mob"]
