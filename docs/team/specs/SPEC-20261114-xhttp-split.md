@@ -5,7 +5,9 @@
   запрос владельца 2026-11-14 «xray-xhttp на подобие AWG».
 - **Автор:** архитектор (vds-architect)
 - **Дата:** 2026-11-14
-- **Статус:** **G4 PASS 2026-11-14** — серверный Xray 26.1.23
+- **Статус:** **G4 PASS 2026-11-14**; схема обобщена на Reality
+  (`vpn scheme xray-split [profile]`, `xhttp-split` — алиас) —
+  [§11 отчёта](../reports/TEST-20261114-xhttp-split.md). Серверный Xray 26.1.23
   ([ADR-010](../../adr/ADR-010-xray-core-upgrade-26.md)); tun/rules/kill-switch,
   youtube 204/example 200 через split, RU напрямую, `vpn reset` — PASS.
   Отчёт: [TEST-20261114-xhttp-split](../reports/TEST-20261114-xhttp-split.md) §9

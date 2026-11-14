@@ -161,3 +161,34 @@ split-зоны через tun xray0 → VLESS+XHTTP, RU/исключения —
 - `vpn speed` для xsplit (системный канал не socks) — измерять прямым curl;
   можно добавить канал в speed по аналогии с AWG.
 - UDP-over-TCP остаётся ограничением XHTTP; для звонков/игр — AWG.
+
+---
+
+## 11. Обобщение на Reality (2026-11-14, PASS)
+
+Схема переименована в **`vpn scheme xray-split [profile]`** и работает для
+Reality и XHTTP; `xhttp-split` оставлен алиасом (автовыбор XHTTP).
+
+Проверено на живом ноутбуке:
+
+| Проверка | Reality (`phone`) | XHTTP (`xhttp-web`) |
+|---|---|---|
+| `vpn scheme xray-split …` | применён, unit active | применён (регресс) |
+| youtube через split | **204** | **204** |
+| `example.com` через split | **200** | **200** |
+| `ya.ru` напрямую | **302** | **302** |
+| `vpn monitor` | `xray-split: ok`, `dns-doh: ok` | то же |
+| kill-switch (`systemctl stop`) | rules сняты, direct **200** | то же |
+| `vpn reset` | чисто | чисто |
+
+Дополнительно:
+- `resolve_profile` принимает `xray-reality`/`xray-xhttp`, алиас
+  `xhttp-split` фильтрует автовыбор по XHTTP;
+- перед стартом split добавлено ожидание готовности DoH
+  (`_wait_doh`) — устраняет флап резолвера при apply;
+- unit/config/17/15 не менялись: транспорт задаётся профилем (flow Vision
+  для Reality, path для XHTTP);
+- тесты: **383 passed** (+4 Reality/алиас/DoH).
+
+Ограничения Reality-split те же: UDP-over-TCP, системный tun только на
+ноутбуке, порт 443 (лучшая маскировка, чем XHTTP).

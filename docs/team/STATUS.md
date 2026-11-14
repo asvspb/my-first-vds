@@ -172,14 +172,17 @@
   obfs, hop, awg, healthcheck + `use-domain`; `11_vds-deploy.sh` → init
   (env `VDS_PROTOCOLS`). Закрыт GR-16 (hub). Осталось: приёмка на чистой VM
   (AC-1/3/4) — владелец.
-- **XHTTP-split — G4 PASS (2026-11-14):**
+- **xray-split (Reality/XHTTP) — G4 PASS (2026-11-14):**
   [SPEC-20261114-xhttp-split](specs/SPEC-20261114-xhttp-split.md),
   [TEST-20261114-xhttp-split](reports/TEST-20261114-xhttp-split.md).
   tun/unit/rules/kill-switch PASS; vpnm 379 тестов. Серверный Xray обновлён
   до 26.1.23 (ADR-010); Reality/XHTTP/CDN/Hy2 проверены. Ноутбук: youtube 204
   через split, example.com 200, ya.ru напрямую, `vpn monitor` ok,
-  kill-switch и `vpn reset` — PASS. Исправлены: петля xray→свой tun
-  (sockopt.mark), порядок DoH, один dnsmasq-конфиг, mkdir /etc/vpn-manager.
+  kill-switch и `vpn reset` — PASS. Схема обобщена: `vpn scheme xray-split
+  [profile]` работает и для Reality (`phone`), и для XHTTP (`xhttp-web`);
+  `xhttp-split` — алиас. Исправлены: петля xray→свой tun (sockopt.mark),
+  порядок DoH + ожидание готовности, один dnsmasq-конфиг,
+  mkdir /etc/vpn-manager.
 - **OS baseline (2026-11-14):** [SERVER-BASELINE](../SERVER-BASELINE.md) —
   инвентарь настроек ОС/сервера (авто vs вручную), UFW-матрица портов,
   чеклист восстановления агентом, дрейф asv1 (UFW off, swap 0, SSH-пароли,

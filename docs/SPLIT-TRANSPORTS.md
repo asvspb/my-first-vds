@@ -75,7 +75,7 @@ Ubuntu 22.04 и ACL корректно матчит домены из `domains.t
 
 **Оценка:** 0.5–1 день. **Вердикт:** лучший кандидат «основной после AWG».
 
-### 3.2. Reality — лучший stealth, средняя цена
+### 3.2. Reality — лучший stealth, средняя цена — ✅ реализовано (Reality-split)
 
 **Плюсы:** чужая TLS-маска (лучшая незаметность), скорость 74.6, один TCP
 порт 443, уже работает на сервере.
@@ -94,7 +94,9 @@ XHTTP). **Вердикт:** «незаметный основной» для б�
 ### 3.3. XHTTP — тот же xray, но клиенты ограничены
 
 > **План реализации:** [SPEC-20261114-xhttp-split](team/specs/SPEC-20261114-xhttp-split.md)
-> (WP-1..4, acceptance, риски). **Статус:** **G4 PASS** (2026-11-14): сервер Xray 26.1.23 (ADR-010), tun/rules/
+> (WP-1..4, acceptance, риски). **Статус:** реализовано как `vpn scheme
+> xray-split` (Reality и XHTTP), 2026-11-14 — сервер Xray 26.1.23 (ADR-010),
+> e2e Reality/XHTTP PASS. **Статус:** **G4 PASS** (2026-11-14): сервер Xray 26.1.23 (ADR-010), tun/rules/
 > kill-switch, youtube 204/example 200 через split, RU напрямую, `vpn reset`;
 > [TEST-20261114-xhttp-split](team/reports/TEST-20261114-xhttp-split.md). **Реализовано 2026-11-14 (WP-1..3 кодером):**
 > `vpn scheme xhttp-split` — tun `xray0` (xray 26.1.23+, отдельный бинарь
@@ -154,7 +156,7 @@ sing-box/Hiddify — нет); сервер отдаёт его отдельны�
 |---|---|---|---|
 | 1 | Параметризовать `15_domain-split.sh`: `--dev/--mark/--table` | одна механика для AWG/Reality/XHTTP | 0.5 д |
 | 2 | **Hy2-split** (`tun` + `acl`) | самый дешёвый новый «основной» | 0.5–1 д |
-| 3 | **Reality-split** (`tun xray0` + общий split + kill-switch) | незаметный основной для браузинга | 1 д |
+| 3 | **Reality-split** — ✅ реализовано через `vpn scheme xray-split phone` | незаметный основной для браузинга | сделано |
 | 4 | **XHTTP-split** ([SPEC](team/specs/SPEC-20261114-xhttp-split.md)) — **реализовано 2026-11-14** | скоростной вариант для xray-клиентов | сделано (WP-1..3) |
 | 5 | CDN | не делать; оставить выживание | — |
 
