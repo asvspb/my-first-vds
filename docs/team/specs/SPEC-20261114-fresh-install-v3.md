@@ -8,7 +8,9 @@
   [MIGRATE-VDS](../../MIGRATE-VDS.md), [DEPLOY](../../DEPLOY.md).
 - **Автор:** архитектор (vds-architect)
 - **Дата:** 2026-11-14
-- **Статус:** approved (G2) — передано кодерам
+- **Статус:** **G4: code accepted 2026-11-14** (unit + live dry-run PASS);
+  приёмка на чистой VM (AC-1/3/4) — за владельцем; см.
+  [TEST-20261114-fresh-install-v3](../reports/TEST-20261114-fresh-install-v3.md)
 - **ADR:** не требуется (аддитивная оркестрация существующих идемпотентных
   команд; публичные контракты install/add-* не меняются)
 
