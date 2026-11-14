@@ -63,7 +63,8 @@ NS на уровне реестра, недоступную владельцу �
   а через mark — нет → tcpdump src на туннеле.
 - **rp_filter**: strict ронял ответные пакеты (reverse-lookup в main) →
   `sysctl net.ipv4.{all,<iface>}.rp_filter=0` в скрипте.
-Команды: `vpn scheme awg` / `vpn start`; демонтаж `vpn reset`.
+Команды: `vpn scheme awg` / `vpn start awg` (основная схема по
+умолчанию — `vpn start` = Reality-split); демонтаж `vpn reset`.
 Домены вне TLD-зон (`com/org/net/io/dev/ai`) добавляются отдельно: инцидент
 2026-11-13 — короткие ссылки `youtu.be` (`.be`) уходили напрямую и не
 открывались, пока `youtu.be` не внесли в `/opt/awg-split/domains.txt`.

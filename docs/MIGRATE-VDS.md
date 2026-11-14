@@ -66,7 +66,7 @@ bash ubuntuInstaller/scripts/20_vds-migrate.sh root@старый root@новый
 4. **Ноутбук (vpn-manager):**
    - [ ] `vpn profile pull -H root@<новый>` (обновит ssh-host в settings)
    - [ ] AWG-конфиг: `Endpoint = <новый IP>:51825` (одна строка)
-   - [ ] `vpn probe` → все профили ok; `vpn start` (split) → youtube 204
+   - [ ] `vpn probe` → все профили ok; `vpn start` (Reality-split) → youtube 204
 5. **Прочие устройства** (телефон и пр.): ничего, если state.json перенесён
    (uuid те же, домен тот же); иначе — переимпорт share-ссылок
 6. **Старый сервер:** погасить через 1–2 дня (TTL, кэши резолверов), потом

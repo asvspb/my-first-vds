@@ -96,7 +96,8 @@ XHTTP). **Вердикт:** «незаметный основной» для б�
 > **План реализации:** [SPEC-20261114-xhttp-split](team/specs/SPEC-20261114-xhttp-split.md)
 > (WP-1..4, acceptance, риски). **Статус:** реализовано как `vpn scheme
 > xray-split` (Reality и XHTTP), 2026-11-14 — сервер Xray 26.1.23 (ADR-010),
-> e2e Reality/XHTTP PASS. **Статус:** **G4 PASS** (2026-11-14): сервер Xray 26.1.23 (ADR-010), tun/rules/
+> e2e Reality/XHTTP PASS. Быстрый вход: `vpn start` (Reality по умолчанию),
+> `vpn start xhttp`, `vpn start awg`. **Статус:** **G4 PASS** (2026-11-14): сервер Xray 26.1.23 (ADR-010), tun/rules/
 > kill-switch, youtube 204/example 200 через split, RU напрямую, `vpn reset`;
 > [TEST-20261114-xhttp-split](team/reports/TEST-20261114-xhttp-split.md). **Реализовано 2026-11-14 (WP-1..3 кодером):**
 > `vpn scheme xray-split [профиль]` (Reality/XHTTP; `xhttp-split` — алиас)

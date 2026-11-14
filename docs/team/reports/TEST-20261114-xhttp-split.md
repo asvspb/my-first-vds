@@ -192,3 +192,25 @@ Reality и XHTTP; `xhttp-split` оставлен алиасом (автовыб�
 
 Ограничения Reality-split те же: UDP-over-TCP, системный tun только на
 ноутбуке, порт 443 (лучшая маскировка, чем XHTTP).
+
+---
+
+## 12. Быстрый вход `vpn start [reality|xhttp|awg]` (2026-11-14, PASS)
+
+`vpn start` без аргумента теперь поднимает Reality-split (раньше — AWG);
+схема выбирается аргументом.
+
+| Команда | Результат | Проверки |
+|---|---|---|
+| `vpn start` | Reality (`phone`) | youtube 204, example 200, ya.ru 302 |
+| `vpn start xhttp` | XHTTP (`xhttp-web`) | youtube 204, example 200 |
+| `vpn start awg` | AWG + доменный split | youtube 204, example 200, ya.ru 302 |
+| `vpn start wireguard` | ошибка, exit 2 | подсказка `reality|xhttp|awg` |
+| `vpn reset` после каждого | чисто | нет `xray0`, правил, DNS провайдера |
+
+Детали:
+- Reality/XHTTP берут первый подходящий профиль из `vpn profile list`;
+  конкретный — `vpn scheme xray-split <profile>`;
+- `start awg` снимает xray-split, `start reality|xhttp` — AWG (взаимоисключение);
+- `vpn speed` для AWG-канала вызывает `vpn start awg` (не голый `start`);
+- тесты: **392 passed** (+4 на дефолт/диспетчеризацию/ошибку).

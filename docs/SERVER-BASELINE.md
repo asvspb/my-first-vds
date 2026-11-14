@@ -174,7 +174,7 @@ TEST-20261114-fresh-install-v3).
 |---|---|---|
 | Импорт ссылок | `vpn profile pull -H root@<ip> --include-obfs` | `vpn profile list` |
 | SSH-хост | `~/.config/vpn-manager/settings.json` | `vpn profile pull` без `-H` |
-| AWG `.conf` | `vpn amneziawg add-client <name>` (scp) или `Endpoint = <ip>:51825` | `awg show`; `vpn start` |
+| AWG `.conf` | `vpn amneziawg add-client <name>` (scp) или `Endpoint = <ip>:51825` | `awg show`; `vpn start awg` |
 | Split-зоны | `/opt/awg-split/domains.txt` (например, `youtu.be`) | `sudo bash scripts/15_domain-split.sh` |
 | Проверка | `vpn speed`, `vpn probe`, `vpn monitor` | TTFB/throughput/статусы |
 | DoH | `vpn doh on/off/status` | `resolvectl status` |
