@@ -172,6 +172,10 @@
   obfs, hop, awg, healthcheck + `use-domain`; `11_vds-deploy.sh` → init
   (env `VDS_PROTOCOLS`). Закрыт GR-16 (hub). Осталось: приёмка на чистой VM
   (AC-1/3/4) — владелец.
+- **OS baseline (2026-11-14):** [SERVER-BASELINE](../SERVER-BASELINE.md) —
+  инвентарь настроек ОС/сервера (авто vs вручную), UFW-матрица портов,
+  чеклист восстановления агентом, дрейф asv1 (UFW off, swap 0, SSH-пароли,
+  Docker нет).
 - **Roadmap v2 (2026-11-13, ревизия архитектора):**
   [CENSORSHIP-ROADMAP](../CENSORSHIP-ROADMAP.md) — фазы 0–9 переведены в
   «статус + остаток», остаток разложен на волны **W1–W6**; W1 (hook+healthcheck)
