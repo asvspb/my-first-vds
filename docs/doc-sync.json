@@ -1,0 +1,134 @@
+{
+  "version": 1,
+  "classes": {
+    "living": [
+      "README.md", "AGENTS.md", "TECHDEBT.md", "docs/TEAM.md",
+      "docs/DEPLOY.md", "docs/VPN-PROTOCOLS.md", "docs/CENSORSHIP-ROADMAP.md",
+      "docs/CENSORSHIP-PATTERNS.md", "docs/SERVER-BASELINE.md",
+      "docs/MIGRATE-VDS.md", "docs/SPLIT-TRANSPORTS.md",
+      "docs/CDN-FRONTS.md", "docs/DEPLOY-RU-RELAY.md"
+    ],
+    "status": ["docs/team/STATUS.md"],
+    "adr": ["docs/adr/ADR-*.md"],
+    "snapshot": [
+      "docs/team/specs/**", "docs/team/reports/**",
+      "docs/team/requirements/**", "docs/research/**",
+      "docs/GROWTH-POINTS.md"
+    ],
+    "template": ["docs/team/templates/**"]
+  },
+  "rules": [
+    {
+      "id": "cli-surface",
+      "match": ["src/main.py"],
+      "require": ["README.md", "AGENTS.md"],
+      "consider": ["docs/VPN-PROTOCOLS.md"],
+      "why": "команды/флаги CLI"
+    },
+    {
+      "id": "ufw",
+      "match": ["src/system/ufw.py"],
+      "require": ["README.md", "AGENTS.md", "docs/SERVER-BASELINE.md"],
+      "consider": ["docs/DEPLOY.md", "docs/MIGRATE-VDS.md"],
+      "why": "порты/профили/ssh-перенос/лок 443"
+    },
+    {
+      "id": "probing",
+      "match": ["src/gateway/probing.py", "src/gateway/probing_rucidr.py"],
+      "require": ["README.md", "AGENTS.md", "docs/CENSORSHIP-PATTERNS.md", "docs/SERVER-BASELINE.md"],
+      "consider": ["docs/CENSORSHIP-ROADMAP.md"],
+      "why": "probe-watch/threat-level/ru-cidr/lock-443"
+    },
+    {
+      "id": "relay",
+      "match": ["src/relay/**"],
+      "require": ["README.md", "docs/DEPLOY-RU-RELAY.md", "AGENTS.md"],
+      "consider": ["docs/MIGRATE-VDS.md", "docs/SERVER-BASELINE.md"],
+      "why": "релей, ноги, policy-routing"
+    },
+    {
+      "id": "amneziawg",
+      "match": ["src/amneziawg/**"],
+      "require": ["README.md", "docs/VPN-PROTOCOLS.md", "AGENTS.md"],
+      "consider": ["docs/DEPLOY-RU-RELAY.md"],
+      "why": "AWG-параметры, keepalive, клиенты"
+    },
+    {
+      "id": "transports",
+      "match": ["src/xray/**", "src/hysteria2/**", "src/acme/**"],
+      "require": ["README.md", "docs/VPN-PROTOCOLS.md", "docs/DEPLOY.md"],
+      "consider": ["docs/SERVER-BASELINE.md"],
+      "why": "протоколы, порты, TLS/ACME"
+    },
+    {
+      "id": "paths-state",
+      "match": ["src/gateway/paths.py", "src/gateway/store.py"],
+      "require": ["README.md", "docs/SERVER-BASELINE.md", "docs/MIGRATE-VDS.md"],
+      "consider": [],
+      "why": "установочные пути и схема state"
+    },
+    {
+      "id": "systemd",
+      "match": ["systemd/**"],
+      "require": ["README.md", "AGENTS.md", "docs/SERVER-BASELINE.md"],
+      "consider": ["docs/DEPLOY.md"],
+      "why": "юниты/таймеры"
+    },
+    {
+      "id": "adr",
+      "match": ["docs/adr/**"],
+      "require": ["AGENTS.md", "README.md"],
+      "consider": [],
+      "why": "диапазон/список ADR"
+    },
+    {
+      "id": "agents",
+      "match": [".zcode/agents/**"],
+      "require": ["docs/TEAM.md", "AGENTS.md", "README.md"],
+      "consider": [],
+      "why": "реестр ролей и моделей"
+    },
+    {
+      "id": "version",
+      "match": ["pyproject.toml"],
+      "require": ["README.md", "AGENTS.md"],
+      "consider": [],
+      "why": "версия CLI"
+    },
+    {
+      "id": "installers",
+      "match": ["install.sh", "preinstall.sh", "local-init.sh"],
+      "require": ["README.md", "docs/DEPLOY.md", "docs/SERVER-BASELINE.md"],
+      "consider": [],
+      "why": "путь установки/подготовки"
+    }
+  ],
+  "reverse": {
+    "commands_from": "src/main.py",
+    "commands_docs": ["README.md", "AGENTS.md", "docs/VPN-PROTOCOLS.md"],
+    "legacy_commands_allowlist": [
+      "vds zerotier install", "vds zerotier status", "vds zerotier diagnose",
+      "vds zerotier reconcile", "vds zerotier watchdog", "vds zerotier nat",
+      "vds zerotier add-network", "vds zerotier cleanup",
+      "vds wireguard install", "vds wireguard add-client", "vds wireguard remove",
+      "vds coturn install", "vds coturn status", "vds coturn remove"
+    ],
+    "units_docs": ["README.md", "AGENTS.md", "docs/SERVER-BASELINE.md"],
+    "generated_units_allowlist": ["vds-relay-awg.service"],
+    "adr_docs": ["AGENTS.md", "README.md"],
+    "agents_docs": ["docs/TEAM.md", "AGENTS.md", "README.md"],
+    "version_docs": ["README.md", "AGENTS.md"],
+    "links": true,
+    "banned_test_counts": true
+  },
+  "freshness": {
+    "status_days": 7,
+    "living_days": 30,
+    "source_lag": "warn"
+  },
+  "escape": {
+    "trailer": "Docs: none",
+    "require_reason": true,
+    "require_debt_ref": true
+  }
+}
