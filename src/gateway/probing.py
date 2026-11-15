@@ -1,4 +1,5 @@
-"""Серверный монитор активного зондирования (Active Probing), исполнитель И33 v1.
+"""Серверный монитор активного зондирования (Active Probing), исполнитель И33 v1
++ серверная реакция SPEC-20261116-probe-response (threat-level, auto-lockdown).
 
 Ранний сигнал перед TSPU-блокировкой: TSPU перед блоком обычно зондирует
 порт протокола. `vds gateway probe-watch` измеряет tcp/443-зондирование без
@@ -6,7 +7,7 @@
 
 - nft-таблица `inet vds_probe` (install --apply): счётчики syn_bare (все SYNs
   на 443) и syn_valid (SYNs с пакетом длиннее минимальных 40 б — клиентский
-  SYN всегда несёт TCP-опции; голый SYN-сканер (masscan/zmap) — ровно 40);
+  SYN всегда несёт TCP-опции; голый SYN-сканер (masscan/zmap) — ровно 40),
   set probers4 — src-IP зондирований с per-element counter и timeout 1h;
 - `watch` (read-only): дельта счётчиков против снапшота
   /var/lib/vds/probe-watch.json (атомарная запись 0600, FileLock) +
@@ -14,13 +15,23 @@
   «нелишнее» не парсится: plain-TLS-пробы к 443 уходят в Reality
   dest-fallback и в журнал не пишутся — проверено на asv2);
 - RU-классификация IP: если есть агрегат /etc/vds-relay/ru-cidrs.txt
-  (пишет relay-cidr), помечает «[RU]»; иначе geo: unknown — честно;
+  (пишет relay-cidr или `probe-watch ru-cidr install`), помечает «[RU]»;
+  иначе geo: unknown — честно;
+- threat-level машина (SPEC §2): quiet/elevated/high с гистерезисом
+  (high = RU-PROBE-SUSPECT 2 окна подряд; BURST — максимум elevated),
+  decay-выходом из high (72 окна без новых RU-IP, ЗАМОРОЖЕН при активном
+  локе 443 — §9.A) и flapping-защитой (даунгрейд не раньше 2 окон после
+  апгрейда); собственные клиенты (AWG endpoints + серверный IP + whitelist
+  /etc/vds-probe-watch/allow-ips.txt) из new_ru_ips исключаются (§11);
+- авто-реакция (opt-in, SPEC §4.2): `config --auto-lockdown on` + тик таймера
+  при high → lock-443 (внутренний вызов src/system/ufw); TTL-автоснятие и
+  продление — там же (§9.A/§11); downgrade лок НЕ снимает (OQ-3);
 - `--explain` (команда explain): честная карта покрытия сигналов на этом
   сервере (что активно, что слепо).
 
 IPv6-пробы — non-goal v1 (см. explain). Read-only watch; мутации —
-install/remove с --apply + dry-run по умолчанию; блокировки FileLock;
-shell — только run_list.
+install/remove/ru-cidr/config с --apply + dry-run по умолчанию; блокировки
+FileLock; shell — только run_list.
 """
 
 from __future__ import annotations
@@ -31,7 +42,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -53,6 +64,10 @@ LOCK_FILE = "/var/run/vds-probe-watch.lock"
 PROBE_WATCH_UNIT = "vds-probe-watch.service"
 PROBE_WATCH_TIMER = "vds-probe-watch.timer"
 
+# RU-CIDR без релея (SPEC §3): юниты ставит probing_rucidr (импортирует отсюда).
+PROBE_RUCIDR_UNIT = "vds-probe-rucidr.service"
+PROBE_RUCIDR_TIMER = "vds-probe-rucidr.timer"
+
 XRAY_UNIT = "vds-xray.service"
 HYSTERIA2_UNIT = "vds-hysteria2.service"
 
@@ -68,7 +83,20 @@ BURST_MIN_VOLUME = 100       # минимальный объём SYNs для rat
 DEFAULT_WINDOW_HOURS = 1
 NEW_RU_IPS_THRESHOLD = 2     # новых RU-IP за окно для RU-PROBE-SUSPECT
 
-# RU-CIDR-агрегат пишется relay-модулем (src/relay/cidr.py). Зависимость
+# --- threat-level машина (SPEC-20261116-probe-response §2, §9.A, §11) ---
+THREAT_QUIET = "quiet"
+THREAT_ELEVATED = "elevated"
+THREAT_HIGH = "high"
+HIGH_STREAK = 2              # окон RU-PROBE-SUSPECT подряд для входа в high
+HIGH_EXIT_WINDOWS = 72       # окнов без новых RU-IP для выхода из high (decay)
+ELEVATED_QUIET_EXIT = 3      # тихих окон подряд для выхода из elevated
+FLAP_GUARD_WINDOWS = 2       # даунгрейд не раньше 2 окон после апгрейда
+
+# Ручной whitelist «своих» IP (§11): по строке IP, комментарии #.
+OWN_IPS_FILE = Path("/etc/vds-probe-watch/allow-ips.txt")
+
+# RU-CIDR-агрегат пишется relay-модулем (src/relay/cidr.py) или командой
+# `probe-watch ru-cidr install` (probing_rucidr.py, SPEC §3). Зависимость
 # НЕ ставится: читаем только файл по пути (тот же контракт агрегации).
 RU_CIDR_FILE = Path("/etc/vds-relay/ru-cidrs.txt")
 
@@ -246,43 +274,44 @@ def list_nft_table(run: RunFn = run_list) -> Optional[NftState]:
 # Снапшот (атомарная запись 0600, читается watch-ом)
 # ---------------------------------------------------------------------------
 
-SNAPSHOT_VERSION = 1
+SNAPSHOT_VERSION = 2  # v2: + threat/config/own_ips (SPEC-20261116-probe-response)
+
+
+def _empty_snapshot() -> dict[str, object]:
+    """База снапшота: все нули + пустые threat/config/own_ips (не ошибка)."""
+    return {
+        "version": SNAPSHOT_VERSION,
+        "ts": "",
+        "syn_bare": 0,
+        "syn_valid": 0,
+        "udp_443": 0,
+        "probers": {},
+        "threat": {},
+        "config": {},
+        "own_ips": {},
+    }
 
 
 def load_snapshot(path: Path = SNAPSHOT_PATH) -> dict[str, object]:
-    """Прочитать снапшот; отсутствует/бит — пустой (все нули, не ошибка)."""
+    """Прочитать снапшот; отсутствует/бит — пустой (все нули, не ошибка).
+
+    v1-снапшоты (без threat/config/own_ips) читаются: недостающие ключи
+    добираются пустыми — состояние переживает эволюцию формата.
+    """
     if not path.is_file():
-        return {
-            "version": SNAPSHOT_VERSION,
-            "ts": "",
-            "syn_bare": 0,
-            "syn_valid": 0,
-            "udp_443": 0,
-            "probers": {},
-        }
+        return _empty_snapshot()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError, OSError):
-        return {
-            "version": SNAPSHOT_VERSION,
-            "ts": "",
-            "syn_bare": 0,
-            "syn_valid": 0,
-            "udp_443": 0,
-            "probers": {},
-        }
+        return _empty_snapshot()
     if not isinstance(data, dict):
-        return {
-            "version": SNAPSHOT_VERSION,
-            "ts": "",
-            "syn_bare": 0,
-            "syn_valid": 0,
-            "udp_443": 0,
-            "probers": {},
-        }
+        return _empty_snapshot()
     probers = data.get("probers")
     if not isinstance(probers, dict):
         probers = {}
+    threat = data.get("threat")
+    config = data.get("config")
+    own_ips = data.get("own_ips")
     return {
         "version": data.get("version", SNAPSHOT_VERSION),
         "ts": str(data.get("ts", "")),
@@ -290,19 +319,14 @@ def load_snapshot(path: Path = SNAPSHOT_PATH) -> dict[str, object]:
         "syn_valid": int(data.get("syn_valid", 0) or 0),
         "udp_443": int(data.get("udp_443", 0) or 0),
         "probers": {str(k): int(v or 0) for k, v in probers.items()},
+        "threat": threat if isinstance(threat, dict) else {},
+        "config": config if isinstance(config, dict) else {},
+        "own_ips": own_ips if isinstance(own_ips, dict) else {},
     }
 
 
-def save_snapshot(current: NftState, path: Path = SNAPSHOT_PATH) -> bool:
-    """Атомарно записать снапшот (tmp + os.replace, права 0600). True — успех."""
-    payload = {
-        "version": SNAPSHOT_VERSION,
-        "ts": datetime.now().isoformat(timespec="seconds"),
-        "syn_bare": current.syn_bare,
-        "syn_valid": current.syn_valid,
-        "udp_443": current.udp_443,
-        "probers": current.probers,
-    }
+def write_snapshot_payload(payload: dict[str, object], path: Path) -> bool:
+    """Атомарно записать произвольный payload снапшота (0600). True — успех."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
@@ -315,6 +339,30 @@ def save_snapshot(current: NftState, path: Path = SNAPSHOT_PATH) -> bool:
     except OSError as exc:
         console.print(f"[error][probe] Не удалось записать снапшот {path}: {exc}[/error]")
         return False
+
+
+def save_snapshot(
+    current: NftState,
+    path: Path = SNAPSHOT_PATH,
+    extra: Optional[dict[str, object]] = None,
+) -> bool:
+    """Атомарно записать снапшот (tmp + os.replace, права 0600). True — успех.
+
+    extra — дополнительные ключи поверх счётчиков (threat/config/own_ips):
+    тик таймера передаёт обновлённую машину threat-level и конфиг, чтобы
+    состояние переживало рестарт юнита (SPEC §2).
+    """
+    payload: dict[str, object] = {
+        "version": SNAPSHOT_VERSION,
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "syn_bare": current.syn_bare,
+        "syn_valid": current.syn_valid,
+        "udp_443": current.udp_443,
+        "probers": current.probers,
+    }
+    if extra:
+        payload.update(extra)
+    return write_snapshot_payload(payload, path)
 
 
 @dataclass
@@ -439,6 +487,245 @@ def compute_verdict(
         )
         return Verdict("RU-PROBE-SUSPECT", reasons)
     return Verdict("PROBE-BURST" if burst else "quiet", reasons)
+
+
+# ---------------------------------------------------------------------------
+# Машина threat-level (SPEC-20261116-probe-response §2, §9.A, §10, §11)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ThreatState:
+    """Состояние машины threat-level; переживает рестарт юнита (в снапшоте).
+
+    - ru_streak: окон RU-PROBE-SUSPECT подряд (гистерезис входа в high);
+    - quiet_streak: тихих окон подряд (выход из elevated: 3);
+    - decay: окнов в high без новых RU-IP (выход: 72; ЗАМОРОЖЕН при
+      lockdown.active — §9.A: лок ослепляет syn_valid, RU-SUSPECT повторно
+      не сработает, счётчик должен тикать только после unlock);
+    - windows_at_level: окон, проведённых на текущем уровне (flapping-защита:
+      даунгрейд не раньше 2 окон после апгрейда).
+    """
+
+    level: str = THREAT_QUIET
+    reason: str = ""
+    since: str = ""
+    ru_streak: int = 0
+    quiet_streak: int = 0
+    decay: int = 0
+    windows_at_level: int = 0
+    updated: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "level": self.level,
+            "reason": self.reason,
+            "since": self.since,
+            "ru_streak": self.ru_streak,
+            "quiet_streak": self.quiet_streak,
+            "decay": self.decay,
+            "windows_at_level": self.windows_at_level,
+            "updated": self.updated,
+        }
+
+    @classmethod
+    def from_dict(cls, data: object) -> "ThreatState":
+        raw = data if isinstance(data, dict) else {}
+        level = str(raw.get("level", THREAT_QUIET))
+        if level not in (THREAT_QUIET, THREAT_ELEVATED, THREAT_HIGH):
+            level = THREAT_QUIET
+        return cls(
+            level=level,
+            reason=str(raw.get("reason", "")),
+            since=str(raw.get("since", "")),
+            ru_streak=int(raw.get("ru_streak", 0) or 0),
+            quiet_streak=int(raw.get("quiet_streak", 0) or 0),
+            decay=int(raw.get("decay", 0) or 0),
+            windows_at_level=int(raw.get("windows_at_level", 0) or 0),
+            updated=str(raw.get("updated", "")),
+        )
+
+
+def update_threat(
+    prev: ThreatState,
+    *,
+    verdict: str,
+    new_ru_count: int,
+    ru_available: bool,
+    lockdown_active: bool,
+    now: Optional[datetime] = None,
+) -> ThreatState:
+    """Один переход машины (чистая функция, тестируется без root/сети).
+
+    Правила SPEC §2 + §9.A + §10 + §11:
+    - elevated: 1 окно PROBE-BURST ИЛИ 1 окно RU-PROBE-SUSPECT; выход —
+      3 тихих окна подряд;
+    - high: RU-PROBE-SUSPECT 2 окна подряд (BURST сам по себе — шум,
+      максимум elevated); выход — 72 окна без новых RU-IP → elevated →
+      ещё 3 тихих → quiet; decay заморожен при lockdown.active;
+    - high недостижим при geo unknown (threat_reason объясняет);
+    - flapping-защита: даунгрейд не раньше 2 окон после апгрейда.
+    """
+    ru_hit = verdict == "RU-PROBE-SUSPECT"
+    burst = verdict == "PROBE-BURST"
+    quiet = verdict == "quiet"
+    stamp = (now or datetime.now()).isoformat(timespec="seconds")
+    nxt = ThreatState(**{**prev.to_dict()})  # копия; from_dict уже нормализована
+    nxt.updated = stamp
+
+    def _enter(level: str, reason: str) -> None:
+        nxt.level = level
+        nxt.reason = reason
+        nxt.since = stamp
+        nxt.ru_streak = 0
+        nxt.quiet_streak = 0
+        nxt.decay = 0
+        nxt.windows_at_level = 0
+
+    if not ru_available and ru_hit:
+        # защита от рассинхрона: вердикт SUSPECT без RU-агрегата не бывает
+        # (compute_verdict гейтит), но машина не зависит от этого заказа.
+        ru_hit = False
+
+    if prev.level == THREAT_QUIET:
+        if ru_hit:
+            _enter(THREAT_ELEVATED, "RU-PROBE-SUSPECT (1 окно)")
+            nxt.ru_streak = 1
+        elif burst:
+            _enter(THREAT_ELEVATED, "PROBE-BURST")
+        else:
+            nxt.reason = ""
+        _note_geo_unknown(nxt, ru_available)
+        return nxt
+
+    if prev.level == THREAT_ELEVATED:
+        if ru_hit:
+            nxt.ru_streak = prev.ru_streak + 1
+            nxt.quiet_streak = 0
+            nxt.windows_at_level = prev.windows_at_level + 1
+            if nxt.ru_streak >= HIGH_STREAK:
+                _enter(THREAT_HIGH, f"RU-PROBE-SUSPECT {nxt.ru_streak} окна подряд")
+            else:
+                nxt.reason = f"RU-PROBE-SUSPECT ({nxt.ru_streak} окн.)"
+            _note_geo_unknown(nxt, ru_available)
+            return nxt
+        if burst:
+            nxt.quiet_streak = 0
+            nxt.ru_streak = 0
+            nxt.windows_at_level = prev.windows_at_level + 1
+            nxt.reason = "PROBE-BURST"
+            return nxt
+        # тихое окно: кандидат на exit — flap-guard не даёт даунгрейд раньше 2 окон
+        nxt.quiet_streak = prev.quiet_streak + 1
+        nxt.ru_streak = 0
+        nxt.windows_at_level = prev.windows_at_level + 1
+        if nxt.quiet_streak >= ELEVATED_QUIET_EXIT and nxt.windows_at_level >= FLAP_GUARD_WINDOWS:
+            _enter(THREAT_QUIET, "")
+        else:
+            nxt.reason = prev.reason or "elevated"
+        _note_geo_unknown(nxt, ru_available)
+        return nxt
+
+    # prev.level == high
+    if new_ru_count > 0:
+        # любой новый RU-IP (даже ниже порога SUSPECT) обнуляет decay-отсчёт
+        nxt.decay = 0
+        nxt.reason = prev.reason or "high"
+    elif lockdown_active:
+        # §9.A: заморозка decay — лок ослепляет syn_valid, тикать начнёт
+        # только после unlock; окно не считается «тихим без новых RU».
+        nxt.reason = (prev.reason or "high") + " [decay заморожен: lockdown]"
+    else:
+        nxt.decay = prev.decay + 1
+        nxt.reason = prev.reason or "high"
+    nxt.ru_streak = prev.ru_streak
+    nxt.quiet_streak = 0
+    nxt.windows_at_level = prev.windows_at_level + 1
+    if ru_hit:
+        nxt.ru_streak = prev.ru_streak + 1
+    if (
+        not lockdown_active
+        and nxt.decay >= HIGH_EXIT_WINDOWS
+        and nxt.windows_at_level >= FLAP_GUARD_WINDOWS
+    ):
+        _enter(THREAT_ELEVATED, f"выход из high: {HIGH_EXIT_WINDOWS} окон без новых RU-IP")
+    return nxt
+
+
+def _note_geo_unknown(state: ThreatState, ru_available: bool) -> None:
+    """§2: при geo unknown high недостижим — threat_reason обязан объяснить почему."""
+    if ru_available or state.level != THREAT_ELEVATED:
+        return
+    if "недостижим" not in state.reason:
+        state.reason = (
+            f"{state.reason} " if state.reason else ""
+        ) + "geo: unknown (RU-CIDR недоступен) — high недостижим"
+
+
+# ---------------------------------------------------------------------------
+# Исключение собственных клиентов из new_ru_ips (SPEC §11)
+# ---------------------------------------------------------------------------
+
+_ENDPOINT_IP_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3}):\d+\b")
+
+
+def parse_awg_endpoints(text: str) -> list[str]:
+    """`awg show <iface> endpoints` → endpoint-IP пиров (без портов).
+
+    Формат вывода — строка на пира: "<pubkey>\\t<ip>:<port>" (или '(none)');
+    нужен ТОЛЬКО endpoint-IP, ключи не читаются (§11: без root-чтения секретов).
+    Битые/loopback строки пропускаются построчно.
+    """
+    ips: list[str] = []
+    for line in text.splitlines():
+        for match in _ENDPOINT_IP_RE.finditer(line):
+            ip = match.group(1)
+            try:
+                if ipaddress.ip_address(ip).is_loopback:
+                    continue
+            except ValueError:
+                continue
+            if ip not in ips:
+                ips.append(ip)
+    return ips
+
+
+def read_awg_endpoints(run: RunFn = run_list, iface: str = "awg0") -> list[str]:
+    """Endpoint-IP активных AWG-пиров (root; сбой → [] — используем кэш снапшота)."""
+    res = run(["awg", "show", iface, "endpoints"], timeout=10)
+    if not res.ok:
+        return []
+    return parse_awg_endpoints(res.stdout)
+
+
+def load_own_ips(path: Optional[Path] = None) -> set[str]:
+    """Ручной whitelist своих IP: по строке IP, комментарии #/пустые — пропуск."""
+    path = path or OWN_IPS_FILE
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    own: set[str] = set()
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        try:
+            addr = ipaddress.ip_address(line)
+        except ValueError:
+            continue  # мусорная строка — пропуск, не валим файл
+        if not addr.is_loopback:
+            own.add(line)
+    return own
+
+
+def cached_own_ips(snapshot: dict[str, object]) -> list[str]:
+    """Кэш AWG-endpoints из снапшота (ручной watch без root читает кэш тика)."""
+    raw = snapshot.get("own_ips")
+    if not isinstance(raw, dict):
+        return []
+    ips = raw.get("ips")
+    return [str(i) for i in ips] if isinstance(ips, list) else []
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +868,9 @@ class WatchReport:
     journal_hits: list[JournalHit] = field(default_factory=list)
     new_ru_ips: list[str] = field(default_factory=list)  # триггер вердикта (новые)
     ru_hits: list[RuIpHit] = field(default_factory=list)  # все активные RU-IP окна
+    threat: ThreatState = field(default_factory=ThreatState)  # post-update уровень окна
+    lockdown: dict[str, object] = field(default_factory=dict)  # {active,since,ttl_until,allow_from}
+    ru_syn_new: list[str] = field(default_factory=list)  # §9.A: наблюдательное поле
 
     def geo(self, ip: str) -> str:
         """geo-метка с кэшем на один run (top-10 повторов)."""
@@ -630,6 +920,16 @@ class WatchReport:
                 }
                 for h in self.journal_hits
             ],
+            # Стабильный контракт монитор-поллинга (SPEC §5/§9.A):
+            "threat_level": self.threat.level,
+            "threat_reason": self.threat.reason,
+            "ru_syn_new": list(self.ru_syn_new),
+            "lockdown": {
+                "active": bool(self.lockdown.get("active")),
+                "since": str(self.lockdown.get("since", "")),
+                "ttl_until": str(self.lockdown.get("ttl_until", "")),
+                "allow_from": list(self.lockdown.get("allow_from") or []),
+            },
         }
 
     _ru_networks: Optional[list[ipaddress.IPv4Network]] = None
@@ -667,13 +967,15 @@ def build_report(
     snapshot_path: Path = SNAPSHOT_PATH,
     now: Callable[[], datetime] = datetime.now,
     server_ip: Optional[str] = None,
+    lockdown: Optional[dict[str, object]] = None,
+    own_ips: Optional[list[str]] = None,
 ) -> WatchReport:
     """Собрать отчёт из уже прочитанного состояния таблицы (тестируемо).
 
     server_ip — публичный адрес сервера; None → определить через netcheck
     (в тестах подменяется).
 
-    RU-логика (ревью 2026-11-16, edge-case 3c; фикс 2026-11-16 ревью 3):
+    RU-логика (ревю 2026-11-16, edge-case 3c; фикс 2026-11-16 ревью 3):
     - активность за окно — по ДЕЛЬТЕ per-IP (для отсутствовавших в снапшоте
       дельта = current packets);
     - на фолбэке (per_element_counters=False) все элементы set с нулевыми
@@ -686,6 +988,16 @@ def build_report(
       = 0) SUSPECT не даёт. Ограничение (в explain): probers4 включает и
       masscan-IP — раздельный per-SYN-тип учёт невозможен на nft-уровне,
       SUSPECT гасится условием delta.syn_valid > 0.
+
+    SPEC-20261116-probe-response:
+    - own_ips — endpoint-IP активных AWG-пиров (кэш снапшота, §11): исключаются
+      из new_ru_ips вместе с серверным IP и whitelist /etc/vds-probe-watch/
+      allow-ips.txt (ноут+телефон владельца ≠ SUSPECT);
+    - lockdown — нормализованный dict лока 443: активный лок ослепляет
+      syn_valid (§9.A) → threat-decay замирает, а новые RU-IP по SYN идут
+      в наблюдательное поле ru_syn_new (продлевает TTL, вердикт не поднимает);
+    - threat — машина threat-level (§2): отчёт несёт post-update уровень
+      этого окна (тик таймера персистит его в снапшот).
     """
     snapshot = load_snapshot(snapshot_path)
     delta = compute_delta(current, snapshot)
@@ -707,6 +1019,7 @@ def build_report(
         # фильтровать — сетевой вызов не происходит на пустом set.
         if server_ip is None:
             server_ip = _server_public_ip()
+        own_set = load_own_ips() | set(own_ips or [])
         for ip, packets in current.probers.items():
             if current.per_element_counters:
                 prev = snap_probers.get(ip, 0)
@@ -717,8 +1030,8 @@ def build_report(
                 # Фолбэк: счётчиков нет, но элемент в set с timeout 1h —
                 # значит зондировал/коннектился в пределах последнего часа.
                 d = 0
-            if ip == server_ip:
-                continue
+            if ip == server_ip or ip in own_set:
+                continue  # свой (сервер / AWG-клиент / whitelist) — не «новый RU»
             try:
                 if ipaddress.ip_address(ip).is_loopback:
                     continue
@@ -744,6 +1057,19 @@ def build_report(
     since = start.strftime("%Y-%m-%d %H:%M:%S")
     hits = scan_journal(since, run)
 
+    lockdown = dict(lockdown or {})
+    threat = update_threat(
+        ThreatState.from_dict(snapshot.get("threat")),
+        verdict=verdict.name,
+        new_ru_count=len(new_ru_ips),
+        ru_available=bool(ru_networks),
+        lockdown_active=bool(lockdown.get("active")),
+        now=end,
+    )
+    # §9.A: в локе syn_valid=0 (SYN роняет UFW после hook −140) — SUSPECT
+    # повторно не сработает; новые RU-IP по SYN наблюдаем отдельно.
+    ru_syn_new = list(new_ru_ips) if lockdown.get("active") else []
+
     if ru_networks is None:
         geo_source = "unknown (файл /etc/vds-relay/ru-cidrs.txt отсутствует)"
     elif not ru_networks:
@@ -764,6 +1090,9 @@ def build_report(
         journal_hits=hits,
         new_ru_ips=new_ru_ips,
         ru_hits=ru_hits,
+        threat=threat,
+        lockdown=lockdown,
+        ru_syn_new=ru_syn_new,
     )
     report._ru_networks = ru_networks
     report._geo_cache = geo_cache
@@ -776,12 +1105,15 @@ def run_watch(
     run: RunFn = run_list,
     snapshot_path: Path = SNAPSHOT_PATH,
     now: Callable[[], datetime] = datetime.now,
+    lockdown: Optional[dict[str, object]] = None,
+    own_ips: Optional[list[str]] = None,
 ) -> tuple[Optional[WatchReport], Optional[NftState]]:
     """Прочитать nft-таблицу и собрать отчёт.
 
     Возвращает (report, current); (None, None) — таблица отсутствует
     (подсказка install). current отдаётся для записи снапшота без повторного
-    вызова nft.
+    вызова nft. lockdown/own_ips — состояние лока 443 и кэш своих IP
+    (SPEC-20261116-probe-response §9.A/§11), передаётся вызывающим.
     """
     current = list_nft_table(run)
     if current is None:
@@ -793,8 +1125,22 @@ def run_watch(
         run=run,
         snapshot_path=snapshot_path,
         now=now,
+        lockdown=lockdown,
+        own_ips=own_ips,
     )
     return report, current
+
+
+def _load_lockdown(state_path: Optional[str] = None) -> dict[str, object]:
+    """Нормализованный dict лока 443 из gateway state; ошибка чтения — неактивен."""
+    from src.gateway.store import StoreError, load_state  # лениво: слой gateway
+    from src.system.ufw import get_lockdown
+
+    try:
+        state = load_state(state_path)
+    except StoreError:
+        return {"active": False, "since": "", "ttl_until": "", "allow_from": []}
+    return dict(get_lockdown(state))
 
 
 def print_report(report: WatchReport) -> None:
@@ -810,6 +1156,30 @@ def print_report(report: WatchReport) -> None:
             console.print(f"[error][probe]   — {escape(reason)}[/error]")
     else:
         console.print("[success][probe] Вердикт: quiet[/success]")
+    tag = {
+        THREAT_QUIET: "success",
+        THREAT_ELEVATED: "warning",
+        THREAT_HIGH: "error",
+    }[report.threat.level]
+    reason = f" ({report.threat.reason})" if report.threat.reason else ""
+    console.print(f"[{tag}][probe] threat-level: {report.threat.level}{escape(reason)}[/{tag}]")
+    if report.lockdown.get("active"):
+        console.print(
+            f"[warning][probe] lock-443 АКТИВЕН: since {escape(str(report.lockdown.get('since', '')))}, "
+            f"до {escape(str(report.lockdown.get('ttl_until', '')))}, allow_from: "
+            f"{', '.join(str(i) for i in report.lockdown.get('allow_from') or []) or '— (443 закрыт всем)'}[/warning]"
+        )
+        if report.threat.level != THREAT_HIGH:
+            console.print(
+                "[warning][probe] лок активен, уровень снизился — авто-снятие "
+                "запрещено (SPEC §10 OQ-3): снимите `vds system ufw lock-443 --unlock --apply` "
+                "или дождитесь TTL.[/warning]"
+            )
+    if report.ru_syn_new:
+        console.print(
+            f"[warning][probe] ru_syn_new: {len(report.ru_syn_new)} новых RU-IP по SYN "
+            "при активном локе (наблюдательное, продлевает TTL; вердикт не поднимает, §9.A)[/warning]"
+        )
     console.print(f"[info][probe] Окно: {escape(report.window)}[/info]")
     console.print(
         f"[info][probe] syn_bare={report.delta.syn_bare} "
@@ -960,7 +1330,8 @@ def build_explain(
                 "вердикт RU-PROBE-SUSPECT",
                 "warn",
                 f"{ru_cidr_path} есть, но валидного v4-агрегата нет (сплошь IPv6/мусор) — "
-                "RU-SUSPECT отключён; обновите агрегат (relay-cidr)",
+                "RU-SUSPECT отключён; обновите агрегат (`probe-watch ru-cidr update --apply` "
+                "или relay-cidr)",
             )
         )
     else:
@@ -968,7 +1339,26 @@ def build_explain(
             ExplainRow(
                 "вердикт RU-PROBE-SUSPECT",
                 "missing",
-                f"без {ru_cidr_path} вердикт недоступен (geo: unknown) — ставится relay-модулем",
+                f"без {ru_cidr_path} вердикт недоступен (geo: unknown) — ставится "
+                "`vds gateway probe-watch ru-cidr install --apply` (SPEC §3) или relay-модулем",
+            )
+        )
+
+    # threat-level машина (SPEC-20261116-probe-response §2)
+    threat_row_note = (
+        "quiet→elevated (BURST/RU-SUSPECT 1 окно)→high (RU-SUSPECT 2 подряд); "
+        "decay high = 72 окна без новых RU-IP, заморожен при lockdown; "
+        "исключаются свои: AWG-endpoints + серверный IP + "
+        f"{OWN_IPS_FILE}"
+    )
+    if ru_nets:
+        rows.append(ExplainRow("threat-level машина", "ok", threat_row_note))
+    else:
+        rows.append(
+            ExplainRow(
+                "threat-level машина",
+                "warn",
+                threat_row_note + " — НО geo: unknown, high недостижим (BURST-максимум elevated)",
             )
         )
 
@@ -1001,9 +1391,20 @@ def build_explain(
             ExplainRow(
                 "RU-CIDR агрегат",
                 "missing",
-                f"{ru_cidr_path} отсутствует — geo: unknown (ставится relay-модулем)",
+                f"{ru_cidr_path} отсутствует — geo: unknown "
+                "(`vds gateway probe-watch ru-cidr install --apply`; на релее — relay init)",
             )
         )
+
+    rures = run(["systemctl", "list-unit-files", PROBE_RUCIDR_TIMER], timeout=10)
+    rows.append(
+        ExplainRow(
+            f"таймер {PROBE_RUCIDR_TIMER}",
+            "ok" if (rures.ok and PROBE_RUCIDR_TIMER in rures.stdout) else "missing",
+            "еженедельное обновление RU-CIDR" if (rures.ok and PROBE_RUCIDR_TIMER in rures.stdout)
+            else "не установлен (ru-cidr install --apply)",
+        )
+    )
 
     rows.append(
         ExplainRow(
@@ -1124,8 +1525,16 @@ def cmd_install(apply: bool = False) -> int:
         # Ревью 2026-11-16, edge-case 3d: после переустановки счётчики в ядре
         # с нуля — сбрасываем снапшот, иначе первый watch дал бы ложную
         # «отрицательную дельту» (0-до-догона против старых 5000).
+        # Счётчики сбрасываются, но threat/config/own_ips переживают
+        # переустановку (SPEC §2: состояние — в снапшоте).
+        old = load_snapshot(SNAPSHOT_PATH)
         save_snapshot(
-            NftState(per_element_counters=used_counter), SNAPSHOT_PATH
+            NftState(per_element_counters=used_counter), SNAPSHOT_PATH,
+            extra={
+                "threat": old.get("threat", {}),
+                "config": old.get("config", {}),
+                "own_ips": old.get("own_ips", {}),
+            },
         )
 
         ctx = _unit_ctx()
@@ -1188,6 +1597,42 @@ def cmd_remove(apply: bool = False) -> int:
     return 0
 
 
+def run_auto_reactions(
+    report: WatchReport,
+    cfg: dict[str, object],
+    state_path: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> None:
+    """Авто-реакции часового тика probe-watch (SPEC §4.2 + §9.A + §11).
+
+    Вызывается ТОЛЬКО из --record-прогона (юнит таймера, root):
+    (а) threat high + auto on → lock-443 (reason auto:RU-SUSPECT); повторный
+        high/ru_syn_new при активном локе → продление TTL, НЕ дубль правил;
+    (б) TTL-чек: now >= ttl_until → auto-unlock reason=ttl-expired
+        (внутренний вызов ufw-модуля; отдельный systemd-timer не плодим — §11);
+    (в) downgrade ниже high лок НЕ снимает (§10 OQ-3 — «мигалка» закрылся→
+        открылся→пробы→закрылся; warning печатает watch).
+    """
+    from src.system import ufw as ufw_mod  # лениво: gateway → system только в тике
+
+    now = now or datetime.now(timezone.utc)
+    ld = _load_lockdown(state_path)
+    if ld.get("active") and ufw_mod.lockdown_ttl_expired(ld, now):
+        if ufw_mod.auto_unlock_expired(state_path=state_path, now=now, reason="ttl-expired"):
+            ld = _load_lockdown(state_path)
+    high = report.threat.level == THREAT_HIGH
+    if ld.get("active"):
+        if high or report.ru_syn_new:
+            ufw_mod.extend_lockdown_ttl(state_path=state_path, now=now)
+    elif high and cfg.get("auto_lockdown"):
+        ufw_mod.apply_auto_lockdown(
+            state_path=state_path,
+            allow_ips=[str(i) for i in (cfg.get("lockdown_allow") or [])],
+            ttl_hours=int(cfg.get("lockdown_ttl_hours") or ufw_mod.LOCKDOWN_TTL_DEFAULT_H),
+            reason="auto:RU-SUSPECT",
+        )
+
+
 def cmd_watch(
     since_hours: int = DEFAULT_WINDOW_HOURS,
     threshold: int = DEFAULT_THRESHOLD,
@@ -1195,21 +1640,41 @@ def cmd_watch(
     record: bool = False,
     snapshot_path: Optional[Path] = None,
     run: RunFn = run_list,
+    state_path: Optional[str] = None,
+    now: Optional[datetime] = None,
 ) -> int:
     """watch: отчёт за окно; read-only по умолчанию.
 
     record=True — только для юнита таймера: после отчёта снапшот
-    перезаписывается текущими счётчиками (базой следующего окна). Ручной
-    `watch` без --record ничего не пишет.
+    перезаписывается текущими счётчиками (базой следующего окна) + машиной
+    threat-level, обновляется кэш AWG-endpoints (root) и выполняются
+    авто-реакции локa (SPEC §4.2/§11). Ручной `watch` без --record ничего
+    не пишет и реакций не триггерит.
     """
     snapshot_path = snapshot_path or SNAPSHOT_PATH
     from src.core.lock import FileLock, LockError
 
+    snapshot = load_snapshot(snapshot_path)
+    cfg = dict(snapshot.get("config") or {})
+    if record:
+        # Тик (root): свежие endpoint-IP пиров; сбой awg → кэш снапшота (§11)
+        endpoints = read_awg_endpoints(run)
+        own_ips = endpoints if endpoints else cached_own_ips(snapshot)
+        own_cache: dict[str, object] = {
+            "ips": own_ips,
+            "ts": datetime.now().isoformat(timespec="seconds"),
+        }
+    else:
+        own_ips = cached_own_ips(snapshot)
+        own_cache = dict(snapshot.get("own_ips") or {})
     try:
         with FileLock(LOCK_FILE):
             report, current = run_watch(
                 since_hours=since_hours, threshold=threshold, run=run,
                 snapshot_path=snapshot_path,
+                lockdown=_load_lockdown(state_path),
+                own_ips=own_ips,
+                now=now or datetime.now,
             )
             if report is None or current is None:
                 console.print(
@@ -1217,16 +1682,115 @@ def cmd_watch(
                     "выполните `vds gateway probe-watch install --apply`.[/error]"
                 )
                 return 1
+            if record:
+                # реакции ДО вывода: json отдаёт пост-реакционное состояние лока
+                run_auto_reactions(report, cfg, state_path=state_path)
+                report.lockdown = _load_lockdown(state_path)
             if json_out:
                 print(json.dumps(report.to_json(), ensure_ascii=False))
             else:
                 print_report(report)
             if record:
-                save_snapshot(current, snapshot_path)
+                save_snapshot(
+                    current, snapshot_path,
+                    extra={
+                        "threat": report.threat.to_dict(),
+                        "config": cfg,
+                        "own_ips": own_cache,
+                    },
+                )
     except LockError:
         console.print(
             "[warning][probe] Параллельный прогон probe-watch — отчёт отдан "
             "ему, повторный запуск не выполнен.[/warning]"
         )
         return 1
+    return 0
+
+
+def cmd_config(
+    auto_lockdown: Optional[str] = None,
+    lockdown_allow: Optional[str] = None,
+    lockdown_ttl: Optional[str] = None,
+    apply: bool = False,
+    snapshot_path: Optional[Path] = None,
+    state_path: Optional[str] = None,
+) -> int:
+    """config: связка auto-lockdown (SPEC §4.2; default off — §10 OQ-1).
+
+    Без параметров — показать текущий конфиг (read-only). Fail-fast §4.2:
+    `--auto-lockdown on` с пустым allow-list при только-443 профиле
+    (нет 51825/2053 в state.protocols) отклоняется. Dry-run по умолчанию.
+    """
+    from src.core.lock import FileLock, LockError
+    from src.gateway.store import StoreError, load_state
+    from src.system import ufw as ufw_mod
+
+    snapshot_path = snapshot_path or SNAPSHOT_PATH
+    snapshot = load_snapshot(snapshot_path)
+    current = dict(snapshot.get("config") or {})
+    default_view = {"auto_lockdown": False}
+    console.print(f"[info][probe] Текущий конфиг: {current or default_view}[/info]")
+    if auto_lockdown is None and lockdown_allow is None and lockdown_ttl is None:
+        return 0  # статус-режим: показать и выйти
+
+    if auto_lockdown is not None and auto_lockdown not in ("on", "off"):
+        console.print(
+            f"[error][probe] --auto-lockdown: ожидалось on|off, получено {auto_lockdown!r}[/error]"
+        )
+        return 2
+    try:
+        allow_ips = (
+            ufw_mod.parse_allow_from(lockdown_allow)
+            if lockdown_allow is not None
+            else [str(i) for i in (current.get("lockdown_allow") or [])]
+        )
+        ttl_hours = (
+            ufw_mod.parse_ttl_hours(lockdown_ttl)
+            if lockdown_ttl is not None
+            else int(current.get("lockdown_ttl_hours") or ufw_mod.LOCKDOWN_TTL_DEFAULT_H)
+        )
+    except ufw_mod.UfwError as exc:
+        console.print(f"[error][probe] {exc}[/error]")
+        return 2
+
+    planned = {
+        "auto_lockdown": (
+            auto_lockdown == "on" if auto_lockdown is not None
+            else bool(current.get("auto_lockdown"))
+        ),
+        "lockdown_allow": allow_ips,
+        "lockdown_ttl_hours": ttl_hours,
+    }
+    if planned["auto_lockdown"] and not planned["lockdown_allow"]:
+        try:
+            state = load_state(state_path)
+        except StoreError as exc:
+            console.print(f"[error][probe] {exc}[/error]")
+            return 1
+        if not ufw_mod.has_non_443_channel(state):
+            console.print(
+                "[error][probe] --auto-lockdown on отклонён (fail-fast SPEC §4.2): "
+                "lockdown-allow пуст, а в state.protocols нет 51825/2053 — авто-лок "
+                "закрыл бы всё входящее. Укажите --lockdown-allow IP[,IP…].[/error]"
+            )
+            return 1
+    console.print(f"[info][probe] Планируемый конфиг: {planned}[/info]")
+    if not apply:
+        console.print("[info][probe] Dry-run: ничего не изменено. Для применения — --apply.[/info]")
+        return 0
+
+    payload = dict(snapshot)
+    payload["config"] = planned
+    payload["ts"] = datetime.now().isoformat(timespec="seconds")
+    try:
+        with FileLock(LOCK_FILE):
+            if not write_snapshot_payload(payload, snapshot_path):
+                return 1
+    except LockError:
+        console.print("[error][probe] Параллельный прогон probe-watch — конфиг не записан.[/error]")
+        return 1
+    console.print(
+        "[success][probe] Конфиг probe-watch записан (в снапшот; переживает рестарт юнита).[/success]"
+    )
     return 0

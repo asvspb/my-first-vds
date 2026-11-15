@@ -8,7 +8,7 @@ import copy
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -34,12 +34,18 @@ class ClientProfile(BaseModel):
 
 
 class GatewayState(BaseModel):
-    """Состояние gateway; формат версионируется (version=1)."""
+    """Состояние gateway; формат версионируется (version=1).
+
+    ufw_lockdown — состояние лока 443 (SPEC-20261116-probe-response §4.1/§9.C):
+    top-level ключ state.json["ufw_lockdown"], отдельно от applied_rules
+    harden-меты (журналы не смешиваются: undo каждого — свой).
+    """
 
     version: int = 1
     domain: str = ""
     clients: list[ClientProfile] = Field(default_factory=list)
     protocols: dict[str, dict] = Field(default_factory=dict)
+    ufw_lockdown: dict[str, Any] = Field(default_factory=dict)
 
 
 def load_state(path: Optional[str] = None) -> GatewayState:

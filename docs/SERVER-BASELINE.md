@@ -325,9 +325,31 @@ loglevel — логи демона слепы к пробам. Единстве�
 распределённое активное зондирование из подсетей РФ; если вслед за ним падает
 AWG (UDP/51825) или Reality (TCP/443) — это подтверждённый бан по
 протоколу/IP, а не локальный сбой. Вердикт активен только при наличии
-`/etc/vds-relay/ru-cidrs.txt` (появляется с relay-модулем; до этого
-geo: unknown).
-**Проверка:** `vds gateway probe-watch` (вердикт + ru_top);
+`/etc/vds-relay/ru-cidrs.txt` (ставится `vds gateway probe-watch ru-cidr
+install --apply` уже без relay-модуля — SPEC-20261116-probe-response §3;
+до этого geo: unknown).
+**Серверная реакция (SPEC-20261116-probe-response):** вердикты агрегируются
+в threat-level `quiet/elevated/high` (high = RU-SUSPECT 2 окна подряд;
+снапшот переживает рестарт; свои клиенты — AWG endpoints + серверный IP +
+whitelist `/etc/vds-probe-watch/allow-ips.txt` — исключаются). Реакция —
+только сетевая видимость 443 (UFW), никогда юниты/конфиги xray/hy/awg:
+
+```bash
+sudo vds gateway probe-watch ru-cidr install --apply     # RU-CIDR + еженедельный таймер
+sudo vds system ufw lock-443 --allow-from IP[,IP] --ttl 48h --apply  # изоляция 443 (dry-run по умолчанию)
+sudo vds system ufw lock-443 --status                     # состояние лока + TTL
+sudo vds system ufw lock-443 --unlock --apply             # откат = одна команда (ровно снимок)
+sudo vds gateway probe-watch config --auto-lockdown on --lockdown-allow IP --apply  # авто-лок при high (default off)
+```
+
+Лок не трогает AWG 51825/CDN 2053/ssh; Hy2-hop (asv1) остаётся открытым с
+warning; TTL обязателен (default 48h, 1h..168h) — забытый лок невозможен
+(auto-unlock тиком probe-watch). При downgrade лок НЕ снимается автоматически
+(«мигалка» опаснее, §10 OQ-3). `harden` при активном локе отказывает
+(обход `--force` с журналом).
+**Проверка:** `vds gateway probe-watch` (вердикт + threat-level + ru_top);
+`vds gateway probe-watch watch --json` (контракт полей `threat_level`,
+`threat_reason`, `lockdown{active,since,ttl_until,allow_from}`, `ru_syn_new`);
 `nft list set inet vds_probe probers4`.
 **Откат (манёвр уклонения, на клиенте):** `vpn` переключение профиля с AWG
 asv2 на Hysteria2 (asv1, port hopping + salamander) / VLESS+WS :2053

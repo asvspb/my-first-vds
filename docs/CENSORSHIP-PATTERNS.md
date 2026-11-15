@@ -161,6 +161,21 @@ xray/hysteria2 (access-log/loglevel — отдельное решение вла
 - **`remove --apply`** — демонтаж таблицы и юнитов (идемпотентно).
 Таймер `vds-probe-watch.timer` — часовой тик watch; журнал
 `journalctl -u vds-probe-watch.service`.
+- **Серверная реакция (SPEC-20261116-probe-response, кратко):** вердикты
+  окон агрегируются в threat-level `quiet/elevated/high` (high = RU-SUSPECT
+  2 окна подряд; BURST-максимум elevated; выход high = 72 окна без новых
+  RU-IP, decay заморожен при активном локе — лок ослепляет syn_valid;
+  состояние в снапшоте, переживает рестарт). Свои клиенты исключаются:
+  endpoint-IP активных AWG-пиров (`awg show`, кэш в снапшоте) + серверный
+  IP + whitelist `/etc/vds-probe-watch/allow-ips.txt`. Реакция — только
+  сетевая видимость 443 через UFW (`lock-443`), никогда юниты/конфиги
+  xray/hy/awg; TTL обязателен (default 48h), downgrade лок не снимает;
+  авто-режим — opt-in (`config --auto-lockdown on`). RU-CIDR на
+  exit-серверах без релея: `probe-watch ru-cidr install --apply`.
+  Контракт монитор-поллинга: `watch --json` → `threat_level`,
+  `threat_reason`, `ru_syn_new`, `lockdown{active,since,ttl_until,allow_from}`.
+  Полностью — docs/team/specs/SPEC-20261116-probe-response.md и
+  SERVER-BASELINE §5.12.
 
 ## 2. Паттерны ландшафта (рассмотрены, статус)
 

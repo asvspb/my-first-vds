@@ -16,13 +16,14 @@
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
 import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -608,6 +609,7 @@ def run_harden(
     state_path: Optional[str] = None,
     lock_path: Optional[str] = None,
     include_ss: bool = True,
+    force: bool = False,
 ) -> int:
     """CLI-движок `system ufw harden`: dry-run по умолчанию, --apply под FileLock."""
     opts = opts or HardeningOpts()
@@ -627,6 +629,31 @@ def run_harden(
 
     if undo:
         return run_undo(state_path=state_path, lock_path=lock_path)
+
+    # Guard SPEC §9.C: harden при активном локе 443 — отказ (журналы не смешиваются);
+    # обход только осознанным --force с записью в журнал лока.
+    ld_state = get_lockdown(state)
+    if ld_state["active"]:
+        if apply and not force:
+            console.print(
+                "[error][ufw] Активен lock-443 — harden отказан (SPEC §9.C: смесь журналов "
+                "сломала бы undo обоих). Сначала `sudo vds system ufw lock-443 --unlock --apply`, "
+                "затем harden; осознанный обход — `harden --force --apply`.[/error]"
+            )
+            return 1
+        if force:
+            console.print(
+                "[warning][ufw] harden выполняется ПРИ активном локе 443 (--force) — "
+                "событие записывается в журнал лока.[/warning]"
+            )
+            state.ufw_lockdown["events"] = _append_event(
+                dict(state.ufw_lockdown), "harden-force", "harden при активном lock-443 (--force)"
+            )
+        else:
+            console.print(
+                "[warning][ufw] Активен lock-443 — показан dry-run план; apply потребует "
+                "сначала --unlock либо --force (SPEC §9.C).[/warning]"
+            )
 
     snapshot = _ufw_snapshot_combined()
     for line in snapshot.unparsed:
@@ -1247,3 +1274,552 @@ def run_status(state_path: Optional[str] = None) -> int:
     else:
         console.print("[warning][ufw] ufw не установлен.[/warning]")
     return 0
+
+
+# ---------------------------------------------------------------------------
+# lock-443: изоляция 443 по вердиктам probe-watch
+# (SPEC-20261116-probe-response §4.1, §9.B/C/D, §10 OQ-2, §11)
+# ---------------------------------------------------------------------------
+
+# Состояние лока — топ-уровень state.json["ufw_lockdown"] (§9.C), отдельно от
+# applied_rules harden-меты: undo каждого — свой журнал.
+LOCKDOWN_TTL_DEFAULT_H = 48
+LOCKDOWN_TTL_MIN_H = 1
+LOCKDOWN_TTL_MAX_H = 168
+
+
+def parse_ttl_hours(ttl: str) -> int:
+    """'48h' -> 48; валидация 1h..168h (SPEC §10 OQ-2)."""
+    match = re.fullmatch(r"\s*(\d+)\s*h\s*", ttl or "")
+    if not match:
+        raise UfwError(f"TTL: ожидался формат Nh (например 48h), получено {ttl!r}")
+    hours = int(match.group(1))
+    if not (LOCKDOWN_TTL_MIN_H <= hours <= LOCKDOWN_TTL_MAX_H):
+        raise UfwError(
+            f"TTL {hours}h вне диапазона {LOCKDOWN_TTL_MIN_H}h..{LOCKDOWN_TTL_MAX_H}h "
+            "(SPEC §10 OQ-2)"
+        )
+    return hours
+
+
+def parse_allow_from(value: Optional[str]) -> list[str]:
+    """'IP,IP' -> [IP]; только IPv4 (§9.D: v6-443 на время лока закрыт)."""
+    if not value or not value.strip():
+        return []
+    ips: list[str] = []
+    for token in value.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            addr = ipaddress.ip_address(token)
+        except ValueError as exc:
+            raise UfwError(f"--allow-from: некорректный IP {token!r} ({exc})") from exc
+        if addr.version != 4:
+            raise UfwError(
+                f"--allow-from: {token!r} не IPv4 — v6-443 остаётся закрытым на время "
+                "лока (§9.D), v6-allow-list не поддерживается v1"
+            )
+        if token not in ips:
+            ips.append(token)
+    return ips
+
+
+def get_lockdown(state: GatewayState) -> dict:
+    """Нормализованное состояние лока (стабильный контракт для probe-watch --json)."""
+    raw = dict(state.ufw_lockdown or {})
+
+    def _str_list(key: str) -> list[str]:
+        val = raw.get(key)
+        return [str(v) for v in val] if isinstance(val, list) else []
+
+    try:
+        ttl_hours = int(raw.get("ttl_hours") or 0)
+    except (TypeError, ValueError):
+        ttl_hours = 0
+    return {
+        "active": bool(raw.get("active")),
+        "since": str(raw.get("since", "")),
+        "ttl_until": str(raw.get("ttl_until", "")),
+        "ttl_hours": ttl_hours,
+        "allow_from": _str_list("allow_from"),
+        "reason": str(raw.get("reason", "")),
+        "removed_wide": _str_list("removed_wide"),
+        "added_from": _str_list("added_from"),
+    }
+
+
+def lockdown_ttl_expired(ld: dict, now: Optional[datetime] = None) -> bool:
+    """now >= ttl_until (§11: TTL-чек в тике probe-watch). Непарсящийся TTL — False."""
+    if not ld.get("active") or not ld.get("ttl_until"):
+        return False
+    try:
+        until = datetime.fromisoformat(str(ld["ttl_until"]))
+    except ValueError:
+        return False
+    return (now or datetime.now(timezone.utc)) >= until
+
+
+def has_non_443_channel(state: GatewayState) -> bool:
+    """Жив прямой канал кроме 443? (AWG 51825 / CDN 2053 — fail-fast §4.2)."""
+    awg = state.protocols.get("amneziawg") or {}
+    cdn = state.protocols.get("xray-cdn") or {}
+    return bool(awg.get("installed")) or bool(cdn.get("installed"))
+
+
+def detect_hop(state: GatewayState, snapshot: UfwSnapshot) -> bool:
+    """Hy2 port hopping на сервере? (state.protocols + широкое udp-правило-диапазон, §9.B)."""
+    if (state.protocols.get("hysteria2") or {}).get("hop_ports"):
+        return True
+    return any(
+        r.action == "allow" and r.proto == "udp" and ":" in r.port and r.src == "any"
+        for r in snapshot.rules
+    )
+
+
+def _ttl_expires_at(now: datetime, hours: int) -> str:
+    return (now + timedelta(hours=hours)).isoformat(timespec="seconds")
+
+
+def _append_event(raw_lockdown: dict, event: str, detail: str) -> list[dict]:
+    """Журнал событий лока (lock/extend/unlock/harden-force); окно — последние 50."""
+    events = [dict(e) for e in (raw_lockdown.get("events") or []) if isinstance(e, dict)]
+    events.append({"event": event, "detail": detail, "ts": _now_iso()})
+    return events[-50:]
+
+
+def _delete_wide_item(spec: str, snapshot: UfwSnapshot) -> PlanItem:
+    """Шаг удаления широкого 443-правила (в undo-журнал); отсутствующее — skip."""
+    present = snapshot.has("allow", spec)
+    return PlanItem(
+        "rule",
+        f"ufw delete allow {spec}"
+        + ("" if present else " [широкого правила нет — идемпотентно]"),
+        "add" if present else "skip",
+        {"action": "allow", "spec": spec, "delete": True},
+    )
+
+
+def build_lockdown_plan(
+    state: GatewayState,
+    snapshot: UfwSnapshot,
+    allow_ips: list[str],
+    with_udp: bool,
+) -> list[PlanItem]:
+    """План lock-443: from-правила ПЕРВЫМИ (fail-safe: сначала доступ, потом изоляция).
+
+    По умолчанию закрывается ТОЛЬКО 443/tcp (§9.B): 443/udp и hop-диапазон
+    не трогаются (при обнаруженном hop — warning «канал уклонения остаётся»);
+    --with-udp закрывает и их, записав оба в undo-журнал. Повторный apply
+    ЗАМЕНЯЕТ allow-from: устаревшие from-правила предыдущего лока удаляются.
+    """
+    plan: list[PlanItem] = []
+    for ip in allow_ips:
+        plan.append(_rule_item("allow", f"from {ip} to any port 443 proto tcp", snapshot))
+    plan.append(_delete_wide_item("443/tcp", snapshot))
+    if with_udp:
+        plan.append(_delete_wide_item("443/udp", snapshot))
+        seen_ranges: set[str] = set()
+        for rule in snapshot.rules:
+            if (
+                rule.action == "allow" and rule.proto == "udp"
+                and ":" in rule.port and rule.src == "any"
+            ):
+                spec = f"{rule.port}/udp"
+                if spec not in seen_ranges:
+                    seen_ranges.add(spec)
+                    plan.append(_delete_wide_item(spec, snapshot))
+    elif detect_hop(state, snapshot):
+        plan.append(PlanItem(
+            "check",
+            "443/udp и hop-диапазон НЕ трогаются: Hy2-hop остаётся открытым "
+            "(канал уклонения, §9.B); полное молчание — явным --with-udp",
+            "warn",
+        ))
+    else:
+        plan.append(PlanItem(
+            "check",
+            "443/udp не трогается (hop не обнаружен; полное молчание — явным --with-udp)",
+            "warn",
+        ))
+    # Замена allow-from (§4.1): from-правила прошлого лока вне нового списка — в удаление.
+    keep = {f"allow from {ip} to any port 443 proto tcp" for ip in allow_ips}
+    prev_added = [
+        str(r) for r in ((state.ufw_lockdown or {}).get("added_from") or [])
+        if isinstance(r, str)
+    ]
+    for old in prev_added:
+        if old in keep:
+            continue
+        toks = old.split()
+        action_word = toks[0] if toks and toks[0] in ("allow", "limit", "deny", "reject") else "allow"
+        spec_rest = " ".join(toks[1:]) if action_word != "allow" or old.startswith("allow ") else old
+        present = snapshot.has(action_word, spec_rest)
+        plan.append(PlanItem(
+            "rule",
+            f"ufw delete {old} [замена allow-from]"
+            + ("" if present else " [правила уже нет — идемпотентно]"),
+            "add" if present else "skip",
+            {"action": action_word, "spec": spec_rest, "delete": True},
+        ))
+    return plan
+
+
+def _execute_lock_plan(
+    state: GatewayState,
+    plan: list[PlanItem],
+    previous: dict,
+    allow_ips: list[str],
+    ttl_hours: int,
+    reason: str,
+) -> None:
+    """Исполнить план лока (вызывающий держит FileLock + root); мутации + журнал."""
+    removed_wide = [str(r) for r in (previous.get("removed_wide") or [])]
+    for item in plan:
+        if item.kind != "rule" or item.action == "skip":
+            continue
+        spec = str(item.meta["spec"])
+        if item.meta.get("delete"):
+            res = run_list(["ufw", "delete", "allow", spec], timeout=15)
+            if not res.ok:
+                out = (res.stdout + res.stderr).lower()
+                if "could not" not in out and "not found" not in out:
+                    raise UfwError(
+                        f"ufw delete allow {spec}: {res.stderr.strip() or res.stdout.strip()}"
+                    )
+                console.print(f"[info][ufw] правило уже удалено: allow {spec}[/info]")
+            else:
+                kind = "замена allow-from" if spec.startswith("from ") else "undo-журнал лока"
+                console.print(f"[success][ufw] удалено ({kind}): allow {spec}[/success]")
+            if not spec.startswith("from ") and spec not in removed_wide:
+                removed_wide.append(spec)
+            continue
+        res = run_list(item.cli_args, timeout=15)
+        if not res.ok:
+            out = (res.stdout + res.stderr).lower()
+            if "skipping adding" not in out and "rule added" not in out:
+                raise UfwError(
+                    f"{item.detail}: {res.stderr.strip() or res.stdout.strip()}"
+                )
+        console.print(f"[success][ufw] применено: {item.detail}[/success]")
+    # added_from — канонический список ТЕКУЩЕГО allow-list (замена, §4.1);
+    # удаление устаревших from-правил выше уже в плане.
+    added_from = [f"allow from {ip} to any port 443 proto tcp" for ip in allow_ips]
+    state.ufw_lockdown = {
+        "active": True,
+        # повторный apply = продление (since сохраняется), не «новый» лок
+        "since": str(previous.get("since") or "") or _now_iso(),
+        "ttl_until": _ttl_expires_at(datetime.now(timezone.utc), ttl_hours),
+        "ttl_hours": ttl_hours,
+        "allow_from": list(allow_ips),
+        "reason": reason,
+        "removed_wide": removed_wide,
+        "added_from": added_from,
+        "events": _append_event(previous, "lock", reason or "manual"),
+    }
+
+
+def _execute_unlock(state: GatewayState, reason: str) -> None:
+    """Снять лок: восстановить ровно снимок широких правил, убрать from-правила.
+
+    §9.D: стандартный `ufw allow 443/tcp|udp` идемпотентно воссоздаёт v4+v6
+    пары (IPV6=yes); сверка со снимком после восстановления. 443-правила,
+    изменённые владельцем во время лока, НЕ перезаписываются — merge-подсказка.
+    """
+    ld = get_lockdown(state)
+    live = _ufw_snapshot_combined()
+    known = set(ld["added_from"]) | {f"allow {spec}" for spec in ld["removed_wide"]}
+    manual = sorted({
+        r.canonical for r in live.rules
+        if r.action == "allow" and r.port == "443" and r.canonical not in known
+    })
+    if manual:
+        console.print(
+            "[warning][ufw] 443-правила вне журнала лока (владелец менял во время лока?): "
+            f"{', '.join(manual)} — НЕ перезаписываются, выполните merge вручную.[/warning]"
+        )
+    for spec in ld["removed_wide"]:
+        res = run_list(["ufw", "allow", spec], timeout=15)
+        _check(res, f"ufw allow {spec} (восстановление после lock-443)")
+        console.print(f"[success][ufw] восстановлено: ufw allow {spec}[/success]")
+    for canonical in ld["added_from"]:
+        res = run_list(["ufw", "delete"] + canonical.split(), timeout=15)
+        out = (res.stdout + res.stderr).lower()
+        if res.ok or "could not" in out or "not found" in out or "does not exist" in out:
+            console.print(f"[success][ufw] снято: ufw delete {canonical}[/success]")
+        else:
+            raise UfwError(
+                f"ufw delete {canonical}: {res.stderr.strip() or res.stdout.strip()}"
+            )
+    restored = _ufw_snapshot_combined()
+    missing = [s for s in ld["removed_wide"] if not restored.has("allow", s)]
+    if missing:
+        raise UfwError(
+            f"после unlock не найдены восстановленные широкие правила: {missing} — "
+            "проверьте `ufw status` и добейте вручную"
+        )
+    leftover = [c for c in ld["added_from"] if c in {r.canonical for r in restored.rules}]
+    if leftover:
+        console.print(
+            f"[warning][ufw] from-правила ещё живы (владелец переиспользовал?): "
+            f"{leftover} — оставлены.[/warning]"
+        )
+    console.print(
+        "[info][ufw] Сверка со снимком пройдена: широкие 443-правила на месте "
+        "(v4+v6 пары воссоздаются стандартным ufw allow, §9.D).[/info]"
+    )
+    raw = dict(state.ufw_lockdown)
+    raw["active"] = False
+    raw["events"] = _append_event(raw, "unlock", reason)
+    state.ufw_lockdown = raw
+
+
+def _print_lockdown_status(state: GatewayState) -> int:
+    ld = get_lockdown(state)
+    if not ld["active"]:
+        console.print("[info][ufw] lock-443: не активен.[/info]")
+        return 0
+    remaining = ""
+    try:
+        until = datetime.fromisoformat(ld["ttl_until"])
+        seconds = (until - datetime.now(timezone.utc)).total_seconds()
+        if seconds <= 0:
+            remaining = ", TTL ИСТЁК (снимет ближайший тик probe-watch)"
+        else:
+            remaining = f", осталось ~{int(seconds // 3600)}ч{int((seconds % 3600) // 60):02d}м"
+    except ValueError:
+        remaining = ", ttl_until не читается"
+    console.print(
+        f"[info][ufw] lock-443: АКТИВЕН (since {ld['since']}, до {ld['ttl_until']}{remaining}; "
+        f"allow_from: {', '.join(ld['allow_from']) or '— (443/tcp закрыт всем)'}; "
+        f"reason: {ld['reason'] or '—'})[/info]"
+    )
+    console.print(
+        f"[info][ufw] undo-журнал: removed_wide={ld['removed_wide']}, "
+        f"added_from={ld['added_from']}[/info]"
+    )
+    return 0
+
+
+def run_lock443(
+    allow_from: Optional[str] = None,
+    ttl: str = "48h",
+    reason: str = "",
+    with_udp: bool = False,
+    status: bool = False,
+    unlock: bool = False,
+    apply: bool = False,
+    state_path: Optional[str] = None,
+    lock_path: Optional[str] = None,
+) -> int:
+    """CLI-движок `system ufw lock-443` (SPEC-20261116-probe-response §4.1).
+
+    Dry-run по умолчанию; повторный --apply идемпотентен: продлевает TTL,
+    список allow-from заменяется. Снятие: --unlock --apply (ровно снимок) или
+    TTL-автоснятие тиком probe-watch (§11).
+    """
+    if not command_exists("ufw"):
+        console.print("[error][ufw] ufw не установлен: apt install -y ufw[/error]")
+        return 1
+    try:
+        state = load_state(state_path)
+    except StoreError as exc:
+        console.print(f"[error][ufw] {exc}[/error]")
+        return 1
+    if status:
+        return _print_lockdown_status(state)
+    if unlock:
+        return run_unlock443(apply=apply, state_path=state_path, lock_path=lock_path)
+    try:
+        ttl_hours = parse_ttl_hours(ttl)
+        allow_ips = parse_allow_from(allow_from)
+    except UfwError as exc:
+        console.print(f"[error][ufw] {exc}[/error]")
+        return 2
+    if not allow_ips and not has_non_443_channel(state):
+        console.print(
+            "[error][ufw] Пустой --allow-from при профиле без 51825/2053: лок закрыл бы "
+            "всё входящее (fail-fast SPEC §4.2). Укажите --allow-from IP[,IP…] или держите "
+            "канал AWG/CDN живым.[/error]"
+        )
+        return 1
+    ld = get_lockdown(state)
+    snapshot = _ufw_snapshot_combined()
+    plan = build_lockdown_plan(state, snapshot, allow_ips, with_udp)
+    mode = "ПРОДЛЕНИЕ: TTL + замена allow-from" if ld["active"] else "лок"
+    console.print(f"[info][ufw] План lock-443 ({mode}; TTL {ttl_hours}h):[/info]")
+    for item in plan:
+        tag = {"add": "add", "skip": "skip", "warn": "warning"}[item.action]
+        console.print(f"  [{tag}] {item.detail}")
+    if not allow_ips:
+        console.print(
+            "  [warning] allow-from пуст: 443/tcp закрывается ВСЕМ "
+            "(AWG 51825/udp и ssh не трогаются)[/warning]"
+        )
+    if not apply:
+        console.print("[info][ufw] Dry-run: ничего не изменено. Для применения — --apply.[/info]")
+        return 0
+    if os.geteuid() != 0:
+        console.print("[error][ufw] --apply требует root (sudo).[/error]")
+        return 2
+    with FileLock(lock_path or LOCK_PATH):
+        snapshot = _ufw_snapshot_combined()  # свежий снимок под блокировкой
+        plan = build_lockdown_plan(state, snapshot, allow_ips, with_udp)
+        try:
+            _execute_lock_plan(
+                state, plan, dict(state.ufw_lockdown or {}), allow_ips, ttl_hours, reason
+            )
+            save_state(state, state_path)
+        except (UfwError, StoreError, OSError) as exc:
+            console.print(f"[error][ufw] {exc}[/error]")
+            return 1
+    console.print(
+        f"[success][ufw] lock-443 активен до {state.ufw_lockdown.get('ttl_until')} "
+        "(снятие: `lock-443 --unlock --apply` или TTL-тик probe-watch).[/success]"
+    )
+    return 0
+
+
+def run_unlock443(
+    apply: bool = False,
+    state_path: Optional[str] = None,
+    lock_path: Optional[str] = None,
+    reason: str = "manual",
+) -> int:
+    """Досрочное снятие лока: восстановление ровно снимка из журнала (§4.1/§9.D)."""
+    try:
+        state = load_state(state_path)
+    except StoreError as exc:
+        console.print(f"[error][ufw] {exc}[/error]")
+        return 1
+    ld = get_lockdown(state)
+    if not ld["active"]:
+        console.print("[info][ufw] lock-443 не активен (идемпотентно).[/info]")
+        return 0
+    console.print("[info][ufw] План unlock (ровно снимок до лока; v4+v6 — §9.D):[/info]")
+    for spec in ld["removed_wide"]:
+        console.print(f"  [add] ufw allow {spec}")
+    for canonical in ld["added_from"]:
+        console.print(f"  [add] ufw delete {canonical}")
+    if not apply:
+        console.print("[info][ufw] Dry-run: ничего не изменено. Для снятия — --unlock --apply.[/info]")
+        return 0
+    if os.geteuid() != 0:
+        console.print("[error][ufw] --apply требует root (sudo).[/error]")
+        return 2
+    with FileLock(lock_path or LOCK_PATH):
+        try:
+            _execute_unlock(state, reason)
+            save_state(state, state_path)
+        except (UfwError, StoreError, OSError) as exc:
+            console.print(f"[error][ufw] {exc}[/error]")
+            return 1
+    console.print("[success][ufw] lock-443 снят: широкие 443-правила восстановлены из журнала.[/success]")
+    return 0
+
+
+# --- внутренние вызовы из часового тика probe-watch (§4.2, §11) ---
+
+
+def apply_auto_lockdown(
+    state_path: Optional[str] = None,
+    allow_ips: Optional[list[str]] = None,
+    ttl_hours: int = LOCKDOWN_TTL_DEFAULT_H,
+    reason: str = "auto:RU-SUSPECT",
+    with_udp: bool = False,
+    lock_path: Optional[str] = None,
+) -> bool:
+    """Лок 443 из тика probe-watch при threat high (SPEC §4.2). False — отказ."""
+    if os.geteuid() != 0:
+        console.print("[error][ufw] auto-lockdown требует root (тик таймера).[/error]")
+        return False
+    try:
+        state = load_state(state_path)
+    except StoreError as exc:
+        console.print(f"[error][ufw] auto-lockdown: {exc}[/error]")
+        return False
+    ips = list(allow_ips or [])
+    if not ips and not has_non_443_channel(state):
+        console.print(
+            "[error][ufw] auto-lockdown отказан: allow-list пуст и нет 51825/2053 — "
+            "лок закрыл бы всё входящее (fail-fast SPEC §4.2).[/error]"
+        )
+        return False
+    with FileLock(lock_path or LOCK_PATH):
+        snapshot = _ufw_snapshot_combined()
+        plan = build_lockdown_plan(state, snapshot, ips, with_udp)
+        try:
+            _execute_lock_plan(
+                state, plan, dict(state.ufw_lockdown or {}), ips, ttl_hours, reason
+            )
+            save_state(state, state_path)
+        except (UfwError, StoreError, OSError) as exc:
+            console.print(f"[error][ufw] auto-lockdown: {exc}[/error]")
+            return False
+    console.print(
+        f"[change][ufw] AUTO-LOCK 443 ({reason}) до {state.ufw_lockdown.get('ttl_until')}.[/change]"
+    )
+    return True
+
+
+def extend_lockdown_ttl(
+    state_path: Optional[str] = None,
+    now: Optional[datetime] = None,
+    lock_path: Optional[str] = None,
+) -> bool:
+    """Продление активного лока (повторный high / ru_syn_new): TTL re-arm, без дубля правил."""
+    if os.geteuid() != 0:
+        console.print("[error][ufw] продление лока требует root (тик таймера).[/error]")
+        return False
+    try:
+        state = load_state(state_path)
+    except StoreError as exc:
+        console.print(f"[error][ufw] продление лока: {exc}[/error]")
+        return False
+    ld = get_lockdown(state)
+    if not ld["active"]:
+        return False
+    hours = ld["ttl_hours"] or LOCKDOWN_TTL_DEFAULT_H
+    with FileLock(lock_path or LOCK_PATH):
+        state.ufw_lockdown["ttl_until"] = _ttl_expires_at(
+            now or datetime.now(timezone.utc), hours
+        )
+        state.ufw_lockdown["events"] = _append_event(
+            dict(state.ufw_lockdown), "extend", "продление: high/ru_syn_new при активном локе"
+        )
+        try:
+            save_state(state, state_path)
+        except (StoreError, OSError) as exc:
+            console.print(f"[error][ufw] продление лока: {exc}[/error]")
+            return False
+    console.print(f"[change][ufw] TTL лока продлён до {state.ufw_lockdown['ttl_until']}.[/change]")
+    return True
+
+
+def auto_unlock_expired(
+    state_path: Optional[str] = None,
+    now: Optional[datetime] = None,
+    reason: str = "ttl-expired",
+    lock_path: Optional[str] = None,
+) -> bool:
+    """TTL-чек тика probe-watch (§11): now >= ttl_until → авто-снятие (reason=ttl-expired)."""
+    if os.geteuid() != 0:
+        console.print("[error][ufw] auto-unlock требует root (тик таймера).[/error]")
+        return False
+    try:
+        state = load_state(state_path)
+    except StoreError as exc:
+        console.print(f"[error][ufw] auto-unlock: {exc}[/error]")
+        return False
+    ld = get_lockdown(state)
+    if not (ld["active"] and lockdown_ttl_expired(ld, now)):
+        return False
+    with FileLock(lock_path or LOCK_PATH):
+        try:
+            _execute_unlock(state, reason)
+            save_state(state, state_path)
+        except (UfwError, StoreError, OSError) as exc:
+            console.print(f"[error][ufw] auto-unlock: {exc}[/error]")
+            return False
+    console.print(f"[change][ufw] AUTO-UNLOCK 443 ({reason}): TTL истёк, снимок восстановлен.[/change]")
+    return True

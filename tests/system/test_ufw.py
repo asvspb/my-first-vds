@@ -678,3 +678,400 @@ class TestStatusPendingWarning:
         rc = ufw.run_status(state_path=state_path)
         assert rc == 0
         assert "finalize" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# lock-443 (SPEC-20261116-probe-response §4.1, §9.B/C/D, §10 OQ-2, §11)
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+def _only_443_state() -> GatewayState:
+    """Профиль «только 443»: xray без AWG/CDN — fail-fast §4.2 обязан сработать."""
+    st = GatewayState()
+    st.protocols = {"xray": {"installed": True, "port": 443}}
+    return st
+
+
+class TestTtlAndAllowParsing:
+    def test_ttl_ok_and_bounds(self) -> None:
+        assert ufw.parse_ttl_hours("48h") == 48
+        assert ufw.parse_ttl_hours("1h") == 1
+        assert ufw.parse_ttl_hours("168h") == 168
+        assert ufw.parse_ttl_hours(" 24h ") == 24
+
+    def test_ttl_bad_format(self) -> None:
+        for bad in ("", "48", "2d", "h48", "4.5h"):
+            with pytest.raises(ufw.UfwError):
+                ufw.parse_ttl_hours(bad)
+
+    def test_ttl_out_of_range(self) -> None:
+        for bad in ("0h", "169h", "99999h"):
+            with pytest.raises(ufw.UfwError, match="1h..168h"):
+                ufw.parse_ttl_hours(bad)
+
+    def test_allow_from_ok(self) -> None:
+        assert ufw.parse_allow_from(None) == []
+        assert ufw.parse_allow_from("203.0.113.10") == ["203.0.113.10"]
+        assert ufw.parse_allow_from("203.0.113.10, 203.0.113.11,203.0.113.10") == [
+            "203.0.113.10", "203.0.113.11",
+        ]
+
+    def test_allow_from_rejects_garbage_and_v6(self) -> None:
+        with pytest.raises(ufw.UfwError, match="некорректный IP"):
+            ufw.parse_allow_from("not-an-ip")
+        with pytest.raises(ufw.UfwError, match="не IPv4"):
+            ufw.parse_allow_from("2001:db8::1")
+
+
+class TestLockdownHelpers:
+    def test_get_lockdown_normalizes(self) -> None:
+        st = GatewayState()
+        st.ufw_lockdown = {
+            "active": 1, "since": "2026-11-16T10:00:00+00:00",
+            "ttl_until": "2026-11-18T10:00:00+00:00", "ttl_hours": "48",
+            "allow_from": ["203.0.113.10"], "reason": "auto:RU-SUSPECT",
+            "removed_wide": ["allow 443/tcp"], "added_from": ["allow from 203.0.113.10 to any port 443 proto tcp"],
+        }
+        ld = ufw.get_lockdown(st)
+        assert ld["active"] is True
+        assert ld["ttl_hours"] == 48  # int-нормализация из строки
+        assert ld["allow_from"] == ["203.0.113.10"]
+
+    def test_get_lockdown_empty_state(self) -> None:
+        ld = ufw.get_lockdown(GatewayState())
+        assert ld == {
+            "active": False, "since": "", "ttl_until": "", "ttl_hours": 0,
+            "allow_from": [], "reason": "", "removed_wide": [], "added_from": [],
+        }
+
+    def test_ttl_expired(self) -> None:
+        now = datetime(2026, 11, 18, 12, 0, 0, tzinfo=timezone.utc)
+        past = {"active": True, "ttl_until": "2026-11-18T10:00:00+00:00"}
+        future = {"active": True, "ttl_until": "2026-11-18T14:00:00+00:00"}
+        assert ufw.lockdown_ttl_expired(past, now) is True
+        assert ufw.lockdown_ttl_expired(future, now) is False
+        assert ufw.lockdown_ttl_expired({"active": False, "ttl_until": past["ttl_until"]}, now) is False
+        assert ufw.lockdown_ttl_expired({"active": True, "ttl_until": "не-дата"}, now) is False
+
+    def test_has_non_443_channel(self) -> None:
+        assert ufw.has_non_443_channel(_gateway_state()) is True  # есть awg+cdn
+        assert ufw.has_non_443_channel(_only_443_state()) is False
+
+    def test_detect_hop(self) -> None:
+        st = _gateway_state()
+        snap = ufw.parse_ufw_status("Status: inactive\n")
+        assert ufw.detect_hop(st, snap) is True  # hop_ports в state.protocols
+        st2 = GatewayState()
+        st2.protocols = {"hysteria2": {"installed": True}}
+        snap_range = ufw.parse_ufw_status(
+            "Status: active\nTo Action From\n-- ------ ----\n20000:20500/udp ALLOW IN Anywhere\n"
+        )
+        assert ufw.detect_hop(st2, snap_range) is True  # широкое udp-правило-диапазон
+        snap_plain = ufw.parse_ufw_status(
+            "Status: active\nTo Action From\n-- ------ ----\n443/udp ALLOW IN Anywhere\n"
+        )
+        assert ufw.detect_hop(st2, snap_plain) is False
+
+
+class TestBuildLockdownPlan:
+    def _snap(self, rules: list[str]) -> ufw.UfwSnapshot:
+        lines = "Status: active\nDefault: deny (incoming), allow (outgoing), disabled (routed)\n" \
+                "To Action From\n-- ------ ----\n" + "\n".join(
+                    f"{r.split(' ', 1)[1]:<26} {r.split(' ', 1)[0].upper():<6} IN    Anywhere"
+                    for r in rules
+                ) + "\n"
+        return ufw.parse_ufw_status(lines)
+
+    def test_from_rules_first_then_tcp_delete_hop_warning(self) -> None:
+        st = _gateway_state()  # hop_ports есть → hop-детект
+        snap = self._snap(["allow 443/tcp", "allow 443/udp", "allow 20000:20500/udp"])
+        plan = ufw.build_lockdown_plan(st, snap, ["203.0.113.10"], with_udp=False)
+        rules = [p for p in plan if p.kind == "rule"]
+        # from-правило ПЕРВЫМ (fail-safe: сначала доступ, потом изоляция)
+        assert rules[0].meta["spec"] == "from 203.0.113.10 to any port 443 proto tcp"
+        deletes = [p.meta["spec"] for p in rules if p.meta.get("delete")]
+        assert deletes == ["443/tcp"]  # §9.B: по умолчанию ТОЛЬКО tcp
+        warns = [p for p in plan if p.kind == "check" and p.action == "warn"]
+        assert warns and "Hy2-hop" in warns[0].detail
+
+    def test_with_udp_closes_udp_and_hop_range(self) -> None:
+        st = _gateway_state()
+        snap = self._snap(["allow 443/tcp", "allow 443/udp", "allow 20000:20500/udp"])
+        plan = ufw.build_lockdown_plan(st, snap, [], with_udp=True)
+        deletes = [p.meta["spec"] for p in plan if p.kind == "rule" and p.meta.get("delete")]
+        assert deletes == ["443/tcp", "443/udp", "20000:20500/udp"]
+
+    def test_no_hop_no_with_udp_touches_only_tcp(self) -> None:
+        st = GatewayState()
+        st.protocols = {"xray": {"installed": True, "port": 443}, "amneziawg": {"installed": True, "port": 51825}}
+        snap = self._snap(["allow 443/tcp", "allow 443/udp"])
+        plan = ufw.build_lockdown_plan(st, snap, [], with_udp=False)
+        deletes = [p.meta["spec"] for p in plan if p.kind == "rule" and p.meta.get("delete")]
+        assert deletes == ["443/tcp"]
+
+    def test_absent_wide_rule_is_skip(self) -> None:
+        st = GatewayState()
+        snap = ufw.parse_ufw_status("Status: inactive\n")
+        plan = ufw.build_lockdown_plan(st, snap, [], with_udp=False)
+        tcp_delete = next(p for p in plan if p.kind == "rule" and p.meta.get("delete"))
+        assert tcp_delete.action == "skip"  # идемпотентно: удалять нечего
+
+
+class TestLock443:
+    def test_dry_run_does_not_mutate(
+        self, fake_paths: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = _wire(FakeUfw(rules=["allow 443/tcp", "allow 443/udp"], active=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        save_state(_gateway_state(), state_path)
+        state_before = Path(state_path).read_text()
+        rc = ufw.run_lock443(allow_from=RELAY_IP, apply=False, state_path=state_path)
+        assert rc == 0
+        mut = [c for c in fake.calls if not _read_only(c)]
+        assert mut == []
+        assert "allow 443/tcp" in fake.rules
+        assert Path(state_path).read_text() == state_before  # state не тронут
+
+    def test_apply_locks_tcp_journal_and_ttl(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = _wire(
+            FakeUfw(rules=["allow 443/tcp", "allow 443/udp", "allow 20000:20500/udp"], active=True),
+            monkeypatch,
+        )
+        state_path = str(fake_paths / "state.json")
+        save_state(_gateway_state(), state_path)
+        rc = ufw.run_lock443(
+            allow_from=RELAY_IP, ttl="24h", reason="RU-PROBE-SUSPECT", apply=True,
+            state_path=state_path,
+        )
+        assert rc == 0
+        # широкее 443/tcp удалено; udp/hop НЕ тронуты (§9.B)
+        assert "allow 443/tcp" not in fake.rules
+        assert "allow 443/udp" in fake.rules
+        assert "allow 20000:20500/udp" in fake.rules
+        # allow-from добавлен
+        assert f"allow from {RELAY_IP} to any port 443 proto tcp" in fake.rules
+        state = load_state(state_path)
+        ld = ufw.get_lockdown(state)
+        assert ld["active"] is True
+        assert ld["allow_from"] == [RELAY_IP]
+        assert ld["reason"] == "RU-PROBE-SUSPECT"
+        assert ld["removed_wide"] == ["443/tcp"]
+        assert ld["added_from"] == [f"allow from {RELAY_IP} to any port 443 proto tcp"]
+        # TTL ≈ now+24h
+        until = datetime.fromisoformat(ld["ttl_until"])
+        delta = until - datetime.now(timezone.utc)
+        assert timedelta(hours=23, minutes=55) < delta < timedelta(hours=24, minutes=5)
+
+    def test_reapply_extends_ttl_and_replaces_allow(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = _wire(FakeUfw(rules=["allow 443/tcp"], active=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        save_state(_gateway_state(), state_path)
+        assert ufw.run_lock443(allow_from=RELAY_IP, ttl="1h", apply=True, state_path=state_path) == 0
+        first_until = load_state(state_path).ufw_lockdown["ttl_until"]
+        first_since = load_state(state_path).ufw_lockdown["since"]
+        # повторный apply: allow-from ЗАМЕНЯЕТСЯ, TTL продлевается, since сохраняется
+        rc = ufw.run_lock443(allow_from="203.0.113.11", ttl="48h", apply=True, state_path=state_path)
+        assert rc == 0
+        state = load_state(state_path)
+        ld = ufw.get_lockdown(state)
+        assert ld["allow_from"] == ["203.0.113.11"]
+        assert ld["since"] == first_since  # это продление, не «новый» лок
+        assert ld["ttl_until"] > first_until
+        # старый from-rule снят, новый на месте, дублей нет
+        assert f"allow from {RELAY_IP} to any port 443 proto tcp" not in fake.rules
+        assert "allow from 203.0.113.11 to any port 443 proto tcp" in fake.rules
+        assert len([r for r in fake.rules if r.startswith("allow from")]) == 1
+        # removed_wide не дублируется
+        assert ld["removed_wide"] == ["443/tcp"]
+
+    def test_only_443_profile_empty_allow_failfast(
+        self, fake_paths: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _wire(FakeUfw(rules=["allow 443/tcp"], active=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        save_state(_only_443_state(), state_path)
+        rc = ufw.run_lock443(apply=False, state_path=state_path)  # даже dry-run отказан
+        assert rc == 1
+
+    def test_bad_ttl_returns_2(
+        self, fake_paths: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _wire(FakeUfw(active=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        save_state(_gateway_state(), state_path)
+        assert ufw.run_lock443(ttl="9000h", apply=False, state_path=state_path) == 2
+        assert ufw.run_lock443(ttl="nope", apply=False, state_path=state_path) == 2
+
+    def test_unlock_restores_exactly(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = _wire(FakeUfw(rules=["allow 443/tcp", "allow 443/udp"], active=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        save_state(_gateway_state(), state_path)
+        assert ufw.run_lock443(allow_from=RELAY_IP, apply=True, state_path=state_path) == 0
+        assert "allow 443/tcp" not in fake.rules
+        rc = ufw.run_lock443(unlock=True, apply=True, state_path=state_path)
+        assert rc == 0
+        # ровно снимок: широкие восстановлены, from-правило снято
+        assert "allow 443/tcp" in fake.rules
+        assert "allow 443/udp" in fake.rules
+        assert f"allow from {RELAY_IP} to any port 443 proto tcp" not in fake.rules
+        state = load_state(state_path)
+        assert ufw.get_lockdown(state)["active"] is False
+        events = state.ufw_lockdown.get("events") or []
+        assert any(e.get("event") == "unlock" for e in events)
+
+    def test_unlock_merge_hint_for_manual_changes(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        fake = _wire(FakeUfw(rules=["allow 443/tcp"], active=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        save_state(_gateway_state(), state_path)
+        assert ufw.run_lock443(allow_from=RELAY_IP, apply=True, state_path=state_path) == 0
+        # владелец вручную переоткрыл 443/udp во время лока (вне журнала)
+        fake.rules.append("allow 443/udp")
+        rc = ufw.run_lock443(unlock=True, apply=True, state_path=state_path)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "вне журнала лока" in out  # merge-подсказка, не молчаливая перезапись
+        assert "allow 443/udp" in fake.rules  # ручное правило сохранено
+
+    def test_unlock_idempotent_when_inactive(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = _wire(FakeUfw(rules=["allow 443/tcp"], active=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        save_state(_gateway_state(), state_path)
+        assert ufw.run_lock443(unlock=True, apply=True, state_path=state_path) == 0
+        assert "allow 443/tcp" in fake.rules  # не тронуто: лока не было
+
+    def test_status_prints_lockdown(
+        self, fake_paths: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        _wire(FakeUfw(active=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        save_state(_gateway_state(), state_path)
+        rc = ufw.run_lock443(status=True, state_path=state_path)
+        assert rc == 0
+        assert "не активен" in capsys.readouterr().out
+
+
+class TestHardenGuard:
+    def _locked_state(self, state_path: str) -> None:
+        st = _gateway_state()
+        st.ufw_lockdown = {
+            "active": True, "since": "t", "ttl_until": "2999-01-01T00:00:00+00:00",
+            "ttl_hours": 48, "allow_from": [], "reason": "drill",
+            "removed_wide": ["443/tcp"], "added_from": [],
+        }
+        save_state(st, state_path)
+
+    def test_harden_refused_during_lockdown(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _wire(FakeUfw(active=True, defaults=("deny", "allow")), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        self._locked_state(state_path)
+        rc = ufw.run_harden("gateway", apply=True, state_path=state_path)
+        assert rc == 1
+
+    def test_harden_force_proceeds_and_journals(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = _wire(FakeUfw(active=True, defaults=("deny", "allow")), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        self._locked_state(state_path)
+        rc = ufw.run_harden("gateway", apply=True, state_path=state_path, force=True)
+        assert rc == 0
+        assert ["ufw", "--force", "enable"] not in fake.calls  # уже active
+        events = load_state(state_path).ufw_lockdown.get("events") or []
+        assert any(e.get("event") == "harden-force" for e in events)
+
+
+class TestAutoLockdownApi:
+    def test_apply_auto_lockdown_uses_allow_and_ttl(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = _wire(FakeUfw(rules=["allow 443/tcp"], active=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        save_state(_gateway_state(), state_path)
+        ok = ufw.apply_auto_lockdown(
+            state_path=state_path, allow_ips=[RELAY_IP], ttl_hours=24, reason="auto:RU-SUSPECT"
+        )
+        assert ok is True
+        assert "allow 443/tcp" not in fake.rules
+        assert f"allow from {RELAY_IP} to any port 443 proto tcp" in fake.rules
+        ld = ufw.get_lockdown(load_state(state_path))
+        assert ld["active"] is True and ld["reason"] == "auto:RU-SUSPECT"
+
+    def test_apply_auto_lockdown_failfast_only_443(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _wire(FakeUfw(active=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        save_state(_only_443_state(), state_path)
+        assert ufw.apply_auto_lockdown(state_path=state_path, allow_ips=[]) is False
+
+    def test_extend_lockdown_ttl_rearms(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _wire(FakeUfw(active=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        st = _gateway_state()
+        st.ufw_lockdown = {
+            "active": True, "since": "t", "ttl_until": "2026-11-16T12:00:00+00:00",
+            "ttl_hours": 48, "allow_from": [], "removed_wide": [], "added_from": [],
+        }
+        save_state(st, state_path)
+        now = datetime(2026, 11, 17, 0, 0, 0, tzinfo=timezone.utc)
+        assert ufw.extend_lockdown_ttl(state_path=state_path, now=now) is True
+        assert load_state(state_path).ufw_lockdown["ttl_until"] == "2026-11-19T00:00:00+00:00"
+        events = load_state(state_path).ufw_lockdown.get("events") or []
+        assert any(e.get("event") == "extend" for e in events)
+
+    def test_extend_inactive_is_noop(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _wire(FakeUfw(active=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        save_state(_gateway_state(), state_path)
+        assert ufw.extend_lockdown_ttl(state_path=state_path) is False
+
+    def test_auto_unlock_expired_restores(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = _wire(FakeUfw(rules=[f"allow from {RELAY_IP} to any port 443 proto tcp"], active=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        st = _gateway_state()
+        st.ufw_lockdown = {
+            "active": True, "since": "t", "ttl_until": "2026-11-16T11:00:00+00:00",
+            "ttl_hours": 48, "allow_from": [RELAY_IP], "reason": "auto:RU-SUSPECT",
+            "removed_wide": ["443/tcp"],
+            "added_from": [f"allow from {RELAY_IP} to any port 443 proto tcp"],
+        }
+        save_state(st, state_path)
+        now = datetime(2026, 11, 16, 12, 0, 0, tzinfo=timezone.utc)
+        assert ufw.auto_unlock_expired(state_path=state_path, now=now) is True
+        assert "allow 443/tcp" in fake.rules
+        assert f"allow from {RELAY_IP} to any port 443 proto tcp" not in fake.rules
+        ld = ufw.get_lockdown(load_state(state_path))
+        assert ld["active"] is False
+
+    def test_auto_unlock_not_expired_noop(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = _wire(FakeUfw(rules=[f"allow from {RELAY_IP} to any port 443 proto tcp"], active=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        st = _gateway_state()
+        st.ufw_lockdown = {
+            "active": True, "ttl_until": "2999-01-01T00:00:00+00:00",
+            "removed_wide": ["443/tcp"], "added_from": [],
+        }
+        save_state(st, state_path)
+        assert ufw.auto_unlock_expired(state_path=state_path) is False
+        assert f"allow from {RELAY_IP} to any port 443 proto tcp" in fake.rules

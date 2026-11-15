@@ -68,9 +68,10 @@ vds/
     ├── hysteria2/      # Hysteria2 QUIC (443): adapter, install, clients, config, status, hop, obfs, sysctl, remove
     ├── amneziawg/      # AmneziaWG (UDP 51825): install, clients, status, remove
     ├── acme/           # ACME/Let's Encrypt (certbot HTTP-01 + deploy-hook)
-    ├── gateway/        # paths, store (state.json 0600), links, blockcheck, probing (probe-watch)
+    ├── gateway/        # paths, store (state.json 0600), links, blockcheck, probing (probe-watch
+    │                   #  + threat-level машина), probing_rucidr (RU-CIDR без релея)
     ├── sysinfo/        # Dashboard метрик сервера
-    └── system/         # Базовая настройка, cleanup
+    └── system/         # Базовая настройка, cleanup, ufw (harden/ssh-port/lock-443)
 ```
 
 Тесты: `tests/` (unit, без root/сети — `pytest -q`).
@@ -129,6 +130,10 @@ vds cleanup                  # Очистка системы (логи, кэши
 vds system ufw harden --profile gateway       # UFW hardening (dry-run; --apply применить)
 vds system ufw ssh-port --to 49222 --apply    # двухфазный перенос SSH (22 закрывает --finalize)
 vds system ufw status                         # сводка UFW + pending-перенос
+vds system ufw lock-443 --reason "RU-PROBE-SUSPECT" --apply   # изоляция 443 (TTL 48h; AWG/CDN/ssh живы)
+vds system ufw lock-443 --allow-from 203.0.113.10 --ttl 24h --apply  # 443 только для своих
+vds system ufw lock-443 --status              # состояние лока + TTL (read-only)
+vds system ufw lock-443 --unlock --apply      # досрочное снятие (ровно снимок из журнала)
 ```
 
 ### Gateway: Xray / Hysteria2 / AmneziaWG / ACME
@@ -152,8 +157,11 @@ vds gateway blockcheck              # «Блок IP» vs «деградация�
 vds gateway healthcheck             # Юниты/порты/сертификат (<14 дн. warning, <7 error)
 vds gateway healthcheck --install-timer  # Таймер vds-gateway-health (каждые 5 мин)
 vds gateway probe-watch install --apply  # Монитор зондирования tcp/443 (nft + таймер, dry-run по умолчанию)
-vds gateway probe-watch watch            # Дельта счётчиков + journal-сигнатуры + вердикт (read-only)
+vds gateway probe-watch watch            # Дельта счётчиков + вердикт + threat-level (read-only)
+vds gateway probe-watch watch --json     # + контракт: threat_level/threat_reason/lockdown/ru_syn_new
 vds gateway probe-watch explain          # Карта покрытия: что меряется, что слепо (access-log/IPv6)
+vds gateway probe-watch ru-cidr install --apply  # RU-CIDR без релея: включает RU-PROBE-SUSPECT (+таймер)
+vds gateway probe-watch config           # конфиг auto-lockdown (default off; on = авто-лок 443 при threat high)
 
 vds xray install                    # Установить Xray VLESS Reality (TCP 443)
 vds xray install --sni www.cloudflare.com   # Сайт-маска (по умолчанию www.google.com)
@@ -200,6 +208,9 @@ vds relay add-client phone          # Пир awg0: .conf (0600), endpoint relay-
 быть открыты в UFW. Обзор протоколов — [docs/VPN-PROTOCOLS.md](docs/VPN-PROTOCOLS.md),
 план развития — [docs/CENSORSHIP-ROADMAP.md](docs/CENSORSHIP-ROADMAP.md),
 паттерны обхода с живыми доказательствами — [docs/CENSORSHIP-PATTERNS.md](docs/CENSORSHIP-PATTERNS.md),
+серверная реакция на зондирование (threat-level → lock-443) —
+[docs/team/specs/SPEC-20261116-probe-response.md](docs/team/specs/SPEC-20261116-probe-response.md)
+и [docs/SERVER-BASELINE.md](docs/SERVER-BASELINE.md) §5.12,
 точки роста схем/протоколов (для техлида) — [docs/GROWTH-POINTS.md](docs/GROWTH-POINTS.md),
 системный split и его аналоги — [docs/SPLIT-TRANSPORTS.md](docs/SPLIT-TRANSPORTS.md),
 настройки ОС/сервера и чеклист восстановления — [docs/SERVER-BASELINE.md](docs/SERVER-BASELINE.md).

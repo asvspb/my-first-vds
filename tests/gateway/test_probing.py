@@ -1057,3 +1057,607 @@ class TestCLI:
         assert result.exit_code == 0
         assert "--record" in result.output
         assert "таймер" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# Машина threat-level (SPEC-20261116-probe-response §2, §9.A, §10, §11)
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+from src.gateway.store import GatewayState, load_state, save_state  # noqa: E402
+
+T0 = probing.datetime(2026, 11, 16, 12, 0, 0)
+
+
+def _update(
+    prev: probing.ThreatState,
+    verdict: str = "quiet",
+    new_ru: int = 0,
+    ru: bool = True,
+    lockdown: bool = False,
+) -> probing.ThreatState:
+    return probing.update_threat(
+        prev, verdict=verdict, new_ru_count=new_ru,
+        ru_available=ru, lockdown_active=lockdown, now=T0,
+    )
+
+
+class TestThreatMachine:
+    def test_quiet_stays_quiet(self) -> None:
+        t = _update(probing.ThreatState())
+        assert t.level == probing.THREAT_QUIET and t.reason == ""
+
+    def test_burst_raises_to_elevated(self) -> None:
+        t = _update(probing.ThreatState(), verdict="PROBE-BURST")
+        assert t.level == probing.THREAT_ELEVATED
+        assert "PROBE-BURST" in t.reason
+        assert t.since  # метка входа на уровень записана
+
+    def test_one_ru_window_is_elevated_not_high(self) -> None:
+        t = _update(probing.ThreatState(), verdict="RU-PROBE-SUSPECT", new_ru=2)
+        assert t.level == probing.THREAT_ELEVATED
+        assert t.ru_streak == 1
+
+    def test_two_consecutive_ru_windows_reach_high(self) -> None:
+        t1 = _update(probing.ThreatState(), verdict="RU-PROBE-SUSPECT", new_ru=2)
+        t2 = _update(t1, verdict="RU-PROBE-SUSPECT", new_ru=2)
+        assert t2.level == probing.THREAT_HIGH
+        assert "подряд" in t2.reason
+        assert t2.decay == 0 and t2.since == T0.isoformat(timespec="seconds")
+
+    def test_ru_gap_resets_streak(self) -> None:
+        t1 = _update(probing.ThreatState(), verdict="RU-PROBE-SUSPECT", new_ru=2)
+        t2 = _update(t1)  # тихое окно между — серия рвётся
+        assert t2.level == probing.THREAT_ELEVATED and t2.ru_streak == 0
+        t3 = _update(t2, verdict="RU-PROBE-SUSPECT", new_ru=2)
+        assert t3.level == probing.THREAT_ELEVATED and t3.ru_streak == 1  # НЕ high
+
+    def test_burst_never_reaches_high(self) -> None:
+        t = probing.ThreatState()
+        for _ in range(10):
+            t = _update(t, verdict="PROBE-BURST")
+        assert t.level == probing.THREAT_ELEVATED  # BURST — шум, максимум elevated
+
+    def test_high_unreachable_when_geo_unknown(self) -> None:
+        t = _update(probing.ThreatState(), verdict="PROBE-BURST", ru=False)
+        assert t.level == probing.THREAT_ELEVATED
+        assert "недостижим" in t.reason and "geo" in t.reason
+
+    def test_elevated_exit_after_three_quiet_windows(self) -> None:
+        t = _update(probing.ThreatState(), verdict="PROBE-BURST")  # вход, windows=0
+        t = _update(t)  # quiet_streak=1, windows=1
+        assert t.level == probing.THREAT_ELEVATED
+        t = _update(t)  # quiet_streak=2
+        assert t.level == probing.THREAT_ELEVATED
+        t = _update(t)  # quiet_streak=3, windows=3 >= FLAP_GUARD
+        assert t.level == probing.THREAT_QUIET
+
+    def test_flap_guard_blocks_early_downgrade(self) -> None:
+        # синтетическое состояние: 3 тихих уже накоплено, но на уровне
+        # проведено 0 окон — даунгрейд обязан подождать 2 окна (§2)
+        t = probing.ThreatState(level=probing.THREAT_ELEVATED, quiet_streak=3, windows_at_level=0)
+        t1 = _update(t)
+        assert t1.level == probing.THREAT_ELEVATED  # windows=1 < 2 — заблокировано
+        t2 = _update(t1)
+        assert t2.level == probing.THREAT_QUIET  # windows=2 — разрешено
+
+    def test_high_decay_exit_72_windows_then_quiet(self) -> None:
+        t = probing.ThreatState(
+            level=probing.THREAT_HIGH, windows_at_level=5, decay=probing.HIGH_EXIT_WINDOWS - 1,
+        )
+        t = _update(t)  # decay достигает 72, windows=6
+        assert t.level == probing.THREAT_ELEVATED
+        assert "72" in t.reason
+        for _ in range(probing.ELEVATED_QUIET_EXIT):
+            t = _update(t)
+        assert t.level == probing.THREAT_QUIET
+
+    def test_any_new_ru_resets_decay(self) -> None:
+        t = probing.ThreatState(level=probing.THREAT_HIGH, windows_at_level=10, decay=50)
+        t = _update(t, new_ru=1)  # 1 новый RU-IP ниже порога SUSPECT — всё равно сброс
+        assert t.decay == 0 and t.level == probing.THREAT_HIGH
+
+    def test_decay_frozen_during_lockdown(self) -> None:
+        """§9.A: лок ослепляет syn_valid — decay замирает до unlock."""
+        t = probing.ThreatState(level=probing.THREAT_HIGH, windows_at_level=1, decay=5)
+        for _ in range(100):
+            t = _update(t, lockdown=True)
+        assert t.level == probing.THREAT_HIGH
+        assert t.decay == 5  # заморожен, не растёт
+        assert "заморожен" in t.reason
+
+    def test_decay_resumes_after_unlock(self) -> None:
+        t = probing.ThreatState(level=probing.THREAT_HIGH, windows_at_level=1, decay=5)
+        t = _update(t, lockdown=True)
+        t = _update(t, lockdown=False)
+        assert t.decay == 6
+
+    def test_ru_suspect_during_lockdown_resets_decay(self) -> None:
+        t = probing.ThreatState(level=probing.THREAT_HIGH, windows_at_level=3, decay=10)
+        t = _update(t, verdict="RU-PROBE-SUSPECT", new_ru=2, lockdown=True)
+        assert t.decay == 0 and t.level == probing.THREAT_HIGH
+
+    def test_state_roundtrip_through_dict(self) -> None:
+        t = probing.ThreatState(level=probing.THREAT_HIGH, reason="r", since="s",
+                                 ru_streak=2, quiet_streak=0, decay=7, windows_at_level=9)
+        assert probing.ThreatState.from_dict(t.to_dict()) == t
+        # битый level нормализуется в quiet
+        assert probing.ThreatState.from_dict({"level": "panic"}).level == probing.THREAT_QUIET
+
+
+class TestSnapshotV2:
+    def test_threat_config_own_ips_roundtrip(self, tmp_path: Path) -> None:
+        p = tmp_path / "snap.json"
+        state = probing.NftState(syn_bare=1, per_element_counters=True)
+        assert probing.save_snapshot(state, p, extra={
+            "threat": {"level": "high", "reason": "RU-PROBE-SUSPECT 2 окна подряд"},
+            "config": {"auto_lockdown": True, "lockdown_ttl_hours": 24},
+            "own_ips": {"ips": ["203.0.113.200"], "ts": "t"},
+        })
+        snap = probing.load_snapshot(p)
+        assert snap["threat"]["level"] == "high"  # type: ignore[index]
+        assert snap["config"]["auto_lockdown"] is True  # type: ignore[index]
+        assert snap["own_ips"]["ips"] == ["203.0.113.200"]  # type: ignore[index]
+        assert snap["syn_bare"] == 1
+
+    def test_v1_snapshot_loads_with_new_keys_defaulted(self, tmp_path: Path) -> None:
+        p = tmp_path / "snap.json"
+        p.write_text('{"version": 1, "ts": "t", "syn_bare": 5, "syn_valid": 4, "udp_443": 0, "probers": {}}', encoding="utf-8")
+        snap = probing.load_snapshot(p)
+        assert snap["syn_bare"] == 5
+        assert snap["threat"] == {} and snap["config"] == {} and snap["own_ips"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Исключение собственных клиентов (§11): ноут+телефон в окне ≠ SUSPECT
+# ---------------------------------------------------------------------------
+
+AWG_SHOW_ENDPOINTS = (
+    "aGVhbGlwZWNrZXQtMTIzCg==\t203.0.113.200:51820\n"
+    "cGhvbmUta2V5LTQ1Ngo=\t203.0.113.201:51821\n"
+    "c3RhbGUtcGVlcgo=\t(none)\n"
+    "bG9vcGJhY2s=\t127.0.0.1:12345\n"
+)
+
+
+class TestAwgEndpoints:
+    def test_parse_awg_endpoints(self) -> None:
+        ips = probing.parse_awg_endpoints(AWG_SHOW_ENDPOINTS)
+        assert ips == ["203.0.113.200", "203.0.113.201"]  # (none)/loopback отсеяны
+
+    def test_parse_empty_and_garbage(self) -> None:
+        assert probing.parse_awg_endpoints("") == []
+        assert probing.parse_awg_endpoints("noise\nwithout ips") == []
+
+    def test_read_awg_endpoints_ok_and_fail(self) -> None:
+        fake = FakeRun({"awg show": _shell_result(AWG_SHOW_ENDPOINTS)})
+        assert probing.read_awg_endpoints(fake) == ["203.0.113.200", "203.0.113.201"]
+        failing = FakeRun({"awg show": _shell_result(stderr="permission denied", code=1)})
+        assert probing.read_awg_endpoints(failing) == []
+
+    def test_cached_own_ips(self) -> None:
+        assert probing.cached_own_ips({"own_ips": {"ips": ["203.0.113.200"]}}) == ["203.0.113.200"]
+        assert probing.cached_own_ips({}) == []
+        assert probing.cached_own_ips({"own_ips": "не-dict"}) == []
+
+    def test_load_own_ips_whitelist_file(self, tmp_path: Path) -> None:
+        wl = tmp_path / "allow-ips.txt"
+        wl.write_text(
+            "# ноут и телефон владельца\n203.0.113.200\n\n203.0.113.201\nмусор\n127.0.0.1\n",
+            encoding="utf-8",
+        )
+        assert probing.load_own_ips(wl) == {"203.0.113.200", "203.0.113.201"}
+        assert probing.load_own_ips(tmp_path / "absent.txt") == set()
+
+
+class TestOwnClientsExcluded:
+    """§11: ноут+телефон (RU, endpoint AWG) в одном окне НЕ дают SUSPECT."""
+
+    RU_FILE = "203.0.113.0/24\n"
+
+    def _report(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        own_ips: list[str] | None, whitelist: str | None = "",
+    ) -> probing.WatchReport:
+        ru_file = tmp_path / "ru-cidrs.txt"
+        ru_file.write_text(self.RU_FILE, encoding="utf-8")
+        monkeypatch.setattr(probing, "RU_CIDR_FILE", ru_file)
+        if whitelist is not None:
+            wl = tmp_path / "allow-ips.txt"
+            wl.write_text(whitelist, encoding="utf-8")
+            monkeypatch.setattr(probing, "OWN_IPS_FILE", wl)
+        current = probing.NftState(
+            syn_bare=20, syn_valid=10, per_element_counters=True,
+            probers={"203.0.113.200": 5, "203.0.113.201": 3},
+        )
+        return probing.build_report(
+            current, run=lambda args, **kw: _shell_result(),
+            snapshot_path=tmp_path / "snap.json", server_ip="",
+            own_ips=own_ips,
+            now=lambda: probing.datetime(2026, 11, 16, 12, 0, 0),
+        )
+
+    def test_laptop_and_phone_are_not_suspect(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Без исключения — SUSPECT; с own_ips (endpoint-кэш AWG) — quiet."""
+        base = self._report(tmp_path, monkeypatch, own_ips=None, whitelist=None)
+        assert sorted(base.new_ru_ips) == ["203.0.113.200", "203.0.113.201"]
+        assert base.verdict.name == "RU-PROBE-SUSPECT"
+
+        own = self._report(tmp_path, monkeypatch, own_ips=["203.0.113.200", "203.0.113.201"])
+        assert own.new_ru_ips == []
+        assert own.ru_hits == []  # свои не попадают даже в ru_top
+        assert own.verdict.name == "quiet"
+
+    def test_whitelist_file_excludes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        report = self._report(
+            tmp_path, monkeypatch, own_ips=None,
+            whitelist="# свои\n203.0.113.200\n203.0.113.201\n",
+        )
+        assert report.new_ru_ips == []
+        assert report.verdict.name == "quiet"
+
+    def test_partial_exclusion_still_suspects(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        report = self._report(tmp_path, monkeypatch, own_ips=["203.0.113.200"])
+        assert report.new_ru_ips == ["203.0.113.201"]  # один незнакомый — ниже порога
+        assert report.verdict.name == "quiet"
+
+
+class TestRuSynNew:
+    """§9.A: наблюдательное поле — новые RU-IP по SYN при активном локе."""
+
+    def _lockdown(self, active: bool) -> dict[str, object]:
+        return {
+            "active": active, "since": "2026-11-16T10:00:00+00:00",
+            "ttl_until": "2026-11-18T10:00:00+00:00", "allow_from": ["203.0.113.10"],
+        }
+
+    def _report(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lockdown: dict[str, object]
+    ) -> probing.WatchReport:
+        ru_file = tmp_path / "ru-cidrs.txt"
+        ru_file.write_text("203.0.113.0/24\n", encoding="utf-8")
+        monkeypatch.setattr(probing, "RU_CIDR_FILE", ru_file)
+        # лок ослепляет syn_valid: дельта syn_valid = 0 (снапшот равен текущему)
+        prev = probing.NftState(syn_bare=100, syn_valid=10, probers={}, per_element_counters=True)
+        snap_path = tmp_path / "snap.json"
+        assert probing.save_snapshot(
+            prev, snap_path,
+            extra={"threat": {"level": "high", "reason": "RU-PROBE-SUSPECT 2 окна подряд",
+                              "decay": 3, "windows_at_level": 4}},
+        )
+        current = probing.NftState(
+            syn_bare=110, syn_valid=10, per_element_counters=True,
+            probers={"203.0.113.101": 4, "203.0.113.102": 2},
+        )
+        return probing.build_report(
+            current, run=lambda args, **kw: _shell_result(),
+            snapshot_path=snap_path, server_ip="", lockdown=lockdown,
+            now=lambda: probing.datetime(2026, 11, 16, 12, 0, 0),
+        )
+
+    def test_ru_syn_new_observed_verdict_not_raised(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        report = self._report(tmp_path, monkeypatch, self._lockdown(True))
+        assert report.verdict.name == "quiet"  # syn_valid=0 гасит SUSPECT
+        assert sorted(report.ru_syn_new) == ["203.0.113.101", "203.0.113.102"]
+        # threat остаётся high; новые RU-IP по SYN сбросили decay (продление
+        # сигнала), но НЕ декрементируют заморозку: инкремент запрещён §9.A
+        assert report.threat.level == probing.THREAT_HIGH
+        assert report.threat.decay == 0
+
+    def test_no_lockdown_no_ru_syn_new(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        report = self._report(tmp_path, monkeypatch, self._lockdown(False))
+        assert report.ru_syn_new == []
+        assert report.verdict.name == "quiet"  # masscan-гашение, поле пусто
+
+
+class TestWatchJsonContract:
+    """§5/§9.A: стабильный контракт полей для монитор-поллинга."""
+
+    def test_json_has_threat_and_lockdown_fields(self, tmp_path: Path) -> None:
+        fake = FakeRun({"nft list table": _shell_result(NFT_LIST_WITH_COUNTERS)})
+        report, _ = probing.run_watch(
+            run=fake, snapshot_path=tmp_path / "snap.json",
+            now=lambda: probing.datetime(2026, 11, 15, 12, 0, 0),
+            lockdown={"active": True, "since": "s", "ttl_until": "u", "allow_from": ["203.0.113.10"]},
+        )
+        assert report is not None
+        data = report.to_json()
+        assert data["threat_level"] == probing.THREAT_QUIET
+        assert isinstance(data["threat_reason"], str)
+        assert data["ru_syn_new"] == []  # новые RU-IP есть, но вердикт quiet → поле пусто? нет:
+        # 203.0.113.x пометились бы [RU] только с RU-файлом; без него ru_syn_new пуст.
+        lockdown = data["lockdown"]
+        assert lockdown == {
+            "active": True, "since": "s", "ttl_until": "u", "allow_from": ["203.0.113.10"],
+        }
+
+    def test_json_threat_level_reflects_ru_windows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ru_file = tmp_path / "ru-cidrs.txt"
+        ru_file.write_text("203.0.113.0/24\n", encoding="utf-8")
+        monkeypatch.setattr(probing, "RU_CIDR_FILE", ru_file)
+        snap_path = tmp_path / "snap.json"
+        # в снапшоте уже elevated с ru_streak=1 — текущее окно RU даёт high
+        assert probing.write_snapshot_payload({
+            "version": 2, "ts": "t", "syn_bare": 0, "syn_valid": 0, "udp_443": 0,
+            "probers": {}, "config": {}, "own_ips": {},
+            "threat": {"level": "elevated", "ru_streak": 1, "windows_at_level": 1},
+        }, snap_path)
+        current = probing.NftState(
+            syn_bare=10, syn_valid=5, per_element_counters=True,
+            probers={"203.0.113.101": 2, "203.0.113.102": 1},
+        )
+        report = probing.build_report(
+            current, run=lambda args, **kw: _shell_result(),
+            snapshot_path=snap_path, server_ip="",
+            now=lambda: probing.datetime(2026, 11, 16, 12, 0, 0),
+        )
+        data = report.to_json()
+        assert data["threat_level"] == probing.THREAT_HIGH
+        assert data["verdict"] == "RU-PROBE-SUSPECT"
+
+
+# ---------------------------------------------------------------------------
+# config --auto-lockdown (§4.2, §10 OQ-1) и авто-реакции тика (§4.2/§11)
+# ---------------------------------------------------------------------------
+
+class TestConfigCmd:
+    def _setup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str]:
+        snap_path = tmp_path / "snap.json"
+        monkeypatch.setattr(probing, "SNAPSHOT_PATH", snap_path)
+        monkeypatch.setattr(probing, "LOCK_FILE", str(tmp_path / "probe.lock"))
+        state_path = str(tmp_path / "state.json")
+        return snap_path, state_path
+
+    def test_status_mode_shows_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                      capsys: pytest.CaptureFixture) -> None:
+        snap_path, state_path = self._setup(tmp_path, monkeypatch)
+        assert probing.cmd_config(snapshot_path=snap_path, state_path=state_path) == 0
+        assert "Текущий конфиг" in capsys.readouterr().out
+
+    def test_failfast_only_443_profile(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        snap_path, state_path = self._setup(tmp_path, monkeypatch)
+        st = GatewayState()
+        st.protocols = {"xray": {"installed": True, "port": 443}}
+        save_state(st, state_path)
+        rc = probing.cmd_config(
+            auto_lockdown="on", apply=True, snapshot_path=snap_path, state_path=state_path
+        )
+        assert rc == 1  # fail-fast §4.2: без 51825/2053 и allow — отказ
+
+    def test_on_off_persisted(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        snap_path, state_path = self._setup(tmp_path, monkeypatch)
+        save_state(GatewayState(), state_path)
+        rc = probing.cmd_config(
+            auto_lockdown="on", lockdown_allow="203.0.113.10,203.0.113.11",
+            lockdown_ttl="24h", apply=True, snapshot_path=snap_path, state_path=state_path,
+        )
+        assert rc == 0
+        cfg = probing.load_snapshot(snap_path)["config"]
+        assert cfg == {"auto_lockdown": True,
+                       "lockdown_allow": ["203.0.113.10", "203.0.113.11"],
+                       "lockdown_ttl_hours": 24}
+        # off возвращает дефолт
+        rc = probing.cmd_config(
+            auto_lockdown="off", apply=True, snapshot_path=snap_path, state_path=state_path
+        )
+        assert rc == 0
+        assert probing.load_snapshot(snap_path)["config"]["auto_lockdown"] is False
+
+    def test_validation_errors(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        snap_path, state_path = self._setup(tmp_path, monkeypatch)
+        assert probing.cmd_config(auto_lockdown="maybe", snapshot_path=snap_path) == 2
+        assert probing.cmd_config(lockdown_ttl="9000h", snapshot_path=snap_path) == 2
+        assert probing.cmd_config(lockdown_allow="bad-ip", snapshot_path=snap_path) == 2
+
+    def test_dry_run_does_not_write(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        snap_path, state_path = self._setup(tmp_path, monkeypatch)
+        save_state(GatewayState(), state_path)
+        rc = probing.cmd_config(
+            auto_lockdown="on", lockdown_allow="203.0.113.10",
+            snapshot_path=snap_path, state_path=state_path,
+        )
+        assert rc == 0
+        assert not snap_path.exists()
+
+    def test_snapshot_counters_preserved_by_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        snap_path, state_path = self._setup(tmp_path, monkeypatch)
+        save_state(GatewayState(), state_path)
+        probing.save_snapshot(
+            probing.NftState(syn_bare=77, syn_valid=66, per_element_counters=True), snap_path,
+            extra={"threat": {"level": "elevated"}},
+        )
+        rc = probing.cmd_config(
+            auto_lockdown="on", lockdown_allow="203.0.113.10", apply=True,
+            snapshot_path=snap_path, state_path=state_path,
+        )
+        assert rc == 0
+        snap = probing.load_snapshot(snap_path)
+        assert snap["syn_bare"] == 77  # счётчики и threat не потеряны
+        assert snap["threat"] == {"level": "elevated"}
+
+
+class TestAutoReactions:
+    """§4.2/§11 на моках ufw-модуля: high→lock, повторный high→продление,
+    ttl-expired→unlock, downgrade не снимает."""
+
+    def _report(self, level: str, ru_syn_new: list[str] | None = None) -> Any:
+        return SimpleNamespace(
+            threat=probing.ThreatState(level=level), ru_syn_new=ru_syn_new or [],
+        )
+
+    def _patch_ufw(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
+        import src.system.ufw as ufw_mod
+        calls: dict[str, list[Any]] = {"lock": [], "extend": [], "unlock": []}
+        monkeypatch.setattr(ufw_mod, "apply_auto_lockdown",
+                            lambda **kw: calls["lock"].append(kw) or True)
+        monkeypatch.setattr(ufw_mod, "extend_lockdown_ttl",
+                            lambda **kw: calls["extend"].append(kw) or True)
+        monkeypatch.setattr(ufw_mod, "auto_unlock_expired",
+                            lambda **kw: calls["unlock"].append(kw) or True)
+        return calls
+
+    def _patch_lockdown(self, monkeypatch: pytest.MonkeyPatch, ld: dict[str, object]) -> None:
+        monkeypatch.setattr(probing, "_load_lockdown", lambda state_path=None: dict(ld))
+
+    def test_high_with_auto_on_locks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._patch_ufw(monkeypatch)
+        self._patch_lockdown(monkeypatch, {"active": False})
+        probing.run_auto_reactions(
+            self._report("high"), {"auto_lockdown": True, "lockdown_allow": ["203.0.113.10"],
+                                   "lockdown_ttl_hours": 24},
+            now=probing.datetime(2026, 11, 16, 12, 0, 0),
+        )
+        assert len(calls["lock"]) == 1
+        assert calls["lock"][0]["allow_ips"] == ["203.0.113.10"]
+        assert calls["lock"][0]["ttl_hours"] == 24
+        assert calls["lock"][0]["reason"] == "auto:RU-SUSPECT"
+        assert calls["extend"] == [] and calls["unlock"] == []
+
+    def test_high_with_auto_off_does_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._patch_ufw(monkeypatch)
+        self._patch_lockdown(monkeypatch, {"active": False})
+        probing.run_auto_reactions(self._report("high"), {}, now=T0)
+        assert calls["lock"] == []
+
+    def test_repeated_high_extends_ttl_no_duplicate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._patch_ufw(monkeypatch)
+        self._patch_lockdown(monkeypatch, {"active": True})
+        probing.run_auto_reactions(self._report("high"), {"auto_lockdown": True}, now=T0)
+        assert calls["lock"] == []       # дубля правил нет
+        assert len(calls["extend"]) == 1  # только продление TTL
+
+    def test_ru_syn_new_extends_ttl(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._patch_ufw(monkeypatch)
+        self._patch_lockdown(monkeypatch, {"active": True})
+        probing.run_auto_reactions(
+            self._report("elevated", ru_syn_new=["203.0.113.9"]), {}, now=T0
+        )
+        assert len(calls["extend"]) == 1
+        assert calls["lock"] == []
+
+    def test_ttl_expired_unlocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._patch_ufw(monkeypatch)
+        self._patch_lockdown(monkeypatch, {"active": True})
+        monkeypatch.setattr(
+            "src.system.ufw.lockdown_ttl_expired", lambda ld, now=None: True
+        )
+        probing.run_auto_reactions(self._report("quiet"), {}, now=T0)
+        assert len(calls["unlock"]) == 1
+        assert calls["unlock"][0]["reason"] == "ttl-expired"
+
+    def test_downgrade_does_not_unlock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._patch_ufw(monkeypatch)
+        self._patch_lockdown(monkeypatch, {"active": True})
+        monkeypatch.setattr(
+            "src.system.ufw.lockdown_ttl_expired", lambda ld, now=None: False
+        )
+        probing.run_auto_reactions(self._report("elevated"), {"auto_lockdown": True}, now=T0)
+        assert calls["unlock"] == [] and calls["lock"] == [] and calls["extend"] == []
+
+    def test_elevated_never_locks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._patch_ufw(monkeypatch)
+        self._patch_lockdown(monkeypatch, {"active": False})
+        probing.run_auto_reactions(self._report("elevated"), {"auto_lockdown": True}, now=T0)
+        assert calls["lock"] == []
+
+
+class TestTickIntegration:
+    """cmd_watch --record (юнит таймера): персист threat + вызов авто-реакций."""
+
+    def test_record_persists_threat_and_reacts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        snap_path = tmp_path / "snap.json"
+        monkeypatch.setattr(probing, "SNAPSHOT_PATH", snap_path)
+        monkeypatch.setattr(probing, "LOCK_FILE", str(tmp_path / "probe.lock"))
+        monkeypatch.setattr(probing, "RU_CIDR_FILE", tmp_path / "absent-ru.txt")
+        monkeypatch.setattr(probing, "OWN_IPS_FILE", tmp_path / "absent-allow.txt")
+        # окно 1: BURST → elevated, персист в снапшот
+        monkeypatch.setattr(
+            probing, "list_nft_table",
+            lambda run=None: probing.parse_nft_table(NFT_LIST_WITH_COUNTERS),
+        )
+        monkeypatch.setattr(probing, "_load_lockdown",
+                            lambda state_path=None: {"active": False, "since": "", "ttl_until": "", "allow_from": []})
+        monkeypatch.setattr(probing, "read_awg_endpoints", lambda run=None, iface="awg0": [])
+        import src.system.ufw as ufw_mod
+        unlocked: list[dict[str, Any]] = []
+        monkeypatch.setattr(ufw_mod, "auto_unlock_expired", lambda **kw: unlocked.append(kw) or True)
+        monkeypatch.setattr(ufw_mod, "apply_auto_lockdown", lambda **kw: True)
+        monkeypatch.setattr(ufw_mod, "extend_lockdown_ttl", lambda **kw: True)
+
+        rc = probing.cmd_watch(threshold=2, record=True, run=lambda args, **kw: _shell_result())
+        assert rc == 0
+        threat = probing.load_snapshot(snap_path)["threat"]
+        assert threat["level"] == probing.THREAT_ELEVATED  # burst-окно → elevated
+        assert unlocked == []  # лока не было — авто-unlock не звался
+
+        # окно 2: активный лок с истёкшим TTL → авто-unlock вызван; json-контракт жив
+        monkeypatch.setattr(
+            probing, "_load_lockdown",
+            lambda state_path=None: {"active": True, "since": "s",
+                                     "ttl_until": "2000-01-01T00:00:00+00:00", "allow_from": []},
+        )
+        monkeypatch.setattr(
+            ufw_mod, "lockdown_ttl_expired", lambda ld, now=None: True
+        )
+        rc = probing.cmd_watch(record=True, json_out=True, run=lambda args, **kw: _shell_result())
+        assert rc == 0
+        assert len(unlocked) == 1
+        assert unlocked[0]["reason"] == "ttl-expired"
+
+
+class TestNewCli:
+    def test_probe_watch_help_lists_new_commands(self) -> None:
+        result = runner.invoke(app, ["gateway", "probe-watch", "--help"])
+        assert result.exit_code == 0
+        for name in ("ru-cidr", "config"):
+            assert name in result.output
+
+    def test_rucidr_help_full(self) -> None:
+        result = runner.invoke(app, ["gateway", "probe-watch", "ru-cidr", "--help"])
+        assert result.exit_code == 0
+        for name in ("install", "update"):
+            assert name in result.output
+
+    def test_config_help_full(self) -> None:
+        result = runner.invoke(app, ["gateway", "probe-watch", "config", "--help"])
+        assert result.exit_code == 0
+        for flag in ("--auto-lockdown", "--lockdown-allow", "--lockdown-ttl", "--apply"):
+            assert flag in result.output
+
+    def test_lock443_help_full(self) -> None:
+        result = runner.invoke(app, ["system", "ufw", "lock-443", "--help"])
+        assert result.exit_code == 0
+        for flag in ("--allow-from", "--ttl", "--reason", "--with-udp", "--status", "--unlock", "--apply"):
+            assert flag in result.output
+        assert "RU-PROBE-SUSPECT" in result.output
+
+    def test_rucidr_install_dry_run(self) -> None:
+        result = runner.invoke(app, ["gateway", "probe-watch", "ru-cidr", "install"])
+        assert result.exit_code == 0
+        assert "DRY-RUN" in result.output
+
+    def test_no_secrets_in_new_help(self) -> None:
+        for args in (
+            ["gateway", "probe-watch", "ru-cidr", "install", "--help"],
+            ["gateway", "probe-watch", "ru-cidr", "update", "--help"],
+            ["gateway", "probe-watch", "config", "--help"],
+            ["system", "ufw", "lock-443", "--help"],
+            ["system", "ufw", "harden", "--help"],
+        ):
+            out = runner.invoke(app, args).output.lower()
+            assert "password" not in out and "uuid" not in out
