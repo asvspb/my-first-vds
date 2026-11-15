@@ -10,7 +10,7 @@
 - **Статус:** **G2 APPROVED-with-notes 2026-11-16** (архитектор: M1 `watch`-мутация
   → collect читает снапшот+nft с in-process дельтой; M2 ADR-012 → WP-1; baseline
   hour_of_day-дефолт; T-02 absolute-floor; pcap-кламп; redaction shortId/PKey/PSK;
-  RandomizedDelaySec/MemoryMax — все внесены. Техлид: OQ-1..13 закрыты)
+  RandomizedDelaySec/MemoryMax — все внесены. Техлид: OQ-1..15 закрыты)
 - **Ревьюеры:** архитектор (границы модуля, схема данных, правила и корреляция);
   техлид/владелец (ценность, стоимость эксплуатации, приватность, retention,
   политика захвата пакетов).
@@ -232,7 +232,7 @@ TCP-443 TLS-payload при живом UDP-443 (§5.9). Без временных
 | probe-watch | **НЕ вызывать `watch`** (ревью M1: он мутирует снапшот+threat и съедает дельту окна таймера → может сорвать RU-SUSPECT-гистерезис). Collect читает `/var/lib/vds/probe-watch.json` + `nft -j list table inet vds_probe` и считает дельту in-process чистым `compute_delta(current, snapshot)` БЕЗ save_snapshot/update_threat; в bundle: вердикт последнего тика + поле `computed_by: logs-collect (read-only)` | один JSON |
 | snapshot | `/var/lib/vds/probe-watch.json` | история baseline/threat | один JSON |
 | ss | `ss -Htn state established '( sport = :443 )'`, `ss -s` | ESTAB/SYN-RECV/очереди | мгновенно |
-| nstat | `nstat -az` | TcpExt/Udp/Ip счётчики | один дамп |
+| nstat | `nstat -asz` (обязательно `-s`/`--no-update`: без него nstat СБРАСЫВАЕТ базовую линию в /tmp/.nstat.u0 и sample/collect обнуляют дельты друг друга; альтернатива — читать /proc/net/snmp+/proc/net/netstat напрямую) | TcpExt/Udp/Ip кумулятивные счётчики с бута | один дамп |
 | interface | `ip -s -j link` | rx/tx bytes/packets/drops/errors | один JSON |
 | systemd | `systemctl show -p …` по списку юнитов | ActiveState/NRestarts/Result | ≤20 юнитов |
 | resources | `df -P`, `/proc/loadavg`, `free -b`, `conntrack -C` (если есть) | диск/память/таблица | один снимок |
@@ -250,7 +250,11 @@ TCP-443 TLS-payload при живом UDP-443 (§5.9). Без временных
   TLS-ключей, содержимого `/etc/letsencrypt/archive`.
 - Конфиги — только `sha256` и whitelisted-поля (порт, домен, SNI, путь).
 - Строки журнала проходят санитайзер: `uuid4` → `<uuid>`, `password=…`/
-  `auth=…` → `<redacted>`, длинные base64/hex (≥32) → `<blob>`, share-ссылки
+  `auth=…` → `<redacted>`, share-ссылки; контекстные маркеры ключей
+  (`privateKey`, `PrivateKey =`, `PreSharedKey =`, `shortIds`, `password`) → <blob>;
+  жадный `hex/base64 ≥32 → <blob>` — ТОЛЬКО к сырому тексту raw/*.log, НЕ к
+  JSON-полям (sha256/checksums/rules_hash/ja3/ja4 — легальный hex; иначе
+  пост-сканер аварийно удаляет собственный бандл из-за манифеста!)
   (`vless://`, `hysteria2://`, `vpn://`) → `<link>`.
 - Санитайзер работает **всегда**; каждая замена считается и попадает в
   `coverage.redactions` + `[warning]`. Если после санитайзера пост-сканер
@@ -278,7 +282,7 @@ TCP-443 TLS-payload при живом UDP-443 (§5.9). Без временных
 Сбор **не блокирует** сервисы: только read-only команды; `journalctl` без
 `-f`; никаких рестартов/локов (кроме FileLock на запись артефактов). Сам
 сбор в сеть не ходит; единственное исключение — вызов существующего
-`probe-watch watch` (§5.2). Анализатор сеть не использует вообще.
+чтения `/var/lib/vds/probe-watch.json` + `nft -j` с in-process compute_delta (M1; вызов мутирующего `watch` ЗАПРЕЩЁН). Анализатор сеть не использует вообще.
 
 Отдельно фиксируется **активный lock-443**: UFW роняет SYN после nft-hook
 −140, поэтому `syn_valid=0` — это не «проб нет», а «момент ослепления».
@@ -299,7 +303,7 @@ TCP-443 TLS-payload при живом UDP-443 (§5.9). Без временных
   "window_s": 300,
   "nft": {"syn_bare": 812, "syn_valid": 37, "udp_443": 10422,
           "probers": 19, "probers_ru": 2, "per_element": true},
-  "ss": {"estab_443": 4, "synrecv_443": 0, "estab_51825": 0},
+  "ss": {"estab_443": 4, "synrecv_443": 0}, "awg": {"peers_fresh_lt180s": 1}  # estab_51825 НЕ СУЩЕСТВУЕТ: 51825=UDP, у WG-сокета состояние UNCONN; активность AWG = свежесть latest-handshakes (<180с)
   "net": {"eth0": {"rx_b": 81234567, "tx_b": 90123456,
                     "rx_d": 0, "tx_d": 0, "rx_e": 0, "tx_e": 0}},
   "nstat": {"TcpRetransSegs": 12, "TcpOutSegs": 98000,
@@ -435,14 +439,14 @@ Severity — если finding подтверждён; итоговая увер�
 
 | ID | Правило | Триггер (static) | Baseline-режим | Sev | Смысл |
 |---|---|---|---|---|---|
-| T-01 | `tcp443_data_blackhole` | `syn_validΔ>0`, `estab_443=0` 3 сэмпла подряд, `TcpExtTCPTimeouts`/retrans↑ | estab↓>90% от медианы | high | SYN проходит, данные душатся (§5.9) |
+| T-01 | `tcp443_data_blackhole` | `syn_validΔ>0` И (доля `:443`-сокетов с retrans/Send-Q>0/`timer:(on,)` ≥60%) 3 сэмпла подряд (15 мин), `TcpExtTCPTimeouts`/`TcpRetransSegs`↑; `bytes_acked≈0` у новых (ревью G2-2: при data-phase blackhole сокеты ВИСЯТ ESTABLISHED-зомби, а не исчезают — estab=0 физически недостижим сразу после ClientHello) | baseline estab/retrans | high | SYN проходит, данные душатся (§5.9) |
 | T-02 | `udp443_collapse` | `udp_443Δ < 20%` медианы 3 из 4 сэмплов (20 мин) при active hy2 И **медиана ≥ absolute-floor** (при median≈0 правило неприменимо — static-skip, ревью G2) | устойчивое падение | medium | UDP-путь деградировал/заблокирован |
 | T-03 | `ru_active_probe` | вердикт `RU-PROBE-SUSPECT` из probe-watch | — | high | активное зондирование из РФ |
 | T-04 | `mass_scan` | вердикт `PROBE-BURST` | — | info | масс-сканеры, не ТСПУ |
 | T-05 | `hy2_auth_bruteforce` | ≥20 `auth_fail`/10 мин с одного src | z>4 | medium | перебор пароля/скан |
 | T-06 | `ufw_block_flood` | ≥50 BLOCK/10 мин один src+DPT | z>4 | low | сканер/шум |
 | T-07 | `pcap_probe_series` | ≥6 ClientHello/10 с с одного src на 443 **или** 8-пробная серия (443) | — | high | профиль активного зондирования (И40) |
-| T-08 | `pcap_garbage_lengths` | CH len `<209`/`>214` ≥3 | — | medium | артефакт проб (И41) |
+| T-08 | `pcap_garbage_probe` | первый PSH-байт `!= 0x16` (не-TLS мусор) ИЛИ CH len `< 180` (примитивный сканер) ≥3 | — | medium | артефакт проб (И41; ВАЖНО: нормальный ClientHello 517–1300Б — <209/>214 давало 100% FP на браузерах с PQ-Kyber) |
 | T-09 | `unit_instability` | `NRestarts↑`, `failed`, OOM | — | high | локальный сбой, не цензор |
 | T-10 | `resource_pressure` | conntrack>80%, disk>90%, fd>80% | — | high | локальный риск |
 | T-11 | `cert_expiry` | days_left <7 | — | medium | сломается сам |
@@ -544,7 +548,7 @@ T-16 при cold-start baseline не срабатывает (все шаблон
     {"id": "…", "rule": "T-01", "severity": "high", "confidence": "medium",
      "window": ["...", "..."],
      "evidence": [{"source": "nft", "metric": "syn_valid", "value": 240},
-                   {"source": "ss", "metric": "estab_443", "value": 0}],
+                   {"source": "ss", "metric": "estab443_zombie_pct", "value": 80}],
      "hypothesis": "TCP-443 data-phase blackhole",
      "alternatives": ["upstream"], "action": "не рестартить; проверить Hy2"}
   ],
@@ -559,7 +563,7 @@ T-16 при cold-start baseline не срабатывает (все шаблон
 # Инцидент 2026-11-16 12:15 · bundle incident-20261116 (24h)
 
 ## Наблюдали
-- 11:58–12:08 syn_valid Δ=240, estab_443=0 (3 сэмпла), TCPTimeouts +7
+- 11:58–12:08 syn_valid Δ=240, доля зомби-сокетов :443 (retrans/Send-Q>0) = 80% (3 сэмпла), TCPTimeouts +7
 - probe-watch: RU-PROBE-SUSPECT (12:00), threat=elevated
 - ресурсы/юниты: без изменений
 
@@ -611,7 +615,9 @@ MD-отчёт (`REPORT.md`) — тот же контент по-русски: «
 - Фильтр: только 443/tcp, SYN + TLS-handshake-записи; исключить серверный IP,
   whitelist и private ranges:
   `tcp port 443 and (tcp[tcpflags] & tcp-syn != 0 or tcp[((tcp[12] & 0xf0) >> 2):2] = 0x1603) and not host <own>`
-- `-s 1024` (хватает ClientHello; прикладной payload обрезается).
+- `-s 1600` (полный MTU: PQ-TLS ClientHello Chrome 130+ ~1100–1300Б, `-s 1024` резал его).
+- BPF обязан начинаться с `ip and` (IPv4-only v1): classic BPF `tcp[n]` в libpcap НЕ РАБОТАЕТ для IPv6 (protochain not supported) — на asv2 (/48) tcpdump упадёт.
+- Несколько собственных IP → `and not (host A or host B or …)`, не цепочка `not host`.
 - Путь — `/var/lib/vds/forensics/captures/` (не `/var/tmp`), 0700/0600.
 - `--metadata-only` (default): после разбора pcap удаляется, остаются
   `pcap-summary.json` и хэши.
@@ -698,7 +704,7 @@ vds logs explain                   # карта покрытия/слепоты 
 [logs] coverage: nft ok · kernel ok · ss ok · pcap missing (no tshark) · geo ok
 [logs] baseline: high (14d)
 [logs] T-01 tcp443_data_blackhole  high/medium   11:58–12:08
-[logs]   evidence: nft syn_valid Δ=240; ss estab_443=0 (3 samples); nstat timeouts +7
+[logs]   evidence: nft syn_valid Δ=240; ss :443 zombie-sockets (retrans/Send-Q>0) = 80% (3 samples); nstat timeouts +7
 [logs] verdict: effect_only (medium) — вероятнее data-phase DPI/апстрим
 [logs] action: не рестартить xray; проверить Hy2; повторить через 30 мин
 ```
@@ -709,7 +715,7 @@ vds logs explain                   # карта покрытия/слепоты 
 
 | Куда | Что |
 |---|---|
-| `probe-watch` | source of truth для вердиктов; `collect` вызывает `watch --json`, анализатор не пересчитывает пороги |
+| `probe-watch` | source of truth для вердиктов; collect читает снапшот+nft с in-process дельтой (M1), анализатор не пересчитывает пороги |
 | `probe-response` | анализатор **не** вызывает lock-443; рекомендация в отчёте, исполнение — оператор/авто-лок |
 | `ufw` | `coverage` фиксирует активный лок (он ослепляет `syn_valid` — §9.A probe-response) |
 | `gateway healthcheck` | пересечение по T-09/T-10: healthcheck чинит, logs объясняет |
@@ -860,7 +866,7 @@ WP-5 не меняет код runtime.
 | Ложные тревоги на шумном скане | высокая | недоверие к отчёту | T-04 = info; high только ≥3 источников; абсолютные минимумы |
 | «Единичный счётчик» выдан за ТСПУ | средняя | неверные решения | корреляция + `alternatives` + `coverage` |
 | Диск забит телеметрией | средняя | падение сервера | 5-мин сэмпл ~1 MB/сутки, 7 дней, disk-cap, T-10 |
-| Pcap с payload/приватностью | низкая | утечка | `-s 1024`, фильтр handshake, metadata-only, TTL 7d, не в git |
+| Pcap с payload/приватностью | низкая | утечка | `-s 1600`, IPv4-фильтр handshake, metadata-only, TTL 7d, не в git |
 | Захват влияет на сервис | низкая | CPU/диск | Nice/ionice, лимиты, авто-стоп, только по команде |
 | tshark отсутствует | высокая | нет JA3/JA4 | degraded-режим честно; stdlib L3/L4 + CH len |
 | Парсер отстаёт от формата journal/nstat | средняя | пропуски | фикстуры по версиям, `partial` в coverage |
