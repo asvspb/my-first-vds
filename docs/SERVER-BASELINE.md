@@ -290,6 +290,25 @@ geo: unknown).
 asv2 на Hysteria2 (asv1, port hopping + salamander) / VLESS+WS :2053
 (Cloudflare) / транзитный RU-relay (когда развёрнут).
 
+### 5.13 Съём эталонного дампа пробы ТСПУ (при RU-PROBE-SUSPECT)
+
+При вердикте RU-PROBE-SUSPECT можно снять внутренности проб (Cipher Suites,
+SNI, TLS-отпечаток бота цензора) кольцевым захватом без мусора — только SYN и
+первые пакеты с данными на 443, свой IP исключить, ротация 5×10 МБ:
+
+```bash
+tcpdump -i any -nn 'tcp port 443 and (tcp[tcpflags] & (tcp-syn|tcp-push) != 0) \
+  and not src host <СВОЙ_ДОМАШНИЙ_IP>' -s 512 -C 10 -W 5 -w /tmp/tspu_probes.pcap
+# разбор: TLS-отпечаток (JA3/JA4) сканера:
+tshark -r /tmp/tspu_probes.pcap -Y "tls.handshake.type == 1" -V
+```
+
+Интерпретация: одиночный ClientHello vs серия из 8 специфических проб
+(механика J3/TSPU active probing, схема ByeByeVPN — см. И40 банка идей);
+длины мусорных проб <209 / >214 байт (эталон GFW Report / net4people — И41).
+Дамп содержит метаданные соединений — в git не класть, локально, стереть
+после разбора.
+
 ### 5.10 Матрица рисков правил знаний
 
 | Правило | Главный риск при нарушении |
