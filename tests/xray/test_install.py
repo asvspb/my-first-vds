@@ -72,7 +72,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
     def _run_list(args: list[str], timeout: int = 10) -> ShellResult:
         if args[1:] == ["x25519"]:
             return ShellResult(
-                stdout="PrivateKey: PRIVKEYABC\nPassword: PUBKEYXYZ\nHash32: HASHABC\n",
+                stdout="PrivateKey: FIXTURE_PW_X25519_PRIVKEY\nPassword: FIXTURE_PW_X25519_PUBKEY\nHash32: FIXTURE_PW_X25519_HASH\n",
                 stderr="",
                 returncode=0,
             )
@@ -82,12 +82,12 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
 
     # Формат 26.x+: Password = публичный ключ; Hash32 не должен совпасть
     private_key, public_key = install._gen_x25519()
-    assert (private_key, public_key) == ("PRIVKEYABC", "PUBKEYXYZ")
+    assert (private_key, public_key) == ("FIXTURE_PW_X25519_PRIVKEY", "FIXTURE_PW_X25519_PUBKEY")
 
     def _run_list_old(args: list[str], timeout: int = 10) -> ShellResult:
         if args[1:] == ["x25519"]:
             return ShellResult(
-                stdout="Private key: PRIVKEYABC\nPublic key: PUBKEYXYZ\n",
+                stdout="Private key: FIXTURE_PW_X25519_PRIVKEY\nPublic key: FIXTURE_PW_X25519_PUBKEY\n",
                 stderr="",
                 returncode=0,
             )
@@ -97,13 +97,13 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
 
     # Формат ≤25.x: Private key/Public key
     private_key, public_key = install._gen_x25519()
-    assert (private_key, public_key) == ("PRIVKEYABC", "PUBKEYXYZ")
+    assert (private_key, public_key) == ("FIXTURE_PW_X25519_PRIVKEY", "FIXTURE_PW_X25519_PUBKEY")
 
     def _run_list_hash_trap(args: list[str], timeout: int = 10) -> ShellResult:
         # ловушка: Hash32 идёт первым и имеет тот же алфавит
         if args[1:] == ["x25519"]:
             return ShellResult(
-                stdout="Hash32: HASHSHOULDMATCHNOT\nPrivateKey: PRIVKEYABC\nPassword: PUBKEYXYZ\n",
+                stdout="Hash32: FIXTURE_PW_X25519_HASH32\nPrivateKey: FIXTURE_PW_X25519_PRIVKEY\nPassword: FIXTURE_PW_X25519_PUBKEY\n",
                 stderr="",
                 returncode=0,
             )
@@ -111,7 +111,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
 
     monkeypatch.setattr(install, "run_list", _run_list_hash_trap)
     private_key, public_key = install._gen_x25519()
-    assert (private_key, public_key) == ("PRIVKEYABC", "PUBKEYXYZ")
+    assert (private_key, public_key) == ("FIXTURE_PW_X25519_PRIVKEY", "FIXTURE_PW_X25519_PUBKEY")
 
     test_env = Env(root=tmp_path)
 
@@ -214,7 +214,7 @@ class TestFullInstall:
         config = json.loads(install.XRAY_CONFIG_PATH.read_text(encoding="utf-8"))
         stream = config["inbounds"][0]["streamSettings"]
         assert stream["security"] == "reality"
-        assert stream["realitySettings"]["privateKey"] == "PRIVKEYABC"
+        assert stream["realitySettings"]["privateKey"] == "FIXTURE_PW_X25519_PRIVKEY"
         short_ids = stream["realitySettings"]["shortIds"]
         assert len(short_ids) == 1 and len(short_ids[0]) == 8  # hex shortId
 
@@ -226,7 +226,7 @@ class TestFullInstall:
 
         meta = load_state(state_path).protocols["xray"]
         assert meta["installed"] is True
-        assert meta["public_key"] == "PUBKEYXYZ"
+        assert meta["public_key"] == "FIXTURE_PW_X25519_PUBKEY"
         assert meta["sni"] == "www.google.com"
         assert "private_key" not in meta
 

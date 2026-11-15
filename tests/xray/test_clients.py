@@ -11,7 +11,7 @@ from src.gateway.store import ClientProfile, GatewayState, StoreError, save_stat
 from src.xray.config import render_config, XrayConfigParams
 
 UUID = "11111111-2222-3333-4444-555555555555"
-PBK = "PUBKEYXYZ"
+PBK = "FIXTURE_PW_X25519_PUBKEY"
 SID = "abcd1234"
 SNI = "www.google.com"
 

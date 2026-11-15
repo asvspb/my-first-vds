@@ -10,7 +10,7 @@ from src.gateway.store import GatewayState
 from src.xray.config import XrayConfigParams, render_config
 
 UUID = "11111111-2222-3333-4444-555555555555"
-PRIVATE_KEY = "PRIVKEYABC"
+PRIVATE_KEY = "FIXTURE_PW_X25519_PRIVKEY"
 
 
 class TestMaskSecrets:
