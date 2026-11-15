@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# commit-msg hook: docsync sync-проверка индекса (SPEC-20261116-doc-sync, WP-4).
+# Режим warn/block читается из docs/doc-sync.json самим docsync.py:
+# warn — нарушения печатаются, exit 0; block — честный exit 1.
+set -u
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "[docsync] [warning] python3 не найден — commit-msg проверка пропущена"
+    exit 0
+fi
+
+repo="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$repo" ] || [ ! -f "$repo/tools/docsync.py" ]; then
+    echo "[docsync] [warning] tools/docsync.py не найден — проверка пропущена"
+    exit 0
+fi
+
+# exit-код docsync проксируется (0 ok / 1 нарушения / 2 ошибка инструмента)
+exec python3 "$repo/tools/docsync.py" --repo "$repo" check --staged --message "$1"

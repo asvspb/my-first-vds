@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# pre-push hook: полный docsync audit диапазона (SPEC-20261116-doc-sync, WP-4).
+# Страховка от `git commit --no-verify`: коммиты диапазона без доков и без
+# трейлера Docs: none → fail. Нет origin/main (fresh clone / офлайн) —
+# docsync сам печатает warning и пропускает range-часть, хук не ломается.
+# Режим warn/block — в docs/doc-sync.json; audit --strict (G4/G6) блокирует всегда.
+set -u
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "[docsync] [warning] python3 не найден — pre-push audit пропущен"
+    exit 0
+fi
+
+repo="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$repo" ] || [ ! -f "$repo/tools/docsync.py" ]; then
+    echo "[docsync] [warning] tools/docsync.py не найден — audit пропущен"
+    exit 0
+fi
+
+# exit-код docsync проксируется; push прерывается при нарушениях (mode=block)
+exec python3 "$repo/tools/docsync.py" --repo "$repo" audit --range origin/main..HEAD

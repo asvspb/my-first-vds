@@ -8,6 +8,7 @@
 - **SPEC:** —
 - **Этап:** idle | intake | ready | spec | build | verify | docs | close
 - **Владелец гейта:** —
+- **Doc audit:** green | debt (`python3 tools/docsync.py audit --strict`; долг — `docsync debt`)
 
 ## Work packages
 | WP | Кодер | Статус | Отчёт | Блокер |

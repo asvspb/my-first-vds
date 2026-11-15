@@ -12,6 +12,11 @@ argparse/fnmatch), без сети, root, Docker и импорта кода пр
     debt [--since Nd]                          список коммитов с «Docs: none»
 
 Exit codes: 0 — ok (warnings допустимы); 1 — нарушения; 2 — ошибка конфига/инструмента/git.
+
+Режим `mode` в реестре (SPEC §11): `warn` — нарушения печатаются, но check/audit
+выходят 0 (хуки не блокируют); `block` — честный exit 1. `audit --strict`
+(G4/G6) блокирует всегда, независимо от mode. JSON-payload при этом не меняется:
+status отражает реальность, exit-код — политику.
 """
 
 from __future__ import annotations
@@ -85,6 +90,10 @@ class Registry:
             self.escape: dict = data["escape"]
         except KeyError as exc:
             raise DocsyncError(f"doc-sync.json: отсутствует секция {exc}") from exc
+        mode = data.get("mode", "warn")
+        if mode not in ("warn", "block"):
+            raise DocsyncError(f"doc-sync.json: mode должен быть 'warn' или 'block', получено: {mode!r}")
+        self.mode: str = mode
         self.repo = repo
 
     @classmethod
@@ -215,7 +224,8 @@ def cmd_check_staged(repo: Path, registry: Registry, message_file: Optional[Path
         missing = []
     elif missing and escape_present and not escape_valid:
         checks.append({"check": "escape", "status": "fail", "details": [escape_reason or "некорректный escape"]})
-        return finish(as_json, "fail", changed, required, missing, warnings, checks)
+        return finish(as_json, "fail", changed, required, missing, warnings, checks,
+                      warn_mode=registry.mode == "warn")
 
     # quick_checks по staged-докам: ссылки + запрещённые счётчики тестов
     checks.extend(quick_checks(repo, registry, [f for f in changed if f.endswith(".md")]))
@@ -225,6 +235,7 @@ def cmd_check_staged(repo: Path, registry: Registry, message_file: Optional[Path
         as_json,
         "fail" if has_fail else ("warn" if warnings else "ok"),
         changed, required, missing, warnings, checks,
+        warn_mode=registry.mode == "warn",
     )
 
 
@@ -250,7 +261,7 @@ def cmd_check_range_impl(repo: Path, registry: Registry, rng: str, as_json: bool
             errors.append(f"{sha[:8]}: не хватает доков: {', '.join(missing)}")
     checks = [{"check": "range-sync", "status": "fail" if errors else "pass", "details": errors}]
     return finish(as_json, "fail" if errors else ("warn" if warnings else "ok"),
-                  [], [], [], warnings, checks)
+                  [], [], [], warnings, checks, warn_mode=registry.mode == "warn")
 
 
 # ---------------------------------------------------------------------------
@@ -602,8 +613,10 @@ def cmd_audit(repo: Path, registry: Registry, strict: bool, rng: Optional[str], 
             checks.append({"check": "range-sync", "status": "fail" if errors else "pass", "details": errors})
 
     has_fail = any(c["status"] == "fail" for c in checks)
+    # audit --strict (G4/G6, SPEC §9) блокирует всегда, даже в mode=warn.
     return finish(as_json, "fail" if has_fail else ("warn" if warnings else "ok"),
-                  [], [], [], warnings, checks)
+                  [], [], [], warnings, checks,
+                  warn_mode=(registry.mode == "warn" and not strict))
 
 
 # ---------------------------------------------------------------------------
@@ -650,7 +663,8 @@ def cmd_debt(repo: Path, since: Optional[str]) -> int:
 # ---------------------------------------------------------------------------
 
 def finish(as_json: bool, status: str, changed: list[str], required: list[str],
-           missing: list[str], warnings: list[str], checks: list[dict]) -> int:
+           missing: list[str], warnings: list[str], checks: list[dict],
+           warn_mode: bool = False) -> int:
     payload = {
         "status": status,
         "changed": changed,
@@ -664,6 +678,12 @@ def finish(as_json: bool, status: str, changed: list[str], required: list[str],
     else:
         emit_text(payload)
     if status == "fail":
+        if warn_mode:
+            # mode=warn (SPEC §11): нарушения видны, но не блокируют хуки.
+            if not as_json:
+                print(f"{TAG} warn-mode: нарушения не блокируют (mode=warn в docs/doc-sync.json); "
+                      "audit --strict блокирует всегда")
+            return EXIT_OK
         return EXIT_FAIL
     return EXIT_OK
 

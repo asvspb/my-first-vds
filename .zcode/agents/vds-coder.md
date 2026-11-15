@@ -55,6 +55,8 @@ injectAgentsMd: true
 - `python -m compileall -q src` → exit 0.
 - `pytest -q` → exit 0 (если `tests/` нет — явно напиши «тестов нет» и почему это
   приемлемо для данного WP; иначе создай минимальный тест, если он в DoD).
+- `python3 tools/docsync.py audit --json` → вывод приложить к отчёту WP (в `mode: warn`
+  exit может быть 0 при status=fail — приводи как есть, не подгоняй).
 - `git status --short` → verbatim, сверить с WP.
 - `git diff --stat` → verbatim.
 - Секреты: проверь, что не попали в код/лог/пример конфига.

@@ -52,17 +52,39 @@
 | Гейт | Условие прохода | Кто закрывает |
 |---|---|---|
 | **G0 Intake** | IDEA заполнена, приоритет и границы заданы, пользователь подтвердил | owner + пользователь |
-| **G1 Ready** | REQ: у каждого требования есть тестируемый AC; нет открытых блокирующих вопросов | analyst |
-| **G2 Spec** | SPEC: файлы, интерфейсы, тест-план, WP с DoD, риски; ADR для необратимых решений | architect |
-| **G3 Build** | Для каждого WP — отчёт кодера с verbatim pre-flight; отклонений нет или раскрыты | coder → architect |
-| **G4 Verify** | TEST-REPORT = PASS: все AC проверены, регрессии нет, доказательства приложены | tester |
+| **G1 Ready** | REQ: у каждого требования есть тестируемый AC; § Doc impact заполнен; нет открытых блокирующих вопросов | analyst |
+| **G2 Spec** | SPEC: файлы, интерфейсы, тест-план, WP с DoD, риски; § Doc delta заполнен; ADR для необратимых решений | architect |
+| **G3 Build** | Для каждого WP — отчёт кодера с verbatim pre-flight и `docsync audit --json`; mapped-доки обновлены или `Docs: none` с долгом; отклонений нет или раскрыты | coder → architect |
+| **G4 Verify** | TEST-REPORT = PASS: все AC проверены, регрессии нет, доказательства приложены; `docsync audit --strict` зелёный | tester |
 | **G5 Docs** | DOC-REPORT: затронутые документы обновлены, ссылки целы, команды проверены | docs |
-| **G6 Close** | STATUS обновлён, traceability-матрица заполнена, коммит/PR создан | orchestrator |
+| **G6 Close** | STATUS обновлён (поле Doc audit), traceability-матрица заполнена, `docsync audit --strict` зелёный, `docsync debt` пуст или заведён в TECHDEBT, коммит/PR создан | orchestrator |
 
 **Возвраты:** FAIL на G4 → `vds-debugger` → новая правка → повтор G3/G4 (макс. 2 цикла,
 дальше эскалация к архитектору: возможно, дефект в SPEC). Неполный REQ на G1 →
 возврат аналитику. Архитектурная проблема, обнаруженная при кодинге → стоп, возврат
 архитектору, не «лечим на ходу».
+
+### Docsync — документация как часть гейтов (SPEC-20261116-doc-sync §9)
+
+Документация проверяется инструментом `tools/docsync.py` (реестр
+`docs/doc-sync.json`). Установка хуков на свежем клоне — обязательный шаг setup:
+
+```bash
+bash tools/install-hooks.sh   # commit-msg + pre-push; откат: git config --unset core.hooksPath
+```
+
+| Гейт | Docsync-критерий | Кто |
+|---|---|---|
+| G1 Ready | REQ содержит § Doc impact: какие живые доки затронет функция, какие снимки создать | аналитик |
+| G2 Spec | SPEC содержит § Doc delta: таблица «документ → изменение → WP» | архитектор |
+| G3 Build | DoD каждого WP: `docsync audit` зелёной или `Docs: none` с долгом; отчёт кодера содержит `docsync audit --json` | кодер |
+| G4 Verify | `docsync audit --strict` зелёный + содержательность doc-diff (не только факт касания) | тестировщик |
+| G5 Docs | Полный sync-pass: свежесть, cross-doc противоречия, ссылки | докуменатор |
+| G6 Close | STATUS обновлён (Doc audit), `audit --strict` зелёный, `docsync debt` пуст или заведён в TECHDEBT | оркестратор |
+
+Режим `mode` (`warn`/`block`) в реестре: `warn` — хуки печатают нарушения, но не
+блокируют; `block` — блокируют. Переход в block — правкой реестра (коммит).
+`audit --strict` блокирует всегда, независимо от mode.
 
 ---
 
@@ -80,6 +102,8 @@
 | DEBUG-REPORT | `templates/DEBUG-REPORT.md` | debugger | `docs/team/reports/DEBUG-<slug>.md` |
 | DOC-REPORT | — (в отчёте агента) | docs | `docs/team/reports/DOC-<slug>.md` |
 | STATUS | `templates/STATUS.md` | orchestrator | `docs/team/STATUS.md` |
+| Docsync-реестр | — (JSON, SPEC-20261116-doc-sync) | docs (один владелец) | `docs/doc-sync.json` |
+| Docsync-аудит | — (вывод `docsync audit --json`) | coder / tester | в отчёте WP (G3) и TEST-REPORT (G4) |
 
 **Traceability:** в SPEC — таблица «REQ → WP → файлы → тесты»; в STATUS — «IDEA → REQ →
 SPEC → коммиты → TEST/DOC».

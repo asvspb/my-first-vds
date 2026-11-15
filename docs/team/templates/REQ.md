@@ -53,5 +53,18 @@
 ## 8. Трассируемость
 IDEA → REQ: <ссылки>.
 
+## 9. Doc impact (обязателен до G1)
+
+Какие живые документы затронет функция; какие снимки создать.
+Реестр классов и правил — `docs/doc-sync.json` (SPEC-20261116-doc-sync).
+
+| Документ (класс) | Изменение |
+|---|---|
+| `README.md` (living) | ... |
+| `docs/VPN-PROTOCOLS.md` (living) | ... |
+| `docs/team/reports/...` (snapshot) | создать |
+
+Подсказка: `python3 tools/docsync.py explain <path>` — какие доки требует изменение.
+
 ## Следующий шаг
 → `vds-architect`: составить SPEC.

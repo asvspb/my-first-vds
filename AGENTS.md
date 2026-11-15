@@ -118,7 +118,32 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 `TECHDEBT.md` — бэклог. При изменении поведения обновлять соответствующий документ
 (новый протокол/транспорт — ADR + VPN-PROTOCOLS + README + AGENTS).
 
-## 9. Роли
+## 9. Документация — часть изменения
+
+Код и его документация живут в одном коммите (SPEC-20261116-doc-sync, инструмент
+`tools/docsync.py`, реестр `docs/doc-sync.json`):
+
+1. **Коммит = код + тесты + mapped-доки.** Изменение наблюдаемой поверхности
+   (CLI, поведение, порты, systemd, state, роли, версия) тянет правки всех живых
+   доков по правилам реестра. Какие доки требует путь:
+   `python3 tools/docsync.py explain <path>`.
+2. **Единственный обход** — трейлер в сообщении коммита:
+   `Docs: none — <причина> (TECHDEBT Pxx)`; Pxx обязан существовать в
+   `TECHDEBT.md` (фиктивный — fail). Список долгов:
+   `python3 tools/docsync.py debt`.
+3. **`git commit --no-verify`** — аварийный выход; его ловит `pre-push`
+   (`docsync audit --range origin/main..HEAD`) и G4/G6 (`audit --strict`).
+4. **Хуки ставятся на каждом клоне**: `bash tools/install-hooks.sh`
+   (commit-msg + pre-push; откат: `git config --unset core.hooksPath`).
+5. **Режим warn/block** — поле `mode` в `docs/doc-sync.json`: `warn` — нарушения
+   печатаются, но не блокируют; `block` — честный exit 1. Переход в block —
+   только правкой реестра (коммит), не env-переменной. `audit --strict`
+   (G4/G6) блокирует всегда.
+6. **Docsync debt** — `Docs: none`-коммиты видны в `docsync debt`; G6 не
+   закрывается с непогашенным долгом (закрытие — правка доков или строка в
+   TECHDEBT).
+
+## 10. Роли
 
 `vds-owner` · `vds-analyst` · `vds-architect` · `vds-coder` · `vds-debugger` ·
 `vds-tester` · `vds-docs` · `vds-orchestrator` · метагент `vds-agent-smith` · скаут

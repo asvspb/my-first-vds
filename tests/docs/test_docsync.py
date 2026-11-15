@@ -41,6 +41,9 @@ ds = _load_docsync()
 
 MINI_REGISTRY = {
     "version": 1,
+    # сценарии §12.2 проверяют блокирующую семантику (mode=block);
+    # warn-режим тестируется отдельно (WP-4).
+    "mode": "block",
     "classes": {
         "living": ["README.md", "AGENTS.md", "TECHDEBT.md", "docs/SERVER-BASELINE.md"],
         "status": ["docs/team/STATUS.md"],
@@ -601,3 +604,158 @@ def test_explain_known_and_unknown_path(tmp_path: Path) -> None:
     unknown = run_docsync(repo, ["explain", "src/core/logger.py"])
     assert unknown.returncode == 0
     assert "не требуется" in unknown.stdout
+
+
+# ---------------------------------------------------------------------------
+# WP-4: режим mode=warn | block (SPEC §11)
+# ---------------------------------------------------------------------------
+
+def set_mode(repo: Path, mode: str) -> None:
+    reg = dict(MINI_REGISTRY)
+    reg["mode"] = mode
+    write(repo, "docs/doc-sync.json", json.dumps(reg, indent=2))
+    git_cmd(repo, ["add", "docs/doc-sync.json"])
+    dirty = git_cmd(repo, ["status", "--porcelain", "--untracked-files=no"]).strip()
+    if dirty:  # mode совпадает с текущим — коммитить нечего
+        git_cmd(repo, ["commit", "-q", "-m", "chore: mode"])
+
+
+def test_mode_warn_check_staged_exits_zero(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    set_mode(repo, "warn")
+    stage(repo, "src/system/ufw.py", "# ufw\n")
+    msg = commit_msg_file(tmp_path, "feat(ufw): new profile")
+    proc = run_docsync(repo, ["check", "--staged", "--message", str(msg)])
+    # нарушения видны (missing печатаются), но не блокируют
+    assert proc.returncode == 0, proc.stdout
+    assert "missing" in proc.stdout and "README.md" in proc.stdout
+    assert "warn-mode" in proc.stdout
+
+
+def test_mode_warn_json_status_fail_exit_zero(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    set_mode(repo, "warn")
+    stage(repo, "src/system/ufw.py", "# ufw\n")
+    msg = commit_msg_file(tmp_path, "feat(ufw): new profile")
+    proc = run_docsync(repo, ["check", "--staged", "--message", str(msg), "--json"])
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    # JSON-контракт не меняется: status отражает реальность, exit — политику
+    assert payload["status"] == "fail"
+    assert set(payload) == {"status", "changed", "required", "missing", "warnings", "checks"}
+
+
+def test_mode_block_check_staged_exits_one(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    set_mode(repo, "block")
+    stage(repo, "src/system/ufw.py", "# ufw\n")
+    msg = commit_msg_file(tmp_path, "feat(ufw): new profile")
+    proc = run_docsync(repo, ["check", "--staged", "--message", str(msg)])
+    assert proc.returncode == 1
+
+
+def test_mode_warn_audit_suppressed_but_strict_blocks(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    set_mode(repo, "warn")
+    # детерминированное нарушение audit: запрещённый счётчик в living-доке
+    write(repo, "README.md", MINI_README + "\nПрогон: 843 passed\n")
+    git_cmd(repo, ["add", "-A"])
+    git_cmd(repo, ["commit", "-q", "-m", "docs: count"])
+    soft = run_docsync(repo, ["audit"])
+    assert soft.returncode == 0
+    assert "843 passed" in soft.stdout and "warn-mode" in soft.stdout
+    strict = run_docsync(repo, ["audit", "--strict"])
+    assert strict.returncode == 1
+    assert "843 passed" in strict.stdout
+
+
+def test_mode_invalid_exit_2(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    set_mode(repo, "maybe")
+    proc = run_docsync(repo, ["audit"])
+    assert proc.returncode == 2
+    assert "mode" in proc.stdout + proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# §12.2 сценарий 6 (WP-4): --no-verify коммит без доков → pre-push fail
+# ---------------------------------------------------------------------------
+
+def test_scenario_6_no_verify_caught_by_pre_push(tmp_path: Path) -> None:
+    import shutil
+
+    repo = make_repo(tmp_path)  # mode=block
+    # настоящие хуки из репозитория
+    (repo / ".githooks").mkdir()
+    for hook in ("commit-msg", "pre-push"):
+        shutil.copy2(REPO / ".githooks" / hook, repo / ".githooks" / hook)
+        (repo / ".githooks" / hook).chmod(0o755)
+    (repo / "tools").mkdir(exist_ok=True)
+    shutil.copy2(DOCSYNC, repo / "tools" / "docsync.py")
+    git_cmd(repo, ["add", "-A"])
+    git_cmd(repo, ["commit", "-q", "-m", "chore: hooks"])
+    git_cmd(repo, ["config", "core.hooksPath", ".githooks"])
+
+    # локальный «origin» (bare), чтобы origin/main существовал
+    origin = tmp_path / "origin.git"
+    git_cmd(tmp_path, ["init", "-q", "--bare", str(origin)])
+    git_cmd(repo, ["remote", "add", "origin", str(origin)])
+    git_cmd(repo, ["push", "-q", "origin", "HEAD:refs/heads/main"])
+    git_cmd(repo, ["fetch", "-q", "origin"])
+    branch = git_cmd(repo, ["rev-parse", "--abbrev-ref", "HEAD"]).strip()
+
+    # (a) честный коммит без доков блокируется commit-msg
+    stage(repo, "src/system/ufw.py", "# ufw\n")
+    blocked = subprocess.run(
+        ["git", "-C", str(repo), "commit", "-q", "-m", "feat(ufw): no docs"],
+        capture_output=True, text=True,
+    )
+    assert blocked.returncode != 0
+    assert "docsync" in (blocked.stdout + blocked.stderr)
+    assert "missing" in (blocked.stdout + blocked.stderr)
+
+    # (b) тот же коммит с --no-verify проходит, но push ловит pre-push
+    slipped = subprocess.run(
+        ["git", "-C", str(repo), "commit", "-q", "--no-verify", "-m", "feat(ufw): no docs"],
+        capture_output=True, text=True,
+    )
+    assert slipped.returncode == 0
+    push = subprocess.run(
+        ["git", "-C", str(repo), "push", "origin", f"{branch}:refs/heads/main"],
+        capture_output=True, text=True,
+    )
+    assert push.returncode != 0
+    combined = push.stdout + push.stderr
+    assert "docsync" in combined and "не хватает доков" in combined
+
+
+def test_scenario_6_warn_mode_push_not_blocked(tmp_path: Path) -> None:
+    """В mode=warn тот же --no-verify путь: нарушения печатаются, push проходит."""
+    import shutil
+
+    repo = make_repo(tmp_path)
+    set_mode(repo, "warn")
+    (repo / ".githooks").mkdir()
+    for hook in ("commit-msg", "pre-push"):
+        shutil.copy2(REPO / ".githooks" / hook, repo / ".githooks" / hook)
+        (repo / ".githooks" / hook).chmod(0o755)
+    (repo / "tools").mkdir(exist_ok=True)
+    shutil.copy2(DOCSYNC, repo / "tools" / "docsync.py")
+    git_cmd(repo, ["add", "-A"])
+    git_cmd(repo, ["commit", "-q", "-m", "chore: hooks"])
+    git_cmd(repo, ["config", "core.hooksPath", ".githooks"])
+
+    origin = tmp_path / "origin.git"
+    git_cmd(tmp_path, ["init", "-q", "--bare", str(origin)])
+    git_cmd(repo, ["remote", "add", "origin", str(origin)])
+    git_cmd(repo, ["push", "-q", "origin", "HEAD:refs/heads/main"])
+    git_cmd(repo, ["fetch", "-q", "origin"])
+
+    stage(repo, "src/system/ufw.py", "# ufw\n")
+    git_cmd(repo, ["commit", "-q", "-m", "feat(ufw): no docs"])  # commit-msg: warn → exit 0
+    push = subprocess.run(
+        ["git", "-C", str(repo), "push", "origin", "HEAD:refs/heads/main"],
+        capture_output=True, text=True,
+    )
+    assert push.returncode == 0, push.stdout + push.stderr
+    assert "warn-mode" in push.stdout + push.stderr

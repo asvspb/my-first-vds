@@ -357,6 +357,32 @@ journalctl -u vds-watchdog -n 20
 
 Для запуска тестов: `pip install -r requirements-dev.txt` (или `pip install -e '.[dev]'`), затем `pytest -q`.
 
+### Синхронизация документации (docsync)
+
+Документация — часть изменения: коммит, меняющий наблюдаемую поверхность
+(CLI/порты/systemd/state/роли/версию), обязан содержать правки mapped живых
+доков (SPEC-20261116-doc-sync). На свежем клоне установите git-хуки:
+
+```bash
+bash tools/install-hooks.sh   # commit-msg + pre-push; откат: git config --unset core.hooksPath
+```
+
+Команды инструмента (stdlib-only, без сети/root):
+
+```bash
+python3 tools/docsync.py check --staged          # что проверит commit-msg (индекс)
+python3 tools/docsync.py audit [--strict]        # reverse-инварианты, ссылки, свежесть
+python3 tools/docsync.py explain <path>          # какие доки требует изменение
+python3 tools/docsync.py debt                    # коммиты с обходом «Docs: none»
+```
+
+Режимы: поле `"mode"` в `docs/doc-sync.json` — `warn` (нарушения печатаются,
+хуки не блокируют; внедренческий период) или `block` (честный exit 1). Переход
+в block — правкой реестра (коммит), не env-переменной. `audit --strict`
+(гейты G4/G6) блокирует всегда, независимо от mode. Обход — трейлер
+`Docs: none — <причина> (TECHDEBT Pxx)` в сообщении коммита; `--no-verify`
+ловит pre-push.
+
 ## Требования
 
 - Ubuntu 24.04 LTS
