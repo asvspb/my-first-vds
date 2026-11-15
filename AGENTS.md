@@ -46,7 +46,7 @@ src/
 ├── acme/                # ACME/LE: issue (HTTP-01) + deploy-hook для Hysteria2
 ├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание), probing (probe-watch: монитор активного зондирования tcp/443)
 ├── sysinfo/             # dashboard
-└── system/              # setup, cleanup
+└── system/              # setup, cleanup, ufw (harden/ssh-port — SPEC-20261116)
 systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg/vds-relay-{exit,nat,policy,cidr} .service.tpl; sysctl/99-vds-gateway.conf.tpl
 tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/, amneziawg/, acme/, relay/
 docs/                    # TEAM.md, DEPLOY.md, DEPLOY-RU-RELAY.md, VPN-PROTOCOLS.md, CDN-FRONTS.md,
@@ -61,6 +61,8 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 | `python -m src.main --help` | Справка CLI |
 | `python -m src.main` | TUI-меню |
 | `python -m src.main sysinfo` | Dashboard |
+| `vds system ufw harden --profile gateway/relay/exit-cascade` | Идемпотентный UFW hardening (SPEC-20261116; dry-run по умолчанию, `--apply`, `--undo`) |
+| `vds system ufw ssh-port --to 49222 [--finalize]` | Двухфазный перенос SSH-порта (22 закрывается только `--finalize`) |
 | `python -m compileall -q src` | Синтаксическая проверка |
 | `pytest -q` | Юнит-тесты (`tests/`, без root/сети/docker) |
 | `bash install.sh` | Установка (root, на сервере) |

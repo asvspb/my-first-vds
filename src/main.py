@@ -27,6 +27,10 @@ relay_app = typer.Typer(
 probe_watch_app = typer.Typer(
     help="Монитор активного зондирования tcp/443 (И33 v1: nft counters + journal)"
 )
+system_app = typer.Typer(help="Системные утилиты: очистка, первичная настройка, файрвол UFW")
+ufw_app = typer.Typer(
+    help="UFW hardening (SPEC-20261116): dry-run по умолчанию, --apply для изменений"
+)
 app.add_typer(zerotier_app, name="zerotier")
 app.add_typer(wireguard_app, name="wireguard")
 app.add_typer(coturn_app, name="coturn")
@@ -36,6 +40,8 @@ app.add_typer(hysteria2_app, name="hysteria2")
 app.add_typer(amneziawg_app, name="amneziawg")
 app.add_typer(acme_app, name="acme")
 app.add_typer(relay_app, name="relay")
+app.add_typer(system_app, name="system")
+system_app.add_typer(ufw_app, name="ufw")
 gateway_app.add_typer(probe_watch_app, name="probe-watch")
 
 @app.callback(invoke_without_command=True)
@@ -1307,9 +1313,94 @@ def coturn_status():
 
 @coturn_app.command("remove")
 def coturn_remove():
-    """Удалить Coturn"""
+    """Удалить WireGuard"""
     from src.coturn.install import run_remove
     raise typer.Exit(run_remove())
+
+
+@ufw_app.command("harden")
+def ufw_harden(
+    profile: str = typer.Option(
+        "gateway",
+        "--profile",
+        help="Профиль: gateway | relay | exit-cascade (SPEC-20261116 §3)",
+    ),
+    allow_from: Optional[str] = typer.Option(
+        None, "--allow-from", help="IP релея для exit-cascade: 443 открывается только с него"
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Применить план (по умолчанию dry-run)"),
+    undo: bool = typer.Option(False, "--undo", help="Откатить применённые harden'ом правила (по журналу в state)"),
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable вывод (v1: не реализован, plan печатается текстом)"),
+):
+    """Идемпотентный харднинг UFW (SPEC-20261116): deny in / allow out,
+    ssh-лимит первым из allow-набора, сервисные порты из state.protocols
+    (детекция существующих правил — relay init / amneziawg / hysteria2 hop
+    не дублируются), forwarding для каскадных профилей, ufw enable строго
+    последним. Docker/listeners-расхождения — [warning]. ICMP не трогаем.
+    Откат: --undo --apply. Dry-run по умолчанию.
+
+    Примеры:
+      sudo vds system ufw harden --profile gateway            # dry-run, план
+      sudo vds system ufw harden --profile gateway --apply    # применить
+      sudo vds system ufw harden --profile exit-cascade --allow-from 203.0.113.10 --apply
+      sudo vds system ufw harden --profile relay --apply      # asv1/релей
+      sudo vds system ufw harden --profile gateway --undo --apply  # откат
+    """
+    from src.system.ufw import HardeningOpts, UfwError, run_harden
+
+    if json_output:
+        from src.core.logger import console
+        console.print("[warning][ufw] --json в v1 не реализован — план печатается текстом.[/warning]")
+    try:
+        code = run_harden(profile, apply=apply, undo=undo, opts=HardeningOpts(allow_from=allow_from))
+    except UfwError as exc:
+        from src.core.logger import console
+        console.print(f"[error][ufw] {exc}[/error]")
+        raise typer.Exit(1)
+    raise typer.Exit(code)
+
+
+@ufw_app.command("ssh-port")
+def ufw_ssh_port(
+    to: Optional[int] = typer.Option(
+        None, "--to", help="Новый ssh-порт (Фаза A: ufw limit + sshd-конфиг; 22 НЕ закрывается)"
+    ),
+    finalize: bool = typer.Option(
+        False, "--finalize", help="Фаза B: удалить правила 22 (только после проверки входа на новый порт со второго терминала!)"
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Применить (по умолчанию dry-run)"),
+):
+    """Двухфазный перенос ssh-порта (SPEC-20261116 §1.7). Фаза A добавляет
+    ufw limit N + /etc/ssh/sshd_config.d/99-vds-port.conf + ssh.socket drop-in
+    (Ubuntu 24.04) и ОСТАНАВЛИВАЕТСЯ: порт 22 остаётся открытым до подтверждения.
+    Фаза B (--finalize) удаляет правила 22 — выполняйте только после успешного
+    входа на порт N со ВТОРОГО терминала.
+
+    Примеры:
+      sudo vds system ufw ssh-port --to 49222            # dry-run
+      sudo vds system ufw ssh-port --to 49222 --apply    # Фаза A
+      sudo vds system ufw ssh-port --finalize --apply    # Фаза B (после проверки!)
+    """
+    from src.system.ufw import UfwError, run_ssh_port
+
+    try:
+        code = run_ssh_port(to, finalize, apply=apply)
+    except UfwError as exc:
+        from src.core.logger import console
+        console.print(f"[error][ufw-ssh] {exc}[/error]")
+        raise typer.Exit(1)
+    raise typer.Exit(code)
+
+
+@ufw_app.command("status")
+def ufw_status():
+    """Сводка UFW-состояния: meta harden из state, live `ufw status`,
+    pending-предупреждение незавершённого переноса ssh-порта. Read-only.
+
+    Пример: sudo vds system ufw status"""
+    from src.system.ufw import run_status
+
+    raise typer.Exit(run_status())
 
 
 if __name__ == "__main__":

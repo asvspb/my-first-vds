@@ -124,8 +124,11 @@ vds zerotier reconcile --apply   # Применить изменения
 vds zerotier diagnose        # Диагностика сети
 vds zerotier add-network     # Добавить сеть в topology.json
 vds wireguard install        # Установить WireGuard VPN
-vds server-setup             # Мастер первичной настройки
+vds server-setup             # Мастер первичной настройки (легаси — для файрвола используйте ufw harden)
 vds cleanup                  # Очистка системы (логи, кэши, Docker)
+vds system ufw harden --profile gateway       # UFW hardening (dry-run; --apply применить)
+vds system ufw ssh-port --to 49222 --apply    # двухфазный перенос SSH (22 закрывает --finalize)
+vds system ufw status                         # сводка UFW + pending-перенос
 ```
 
 ### Gateway: Xray / Hysteria2 / AmneziaWG / ACME
