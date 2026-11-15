@@ -344,7 +344,7 @@ happy-path последовательности (sysctl → nat → before.rules
 - P3 и P4 проверять на реальной машине с ZTNET — локально эти пути не воспроизвести без контейнера.
 - Тесты P6 не требуют root и запускаются локально.
 
-## P11 — before.rules-дубль MASQUERADE (SERVER-BASELINE §5.2, аудит 2026-11-16)
+## P16 — before.rules-дубль MASQUERADE (SERVER-BASELINE §5.2, аудит 2026-11-16)
 `amneziawg install` пишет MASQUERADE awg0 и в `/etc/ufw/before.rules`, и
 ставит юнит `vds-amneziawg-nat` (стандарт персистентности). На asv2 живут
 оба (дубль). Убрать запись в before.rules из install-пути (юнит достаточен,
@@ -352,13 +352,13 @@ before.rules при inactive ufw всё равно мёртв) + миграци�
 (изъять секцию, сохранив юнит). Проверка: `iptables -t nat -S POSTROUTING`
 — одна MASQUERADE-правилона подсеть.
 
-## P12 — rename sshd-override 99→00 (SERVER-BASELINE §4, аудит 2026-11-16)
+## P17 — rename sshd-override 99→00 (SERVER-BASELINE §4, аудит 2026-11-16)
 `ufw ssh-port` пишет `99-vds-port.conf` — для `Port` безопасно (аддитивная
 директива), но override-класс (PasswordAuthentication и пр.) требует
 префикса `00-` (first-match-wins против 50-cloud-init). Унифицировать
 константы модуля на `00-`, с миграцией живого файла на asv2.
 
-## P13 — relay-профиль: DNS-резолвер (аудит 2026-11-16)
+## P18 — relay-профиль: DNS-резолвер (аудит 2026-11-16)
 Для RU-релея `8.8.8.8` из базового профиля может перехватываться/деградировать
 в ЦОД РФ. В relay-профиль SERVER-BASELINE добавить резолвер: локальный
 DC-резолвер или DoH (cloudflared), не Google-UDP напрямую.
