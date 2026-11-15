@@ -178,10 +178,10 @@ echo 'VDS_GITHUB_MIRROR=https://ghproxy.net' >> /etc/environment
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}' --max-time 15 -L \
-  https://github.com/XTLS/Xray-core/releases/download/v25.1.1/Xray-linux-64.zip.dgst
+  https://github.com/XTLS/Xray-core/releases/download/v26.1.23/Xray-linux-64.zip.dgst
 # 200 = direct; иначе пробуйте зеркало:
 curl -s -o /dev/null -w '%{http_code}' --max-time 15 -L \
-  https://ghproxy.net/https://github.com/XTLS/Xray-core/releases/download/v25.1.1/Xray-linux-64.zip.dgst
+  https://ghproxy.net/https://github.com/XTLS/Xray-core/releases/download/v26.1.23/Xray-linux-64.zip.dgst
 ```
 
 - Значение читается из **переменной окружения** (`os.environ` в `src/*/install.py`) —
@@ -220,6 +220,21 @@ curl -sv --max-time 10 https://example.com:8443 -o /dev/null 2>&1 | tail -5
 
 Финальная приёмка — импортировать ссылки из `vds gateway links` в клиентское
 приложение (v2rayNG / Hiddify / sing-box) и проверить трафик с телефона.
+
+### После деплоя: harden и мониторинг (чеклист)
+
+```bash
+vds system ufw harden --profile gateway --apply    # UFW-hardening (ADR-011; dry-run по умолчанию)
+vds system ufw ssh-port --to 49222 --apply         # двухфазный перенос SSH; 22 закрывает --finalize
+vds system ufw status                              # сводка UFW + pending-перенос
+vds gateway probe-watch install --apply            # монитор зондирования tcp/443 + threat-level (И33)
+vds gateway probe-watch ru-cidr install --apply    # RU-CIDR без релея: RU-PROBE-SUSPECT (+таймер)
+```
+
+При threat `high` (см. [SERVER-BASELINE](SERVER-BASELINE.md) §5.12):
+`vds system ufw lock-443 --reason RU-PROBE-SUSPECT --ttl 48h --apply` —
+изоляция 443 с TTL и undo; AWG/CDN/ssh остаются живы. Auto-lockdown по умолчанию
+выключен (`vds gateway probe-watch config`).
 
 ---
 

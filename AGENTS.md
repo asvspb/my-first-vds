@@ -11,7 +11,7 @@ gateway-протоколы против блокировок (Xray VLESS Reality
 hopping и obfs salamander, AmneziaWG), ACME/Let's Encrypt, общее хранилище клиентов
 (`vds gateway links`), плюс ZeroTier + ZTNET Panel (Docker), WireGuard, Coturn
 (архив/опционально), системный dashboard, первичная настройка и очистка.
-Версия 3.0. Почти все операции требуют root.
+Версия 3.0 (pyproject `3.0.0`). Почти все операции требуют root.
 
 Репозиторий отдельный (`my-first-vds`); UbuntuInstaller деплоит его скриптами
 `11_vds-deploy.sh` / `8_vds-server.sh` (источник — `VDS_REPO`) и забирает ссылки
@@ -26,7 +26,7 @@ hopping и obfs salamander, AmneziaWG), ACME/Let's Encrypt, общее хран�
 | Конфиги/модели | pydantic 2.x |
 | HTTP | requests |
 | Метрики | psutil |
-| Тесты | pytest (`tests/`: core, gateway, xray, hysteria2, amneziawg, acme) |
+| Тесты | pytest (`tests/`: core, gateway, xray, hysteria2, amneziawg, acme, relay, docs) |
 | Инфраструктура | Docker (ZTNET), systemd, iptables/nftables, UFW, certbot |
 | ОС | Ubuntu 24.04 LTS |
 
@@ -47,7 +47,9 @@ src/
 ├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание), probing (probe-watch: телеметрия+threat-level+auto-lockdown, SPEC probe-response), probing_rucidr (RU-CIDR)
 ├── sysinfo/             # dashboard
 └── system/              # setup, cleanup, ufw (harden/ssh-port — SPEC-20261116)
-systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg/vds-relay-{exit,nat,policy,cidr} .service.tpl; sysctl/99-vds-gateway.conf.tpl
+systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg(-nat)/
+                         # vds-relay-{exit,nat,policy,cidr}.service.tpl; vds-gateway-health / vds-probe-watch /
+                         # vds-probe-rucidr .service+.timer.tpl; sysctl/99-vds-gateway.conf.tpl
 tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/, amneziawg/, acme/, relay/
 docs/                    # TEAM.md, DEPLOY.md, DEPLOY-RU-RELAY.md, VPN-PROTOCOLS.md, CDN-FRONTS.md,
                          # CENSORSHIP-ROADMAP.md, CENSORSHIP-PATTERNS.md, MIGRATE-VDS.md, adr/, team/
@@ -112,12 +114,13 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 `docs/GROWTH-POINTS.md` — точки роста схем/протоколов (вход для intake);
 `docs/SERVER-BASELINE.md` — настройки ОС/сервера: авто vs вручную, чеклист восстановления;
 `docs/SPLIT-TRANSPORTS.md` — системный split: AWG и аналоги (Reality/Hy2/XHTTP/CDN);
-`docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…010;
+`docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…011;
 `TECHDEBT.md` — бэклог. При изменении поведения обновлять соответствующий документ
 (новый протокол/транспорт — ADR + VPN-PROTOCOLS + README + AGENTS).
 
 ## 9. Роли
 
 `vds-owner` · `vds-analyst` · `vds-architect` · `vds-coder` · `vds-debugger` ·
-`vds-tester` · `vds-docs` · `vds-orchestrator`. Определения — `.zcode/agents/`,
+`vds-tester` · `vds-docs` · `vds-orchestrator` · метагент `vds-agent-smith` · скаут
+`vds-youtube-scout` (всего 10). Определения — `.zcode/agents/`,
 процесс и гейты — `docs/TEAM.md`.

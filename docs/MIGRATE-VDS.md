@@ -22,6 +22,8 @@
 | LE-сертификаты | домен (HTTP-01) | переиздание на новом (`vds acme issue`) |
 | **gateway/state.json** | uuid/ключи всех клиентов и протоколов | **обязательный перенос** — иначе перенастройка всех клиентов |
 | /etc/hysteria2-секреты, /etc/amnezia server-key | приватный материал | перенос вместе с state.json (0600) |
+| probe-watch: nft-таблица vds_probe, `/var/lib/vds/probe-watch.json` (снапшот дельт), `/etc/vds-probe-watch/` (nft-конфиг, allow-ips) | конфиги мониторинга | переносить не обязательно: на новом сервере `vds gateway probe-watch install --apply` создаст заново; allow-ips (свои IP) — перенести вручную |
+| RU-CIDR `/etc/vds-relay/ru-cidrs.txt` | агрегат ipdeny | не переносить: `vds gateway probe-watch ru-cidr install --apply` / `update` скачает свежий; relay — `vds-relay-cidr.timer` (еженедельно) |
 | share-линки клиентов | домен в ссылке | если перенесён state.json — ссылки не меняются |
 | AWG Endpoint в клиентских .conf | IP:порт | одна строка в клиентских конфигах |
 | ноутбук: `vpn profile pull -H` | ssh-хост | `vpn profile pull -H root@<новый>` |
@@ -55,8 +57,16 @@ bash ubuntuInstaller/scripts/20_vds-migrate.sh root@старый root@новый
    - [ ] `bash ubuntuInstaller/scripts/11_vds-deploy.sh` (one-shot: ключ → rsync
          кода → install.sh → xray+hysteria2 → домен/acme → демо-клиенты)
    - [ ] `20_vds-migrate.sh … --apply` — state.json/секреты/сертификаты
-   - [ ] `systemctl status vds-xray vds-hysteria2` — active; `vds xray status`
-         показывает прежних клиентов
+   - [ ] **Повторный harden** (на новом сервере): `vds system ufw harden
+         --profile gateway --apply`, `vds system ufw ssh-port --to 49222 --apply`
+         (+`--finalize` после проверки входа по новому порту) — ADR-011
+   - [ ] Мониторинг зондирования заново: `vds gateway probe-watch install --apply`
+         (+ `ru-cidr install --apply`); `vds gateway healthcheck --install-timer`;
+         relay-артефакты (если релей переносится) — `/etc/vds-relay/` и юниты
+         `vds-relay-{exit,nat,policy,cidr}` через `vds relay init`
+   - [ ] `systemctl status vds-xray vds-hysteria2 vds-amneziawg` — active;
+         `vds xray status` показывает прежних клиентов; таймеры:
+         `systemctl list-timers 'vds-*'`
    - [ ] `vds acme issue --domain asvpersonal.ru` (если сертификат не перенёсся
          валидным / DNS уже смотрит на новый IP)
 3. **DNS (Cloudflare):**
@@ -88,7 +98,7 @@ scp root@старый:/tmp/vds-state.tgz /tmp/   # через локальный
 # на НОВОМ:
 tar xzf /tmp/vds-state.tgz -C /
 chown -R root:root /opt/my-vds/gateway/state.json && chmod 0600 /opt/my-vds/gateway/state.json
-systemctl restart vds-xray vds-hysteria2
+systemctl restart vds-xray vds-hysteria2 vds-hysteria2-hop vds-hysteria2-obfs vds-amneziawg vds-amneziawg-nat
 ```
 
 ⚠️ `state.json` — 0600, содержит все клиентские ключи; в логи/чаты не выкладывать,

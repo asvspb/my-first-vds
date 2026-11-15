@@ -37,17 +37,29 @@ vds/
 ├── requirements-dev.txt # Dev-зависимости (pytest; ставятся install.sh при наличии)
 ├── pyproject.toml      # Метаданные пакета
 ├── systemd/            # Systemd unit-файлы
-│   ├── vds-watchdog.service/.timer
-│   ├── vds-reconcile.service/.timer
+│   ├── vds-watchdog.service / vds-watchdog.timer        # ZeroTier (архив)
+│   ├── vds-reconcile.service / vds-reconcile.timer      # ZeroTier (архив)
 │   ├── vds-xray.service.tpl
 │   ├── vds-hysteria2.service.tpl
 │   ├── vds-hysteria2-hop.service.tpl    # port hopping (ADR-008)
 │   ├── vds-hysteria2-obfs.service.tpl   # obfs salamander (SPEC-20261112)
 │   ├── vds-amneziawg.service.tpl
+│   ├── vds-amneziawg-nat.service.tpl    # NAT/forwarding AWG (oneshot при загрузке)
+│   ├── vds-gateway-health.service.tpl   # healthcheck gateway (W1 GR-18)
+│   ├── vds-gateway-health.timer.tpl
+│   ├── vds-probe-watch.service.tpl      # монитор зондирования tcp/443 (И33)
+│   ├── vds-probe-watch.timer.tpl
+│   ├── vds-probe-rucidr.service.tpl     # обновление RU-CIDR-агрегата
+│   ├── vds-probe-rucidr.timer.tpl
+│   ├── vds-relay-exit.service.tpl       # RU-relay (ADR-007): exit-policy
+│   ├── vds-relay-nat.service.tpl        # RU-relay: NAT ноги
+│   ├── vds-relay-policy.service.tpl     # RU-relay: policy-routing до asv1
+│   ├── vds-relay-cidr.service.tpl       # RU-relay: RU-CIDR (ipdeny)
+│   ├── vds-relay-cidr.timer.tpl         #   еженедельное обновление
 │   └── sysctl/99-vds-gateway.conf.tpl
 ├── AGENTS.md           # Контекст проекта для ИИ-агентов
 ├── TECHDEBT.md         # Бэклог техдолга
-├── .zcode/agents/      # Определения ролей ИИ-команды (8 агентов)
+├── .zcode/agents/      # Определения ролей ИИ-команды (10 агентов, см. docs/TEAM.md)
 ├── docs/
 │   ├── TEAM.md              # Ролевая модель и процесс (гейты G0–G6)
 │   ├── DEPLOY.md            # Деплой и чеклист проверки
@@ -56,7 +68,7 @@ vds/
 │   ├── CENSORSHIP-ROADMAP.md
 │   ├── CENSORSHIP-PATTERNS.md
 │   ├── MIGRATE-VDS.md       # Перенос на другой сервер
-│   ├── adr/                 # ADR-001…ADR-008
+│   ├── adr/                 # ADR-001…ADR-011
 │   └── team/
 └── src/
     ├── main.py         # Точка входа CLI (typer + questionary)
@@ -161,7 +173,9 @@ vds gateway probe-watch watch            # Дельта счётчиков + в�
 vds gateway probe-watch watch --json     # + контракт: threat_level/threat_reason/lockdown/ru_syn_new
 vds gateway probe-watch explain          # Карта покрытия: что меряется, что слепо (access-log/IPv6)
 vds gateway probe-watch ru-cidr install --apply  # RU-CIDR без релея: включает RU-PROBE-SUSPECT (+таймер)
+vds gateway probe-watch ru-cidr update --apply   # Разово обновить RU-CIDR из ipdeny (root; иначе — таймер)
 vds gateway probe-watch config           # конфиг auto-lockdown (default off; on = авто-лок 443 при threat high)
+vds gateway probe-watch remove --apply   # Демонтаж nft-таблицы vds_probe + юнитов (dry-run по умолчанию)
 
 vds xray install                    # Установить Xray VLESS Reality (TCP 443)
 vds xray install --sni www.cloudflare.com   # Сайт-маска (по умолчанию www.google.com)
@@ -172,6 +186,10 @@ vds xray use-domain --domain vpn.example.ru   # Reality-ссылки по дом
 vds xray add-cdn --domain cdn.example.ru      # CDN-транспорт VLESS+WS+TLS (ADR-006)
 vds xray add-cdn-client <name>      # CDN-клиент + ссылка (--front — фронт пула)
 vds xray add-cdn-front <domain>     # Фронт в пул CDN (сертификат в инблэнде)
+vds xray remove-cdn-front <domain>  # Снять фронт из пула (LE-cert остаётся; dry-run)
+vds xray list-cdn-fronts            # Фронты пула: LE-файлы, срок, DNS-чек
+vds xray remove-cdn-client <name>   # Удалить CDN-клиента (uuid + state; dry-run)
+vds xray remove-cdn --apply         # Снять CDN-транспорт (инблэнд ws, клиенты, UFW; Reality/XHTTP живы)
 vds xray status                     # Юнит, валидность конфига, порт, journal
 vds xray remove --apply             # Удалить (юнит, конфиг, бинарь, клиенты из store)
 
@@ -186,6 +204,8 @@ vds hysteria2 remove --apply        # Удалить (sysctl-тюнинг НЕ �
 
 vds amneziawg install               # AmneziaWG: PPA ppa:amnezia/ppa, UDP 51825
 vds amneziawg add-client laptop     # Клиент: .conf (0600) для импорта в AmneziaVPN
+vds amneziawg add-client laptop --keepalive 113   # И44: keepalive по умолчанию НЕ пишется
+                                    # (радиомолчание в простое; 113 — только для NAT-дырки)
 vds amneziawg status                # Юнит, DKMS-версия, UDP-порт, peers (секреты скрыты)
 vds amneziawg remove-client <name>  # Удалить клиента (dry-run; --apply применяет)
 vds amneziawg remove --apply        # Удалить сервис (пакеты PPA — вручную)
@@ -197,6 +217,7 @@ vds relay init --exit 103.45.247.172 --domain relay.asvpersonal.ru --sni www.exa
                                     # AWG udp/443 + Reality tcp/443 + policy-routing (DEPLOY-RU-RELAY.md)
 vds relay status                    # Юниты, awg0/awg1, живость ноги до asv1, nft, CIDR
 vds relay add-client phone          # Пир awg0: .conf (0600), endpoint relay-домен:443
+                                     # (--keepalive 113 — И44: по умолчанию keepalive не пишется)
 ```
 
 Ссылки импортируются в v2rayNG / NekoRay / Hiddify / sing-box; AmneziaWG-конфиг —
@@ -230,7 +251,7 @@ vds relay add-client phone          # Пир awg0: .conf (0600), endpoint relay-
 
 ## Роли ИИ-команды
 
-Проект ведётся восемью агентами (`.zcode/agents/`); процесс с гейтами — [docs/TEAM.md](docs/TEAM.md), контекст — [AGENTS.md](AGENTS.md).
+Проект ведёт ИИ-команда из десяти агентов (`.zcode/agents/`); процесс с гейтами — [docs/TEAM.md](docs/TEAM.md), контекст — [AGENTS.md](AGENTS.md).
 
 | Роль | Агент | Ответственность |
 |---|---|---|
@@ -242,6 +263,8 @@ vds relay add-client phone          # Пир awg0: .conf (0600), endpoint relay-
 | Тестировщик | `vds-tester` | Независимая верификация по AC |
 | Документатор | `vds-docs` | README/docs/CHANGELOG в синхроне с кодом |
 | Оркестратор | `vds-orchestrator` | Поток, гейты G0–G6, трассируемость |
+| Метагент | `vds-agent-smith` | Проектирует и создаёт новых `vds-*` агентов |
+| Скаут | `vds-youtube-scout` | YouTube-дайджесты по обходу блокировок (вход G0) |
 
 Типовой поток: `owner → analyst → architect → coders → tester → [debugger] → docs → close`.
 Модели: архитектор и тестировщик — `glm-5.3`, дебагер — `deepseek-flash`, остальные — `glm-5.3-flash`.
@@ -253,15 +276,17 @@ Gateway-протоколы — статические сервисы, без т�
 (oneshot, восстанавливает nat-цепочку после ребута), `vds-hysteria2-obfs.service`,
 `vds-amneziawg.service`. Юниты ставятся из шаблонов `systemd/*.tpl`.
 
-Таймер `vds-gateway-health.timer` (W1 GR-18) — healthcheck gateway-юнитов,
-портов и срока сертификата; ставится вручную:
-`vds gateway healthcheck --install-timer` (каждые 5 мин, rate-limited рестарт
-упавших юнитов).
+Gateway-таймеры (ставятся по явной команде, не при установке протокола):
 
-Таймеры — только для ZeroTier (архив):
+| Таймер | Назначение | Откуда |
+|--------|-----------|--------|
+| `vds-gateway-health.timer` | healthcheck юнитов/портов/сертификата, rate-limited рестарт упавших (W1 GR-18) | `vds gateway healthcheck --install-timer`, каждые 5 мин |
+| `vds-probe-watch.timer` | дельта счётчиков зондирования tcp/443 + threat-level | `vds gateway probe-watch install --apply` |
+| `vds-probe-rucidr.timer` | обновление RU-CIDR-агрегата из ipdeny | `vds gateway probe-watch ru-cidr install --apply` |
+| `vds-relay-cidr.timer` | RU-CIDR на релее (еженедельно) | `vds relay init --apply` (ADR-007) |
 
-Активируются **только** при явной установке `vds zerotier install` (опциональный
-сценарий; основной VPN-путь — gateway-протоколы, таймеры им не нужны):
+Таймеры ZeroTier (архив) активируются **только** при явной установке
+`vds zerotier install` (опциональный сценарий):
 
 | Таймер | Описание | Интервал |
 |--------|----------|----------|

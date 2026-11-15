@@ -5,6 +5,11 @@
 > этот ранбук — источник правды и резерв, если CLI недоступен.
 > Замены: `RELAY_IP` — IPv4 релея, `ASV1_IP` = `103.45.247.172` (exit),
 > `RELAY_DOMAIN` = `relay.asvpersonal.ru`, `RU_SNI` — RU-сайт same-DC хостера.
+>
+> **Статус (2026-11-16): код релея готов и принят (WP-1..5; юниты
+> `vds-relay-{exit,nat,policy,cidr}` из `vds relay init`), сам RU VDS ещё
+> НЕ куплен** — ранбук применяется после закупки и gate-приёмки Фазы 0;
+> WP-6 (харднинг) — по SPEC.
 
 ## Фаза 0 — закупка и gate-приёмка (до любого развёртывания)
 
@@ -188,7 +193,9 @@ systemctl list-timers vds-relay-cidr.timer
 - **Телефон:** `sudo vds relay add-client phone` → скопировать
   `/opt/my-vds/gateway/clients/relay/phone.conf` по ssh → импорт в
   AmneziaVPN; endpoint `relay.asvpersonal.ru:443`; DNS уходит на релей
-  (AllowedIPs 0.0.0.0/0).
+  (AllowedIPs 0.0.0.0/0). И44: `PersistentKeepalive` по умолчанию не
+  пишется (радиомолчание в простое); клиенту за NAT —
+  `--keepalive 113`.
 - **Ноутбук:** инстанция `vpn-awg-split@relay` в ubuntuInstaller (доменный
   split без изменений; меняется только выходная нога).
 

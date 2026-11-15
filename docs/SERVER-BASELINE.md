@@ -49,7 +49,7 @@
 | UFW | **active** (harden --profile gateway, 2026-11-16): deny in / allow out / allow routed |
 | Порты | `49222/tcp LIMIT` (ssh, двухфазный перенос завершён), `443/tcp+udp`, `80/tcp` (ACME), `51825/udp` |
 | SSH | **только 49222** (limit), ключи; `PasswordAuthentication` — как в образе |
-| Юниты | vds-xray, vds-hysteria2 (secure LE), vds-amneziawg + vds-amneziawg-nat, vds-probe-watch.timer |
+| Юниты | vds-xray, vds-hysteria2 (secure LE), vds-amneziawg + vds-amneziawg-nat, vds-probe-watch.timer (+ vds-gateway-health.timer, vds-probe-rucidr.timer — при установке) |
 | Роль | основной AWG-exit ноутбука (`vpn start`), AWG-подсеть 10.9.0.0/24 |
 
 > asv1 остаётся запасным exit: UFW inactive, ssh 22 — целевой профиль §5.2
@@ -277,7 +277,7 @@ OUTPUT; счётчики vds_probe стоят в prerouting **до** ufw-фил�
 
 **Правило:** после ребута ничего не «оживает руками» — всё enabled: `ufw`,
 `vds-amneziawg-nat` (идемпотентный oneshot, не зависит от ufw),
-`vds-probe-watch.timer`, транспортные юниты (vds-xray/vds-hysteria2*/vds-amneziawg).
+`vds-probe-watch.timer` (+`vds-probe-rucidr.timer`, `vds-gateway-health.timer`, если ставились), транспортные юниты (vds-xray/vds-hysteria2*/vds-amneziawg); relay-нога — юниты `vds-relay-{exit,nat,policy,cidr}` из `vds relay init` (релей не развёрнут, шаблоны в `systemd/`).
 sysctl-профиль проекта — `/etc/sysctl.d/99-vds-gateway.conf` (из
 `systemd/sysctl/99-vds-gateway.conf.tpl`; BBR/буферы — hysteria2 install;
 ip_forward — `99-vds-awg-forward.conf` от amneziawg install).

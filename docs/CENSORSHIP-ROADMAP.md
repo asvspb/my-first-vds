@@ -1,8 +1,11 @@
 # Roadmap: VDS Orchestrator — транспортные схемы и развитие
 
-> **Версия:** 2 (ревизия архитектора) · **Дата:** 2026-11-13
-> **База:** `vds` @ `73a0383` (499 unit), `ubuntuInstaller` @ `ea2b662` (vpnm 325 unit),
-> сервер `asv1` (Ubuntu 24.04) — Reality, XHTTP, CDN, Hysteria2(+obfs), AWG, ACME в работе.
+> **Версия:** 2.1 (ревизия архитектора) · **Дата:** 2026-11-13, статусы — 2026-11-16
+> **База:** `vds`, серверы: `asv2` — основной AWG-exit (213.108.23.119, UFW harden
+> gateway, SSH 49222, /48 v6, LE `asv2.asvpersonal.ru`); `asv1` — запасной exit
+> (TSPU-окна), Reality/XHTTP/CDN/Hysteria2(+obfs)/AWG/ACME. probe-watch v3
+> (threat-level/RU-CIDR), UFW harden/ssh-port/lock-443 (ADR-011); relay-код
+> готов (ADR-007), релей не куплен.
 >
 > **Что изменилось против v1:** фазы 0–4 фактически закрыты (включая CDN, ACME,
 > hop/obfs и AmneziaWG), поэтому «план» переписан в «статус + остаток»; остаток
@@ -99,8 +102,8 @@ CDN-транспорт — отдельный origin-инблэнд на TCP 205
 |---|---|---|
 | Транспорт | Xray (Reality/XHTTP/CDN), Hysteria2 (+obfs/hop), AWG | ✅ работает на asv1 |
 | Мультиплексирование | Xray fallbacks (SNI), отдельные порты | ✅ |
-| Оркестрация | `src/gateway/` (state, links, blockcheck) | ✅, hub/init — нет (W5) |
-| Наблюдаемость | `src/sysinfo/` (железо), `status`-команды | ⚠️ нет таймера/метрик (W1, W5) |
+| Оркестрация | `src/gateway/` (state, links, blockcheck, init) | ✅; `gateway init` реализован (GR-16), hub-подписки — нет (W5) |
+| Наблюдаемость | `src/sysinfo/`, `status`-команды, healthcheck-таймер, probe-watch | ✅ health (W1: `vds-gateway-health.timer`) + probe-watch v3; метрики/alerts — нет (W5) |
 | Дистрибуция | share-links, `profile pull` (ssh) | ⚠️ QR/подписки — вручную (W3) |
 | Клиент | `vpnm` схемы proxy/cdn/private/awg | ⚠️ failover вручную (W5) |
 
@@ -132,10 +135,10 @@ CDN-транспорт — отдельный origin-инблэнд на TCP 205
 | 2 Hysteria2 | install/clients/sysctl | ✅ + obfs + hop-код | per-user auth (W2), hop включить (W4) |
 | 3 XHTTP + CDN | SNI-мультиплексор, CF | ✅ XHTTP-fallback, CDN origin 2053 | пул фронтов + проверка (W4) |
 | 4 AmneziaWG | install/conf/QR | ✅ install/conf/status | QR (W3), ротация/purge (W6) |
-| 5 Hub + подписки | init, sub, reconcile | ❌ нет | W3 (export/sub), W5 (init) |
-| 6 Hardening | ACME, decoy, rotate | ⚠️ ACME HTTP-01 ✅, hook — дефект | hook (W1), DNS-01 (W5), rotate (W2/W6) |
-| 7 Наблюдаемость | healthcheck, metrics, alerts | ❌ нет | W1 (health), W5 (metrics/alerts) |
-| 8 Тесты/CI | unit + Docker-e2e + CI | ⚠️ unit ✅ (499/325), CI/e2e нет | W6 |
+| 5 Hub + подписки | init, sub, reconcile | ✅ `gateway init` (fresh-install-v3, G4 2026-11-14); sub/reconcile — нет | W3 (export/sub), W5 |
+| 6 Hardening | ACME, decoy, rotate, UFW | ✅ ACME HTTP-01 (hook закрыт), UFW harden/ssh-port/lock-443 (ADR-011, asv2) | DNS-01 (W5), rotate (W2/W6) |
+| 7 Наблюдаемость | healthcheck, metrics, alerts | ✅ healthcheck-таймер + probe-watch v3 (W1) | W5 (metrics/alerts) |
+| 8 Тесты/CI | unit + Docker-e2e + CI | ⚠️ unit ✅ (обе репы), CI/e2e нет | W6 |
 | 9 Дистрибуция | export qr/conf, TUI | ⚠️ links + pull по ssh | W3 (export/sub), W5 (TUI) |
 
 ---

@@ -1,7 +1,7 @@
-# VPN-протоколы против блокировок (РКН) — обзор и план для VDS Orchestrator
+# VPN-протоколы против блокировок (РКН) — обзор и фактическое состояние VDS Orchestrator
 
-> Дата: 2026-11-07. Справочный документ: состояние протоколов на сегодня,
-> серверная реализация на VDS и план добавления модулей в оркестратор.
+> Дата: 2026-11-07, актуализировано 2026-11-16. Справочный документ: состояние
+> протоколов на сегодня, серверная реализация на VDS (что уже в оркестраторе — §3).
 > Связанные документы: [../TECHDEBT.md](../TECHDEBT.md),
 > [CENSORSHIP-ROADMAP.md](CENSORSHIP-ROADMAP.md) — пошаговый roadmap внедрения.
 
@@ -253,18 +253,36 @@ AWG **66.2**, Hy2 **41.4** Мбит/с; CDN — latency 2.39 с, bulk не от�
 
 Для доступности (а не скорости) — `vpn probe` / `vpn monitor`.
 
+### 2.5. AmneziaWG (UDP 51825, ADR-005)
+
+Обфусцированный WireGuard (AWG 1.5-набор: «мусорные» пакеты до хендшейка,
+изменённые таймеры/размеры). Источник — PPA `ppa:amnezia/ppa`
+(amneziawg-tools + amneziawg-dkms), mirror-конвенция ADR-001 не применяется.
+UDP 51825; NAT/forwarding персистентны через `vds-amneziawg-nat.service.tpl`
+(oneshot при загрузке). Клиент — `.conf` (0600) для импорта в AmneziaVPN;
+поддерживается split (youtube/telegram через AWG, остальное напрямую).
+
+**И44 — радиомолчание в простое (2026-11-16):** `PersistentKeepalive`
+в клиентские конфиги **по умолчанию не пишется** — метроном 25 с работает
+как DPI-маяк. NAT-дырка нужна только клиенту за NAT без входящего трафика:
+`vds amneziawg add-client <имя> --keepalive 113` (то же — `vds relay
+add-client`). Существующие конфиги не переписываются автоматически — при
+необходимности пересоздать клиента.
+
 ## 3. План добавления в VDS Orchestrator
 
-> **Статус: MVP реализовано 2026-11-07 (фазы 0–2), команды фактические.**
+> **Статус: реализовано и работает на asv1/asv2 (актуализировано 2026-11-16).**
 > Установщики Xray/Hysteria2 скачивают релизы с GitHub; при DPI-блокировке
-> можно задать `VDS_GITHUB_MIRROR` (gh-proxy-префикс, напр.
-> `https://ghfast.top`) — реверсивно, off by default (см. ADR-001).
-> Xray VLESS Reality (TCP 443) и Hysteria2 (UDP 443, self-signed + `insecure=1`,
-> masquerade, sysctl BBR) установлены в оркестратор; общие примитивы —
-> `src/core/protocol.py|netcheck.py|secrets.py|units.py`, состояние —
-> `src/gateway/store.py` (`$INSTALL_DIR/gateway/state.json`, 0600).
-> Нереализованное из плана ниже: XHTTP (фаза 3), ACME-сертификат (фаза 6,
-> сейчас тестовый self-signed), подписки, SNI-мультиплексор, dashboard-карточки.
+> можно задать `VDS_GITHUB_MIRROR` (gh-proxy-префикс) — реверсивно, off by
+> default (см. ADR-001). Xray-core на серверах — 26.1.23 (ADR-010).
+> Реализовано: Reality (TCP 443), XHTTP-инблэнд (TCP 8443, ADR-003), CDN
+> VLESS+WS+TLS (origin 2053, ADR-006), Hysteria2 (UDP 443, self-signed +
+> LE/ACME HTTP-01 по домену, ADR-004), port hopping (ADR-008), obfs salamander,
+> AmneziaWG (ADR-005, §2.5), ACME + use-domain, `gateway init` (fresh-install),
+> probe-watch v3 (threat-level/RU-CIDR, SPEC-20261116-probe-response),
+> UFW-hardening (ADR-011). Состояние — `src/gateway/store.py`
+> (`$INSTALL_DIR/gateway/state.json`, 0600).
+> Нереализованное: подписки, SNI-мультиплексор, dashboard-карточки.
 > См. [SPEC-20261107-gateway-mvp](team/specs/SPEC-20261107-gateway-mvp.md),
 > [ADR-001](adr/ADR-001-xray-install-mechanism.md),
 > [ADR-002](adr/ADR-002-gateway-paths-units-state.md).
@@ -312,7 +330,9 @@ vds hysteria2 rotate-obfs
   использования в соответствии с местным законодательством.
 - Порты: Reality — TCP 443, Hysteria2 — UDP 443, XHTTP — TCP 443 (конфликтует
   с Reality: либо разные SNI/порты, либо fallback-иерархия в одном inbound).
-- UFW: открыть 443/tcp и 443/udp в `server-setup`.
+- UFW: 443/tcp и 443/udp открываются профилем `vds system ufw harden --profile
+  gateway --apply` (ADR-011; `server-setup` — легаси-мастер, для файрвола
+  использовать `harden`).
 - Тестирование протоколов требует реального VDS — локально не проверить.
 
 ### Источники (состояние на 2026-11)

@@ -17,9 +17,10 @@ injectAgentsMd: true
 
 1. `AGENTS.md` — стек, структура, конвенции кода, инварианты безопасности.
 2. `docs/TEAM.md` — процесс и гейты (G0–G6), распределение обязанностей.
-3. `.zcode/agents/*.md` — **существующие 8 агентов** (owner, analyst,
-   architect, coder, debugger, tester, docs, orchestrator) — образцы формата
-   и стиля; твоя роль — **не дублировать** их, а закрывать пробел.
+3. `.zcode/agents/*.md` — **существующие 10 агентов** (owner, analyst,
+   architect, coder, debugger, tester, docs, orchestrator, youtube-scout;
+   плюс ты сам — vds-agent-smith) — образцы формата и стиля; твоя роль —
+   **не дублировать** их, а закрывать пробел.
 
 ## Формат файла агента (строго)
 

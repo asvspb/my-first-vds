@@ -2,8 +2,42 @@
 
 > Обновляет оркестратор после каждого гейта. Единый источник правды о текущем цикле.
 > Шаблон: [templates/STATUS.md](templates/STATUS.md).
+> Счётчики тестов в исторических записях — моментальные снимки (OQ-9):
+> актуальный baseline — `pytest -q`, число в живых доках не хранится.
 
-## Активный цикл (параллельный #2): CDN-transport — VLESS за Cloudflare (фаза 3 roadmap)
+## Активный цикл: doc-sync (SPEC-20261116-doc-sync) — WP-3 baseline
+- **SPEC:** [SPEC-20261116-doc-sync](specs/SPEC-20261116-doc-sync.md) (G2, WP-1/2 done:
+  `tools/docsync.py` + `docs/doc-sync.json` + тесты, коммит `5ff2bef`)
+- **WP-3 (в работе, vds-docs):** синхронизация живых доков по §11 — команды
+  probe-watch/ru-cidr/CDN-remove, юниты health/probe/relay/amneziawg-nat, ADR-011,
+  10 ролей, версия, banned-счётчики, source_lag.
+- **Дальше:** WP-4 (хуки + процесс), WP-5 (warn → block).
+- **Doc audit:** in progress (WP-3 = G5 этого цикла).
+
+## Инфраструктура (live-ops, 2026-11-14..16)
+- **asv2 = основной AWG-exit** (213.108.23.119): deploy 2026-11-15 — UFW harden
+  gateway-профиль (ADR-011), SSH → 49222, /48 IPv6, LE `asv2.asvpersonal.ru`
+  (Hy2 secure, без insecure=1). **asv1 = запасной exit** (TSPU-окна).
+- **RU-relay: код готов (WP-1..5 по SPEC/ADR-007), релей НЕ куплен** —
+  развёртывание отложено до покупки VDS; WP-6 (харднинг) в спеке.
+- **probe-watch v3** (SPEC-20261116-probe-response): threat-level quiet/elevated/high,
+  ru-cidr install, lock-443 TTL/undo/hop-guard, auto-lockdown off (default).
+- **И44:** AWG/relay генераторы клиентов без дефолтного `PersistentKeepalive`
+  (`--keepalive N` — явный opt-in, для NAT-дырки 113).
+
+## Циклы 2026-11-14..16 (завершены)
+- **xhttp-split — G4 PASS 2026-11-14:** [SPEC-20261114-xhttp-split](specs/SPEC-20261114-xhttp-split.md),
+  [TEST-20261114-xhttp-split](reports/TEST-20261114-xhttp-split.md); Xray 26.1.23
+  (ADR-010); схема обобщена на Reality (`vpn start reality/xhttp`, по умолчанию AWG).
+- **RU-relay WP-1..5 — код принят 2026-11-15:** [ADR-007](../adr/ADR-007-ru-relay.md),
+  [DEPLOY-RU-RELAY](../DEPLOY-RU-RELAY.md); юниты vds-relay-{exit,nat,policy,cidr}.
+- **UFW hardening — ADR-011 + SPEC-20261116:** `vds system ufw harden/ssh-port/lock-443`;
+  asv2 развёрнут по профилю gateway (см. выше).
+- **probe-response — probe-watch v3:** [SPEC-20261116-probe-response](specs/SPEC-20261116-probe-response.md)
+  (коммит `c31462e`): threat-level, RU-CIDR, lock-443 c TTL/undo/hop-guard.
+- **И44 keepalive:** генераторы без метронома по умолчанию (коммит `8979673`).
+
+## Архив: CDN-transport — VLESS за Cloudflare — ЗАВЕРШЁН 2026-11-10
 - **IDEA:** скоуп утверждён владельцем в чате 2026-11-10 (пятый канал: egress через
   CF, чтобы цензор видел IP Cloudflare)
 - **REQ:** [REQ-20261110-cdn-transport](requirements/REQ-20261110-cdn-transport.md) (G1 READY)
@@ -18,31 +52,7 @@
   NAT/forwarding (P15) персистентны. Финальная верификация:
   [TEST-20261110-amneziawg-cdn](reports/TEST-20261110-amneziawg-cdn.md) (AWG PASS, CDN-блокер B-1 найден и закрыт).
   Эксплуатация: split-конфиг ноутбука (`~/awg0-split.conf`, awg-quick) — youtube/telegram через AWG,
-  остальное напрямую; на стороне провайдера владельца youtube-SNI DPI-иммунен к zapret-стратегиям.; **владелец-шаги
-  (перенос зоны в CF, чеклист SPEC §7.1) запускаются параллельно с кодом**
-- **Владелец гейта:** architect → orchestrator
-- **Пересечение с AWG-циклом:** `src/main.py` — только добавляющие команды (WP-3);
-  `src/amneziawg/*` не трогаются. При merge-конфликте — сериализация WP-3.
-
-### Work packages (CDN)
-| WP | Кодер | Статус | Отчёт | Блокер |
-|---|---|---|---|---|
-| WP-1 Рендер CDN-инблэнда (paths+config) | vds-coder | ⏳ pending | — | — |
-| WP-2 src/xray/cdn.py (install/remove/clients) | vds-coder | ⏳ pending (после WP-1) | — | — |
-| WP-3 CLI+status+links | vds-coder | ⏳ pending (после WP-2) | — | — |
-| Владелец §7.1 (CF-панель, шаги 1–8) | владелец | ⏳ параллельно | — | шаг 2 (grey на direct-записях) — блокер инварианта |
-| Приёмка [VDS] + Reality-gate | оркестратор + тестер (G4) | ⏳ pending | — | — |
-
-### Гейты (CDN)
-| Гейт | Статус | Дата | Кто |
-|---|---|---|---|
-| G0 Intake | ✅ | 2026-11-10 | owner + пользователь |
-| G1 Ready | ✅ | 2026-11-10 | vds-analyst |
-| G2 Spec | ✅ APPROVED | 2026-11-10 | vds-architect |
-| G3 Build | ⏳ | — | vds-coder (WP-1..3 сериализация) |
-| G4 Verify | ⏳ | — | vds-tester (§7.2 + Reality-gate блокер) |
-| G5 Docs | ⏳ | — | vds-docs + **аналитик: правка FR-4 REQ (порт 2053, SPEC §4.3)** |
-| G6 Close | ⏳ | — | оркестратор |
+  остальное напрямую; на стороне провайдера владельца youtube-SNI DPI-иммунен к zapret-стратегиям.
 
 ### Открытые пункты цикла (CDN)
 0. **ADR-007 RU-relay (proposed, ждёт владельца):** входной AWG-релей на RU VDS — покрытие mobile-whitelist вектора + дешёвая ротация exit-ноги по v6; [ADR-007](../adr/ADR-007-ru-relay.md); шаги внедрения внутри.
@@ -105,16 +115,16 @@
 - **IDEA:** скоуп утверждён владельцем в чате 2026-11-09 (домен `103-45-247-172.eu-cloud-xip.com` → 103.45.247.172 проверен; три направления: XHTTP, ACME, домен для Reality)
 - **REQ:** [REQ-20261109-domain-xhttp-acme](requirements/REQ-20261109-domain-xhttp-acme.md) (G1 READY)
 - **SPEC:** [SPEC-20261109-domain-xhttp-acme](specs/SPEC-20261109-domain-xhttp-acme.md) + [ADR-003](../adr/ADR-003-xhttp-reality-coexistence.md) (OQ-1; уточнён фактом [VDS]: fallback не работает, основной режим `--mode port`) + [ADR-004](../adr/ADR-004-acme-http01-certbot.md) (OQ-2/OQ-4)
-- **Этап:** ✅ G6 Close — [ACCEPT-20261109-domain-xhttp-acme](reports/ACCEPT-20261109-domain-xhttp-acme.md) PASS: LE на Hysteria2 (89 дн., автопродление), XHTTP e2e через домен:8443 (mode=port), Reality-домен; breaking-находка (старые hysteria2-ссылки требуют перевыпуска после LE) задокументирована; P13 закрыт; 226 passed
+- **Этап:** ✅ G6 Close — [ACCEPT-20261109-domain-xhttp-acme](reports/ACCEPT-20261109-domain-xhttp-acme.md) PASS: LE на Hysteria2 (89 дн., автопродление), XHTTP e2e через домен:8443 (mode=port), Reality-домен; breaking-находка (старые hysteria2-ссылки требуют перевыпуска после LE) задокументирована; P13 закрыт; 226 passed <!-- docsync:ignore -->
 - **Владелец гейта:** orchestrator / владелец
 
 ## Work packages
 | WP | Кодер | Статус | Отчёт | Блокер |
 |---|---|---|---|---|
-| WP-1 ACME-выдача (certbot) | vds-coder | ✅ done | отчёт в сессии (157 passed) | — |
-| WP-2 Hysteria2 + LE | vds-coder | ✅ done | отчёт в сессии (180 passed) | — |
-| WP-3 XHTTP | vds-coder | ✅ done (+дельта path=/xhttp) | отчёт в сессии (213 passed) | fallback → --mode port (ADR-003 поправка) |
-| WP-4 Reality-домен | vds-coder | ✅ done | отчёт в сессии (223 passed) | — |
+| WP-1 ACME-выдача (certbot) | vds-coder | ✅ done | отчёт в сессии (157 passed) | — | <!-- docsync:ignore -->
+| WP-2 Hysteria2 + LE | vds-coder | ✅ done | отчёт в сессии (180 passed) | — | <!-- docsync:ignore -->
+| WP-3 XHTTP | vds-coder | ✅ done (+дельта path=/xhttp) | отчёт в сессии (213 passed) | fallback → --mode port (ADR-003 поправка) | <!-- docsync:ignore -->
+| WP-4 Reality-домен | vds-coder | ✅ done | отчёт в сессии (223 passed) | — | <!-- docsync:ignore -->
 | WP-5 Приёмка [VDS] | оркестратор + тестер (G4) | ✅ PASS | [ACCEPT-20261109-domain-xhttp-acme](reports/ACCEPT-20261109-domain-xhttp-acme.md) | — |
 
 ## Гейты
@@ -175,7 +185,7 @@
 - **xray-split (Reality/XHTTP) — G4 PASS (2026-11-14):**
   [SPEC-20261114-xhttp-split](specs/SPEC-20261114-xhttp-split.md),
   [TEST-20261114-xhttp-split](reports/TEST-20261114-xhttp-split.md).
-  tun/unit/rules/kill-switch PASS; vpnm 392 теста. Серверный Xray обновлён
+  tun/unit/rules/kill-switch PASS; vpnm 392 теста. Серверный Xray обновлён <!-- docsync:ignore -->
   до 26.1.23 (ADR-010); Reality/XHTTP/CDN/Hy2 проверены. Ноутбук: youtube 204
   через split, example.com 200, ya.ru напрямую, `vpn monitor` ok,
   kill-switch и `vpn reset` — PASS. Схема обобщена: `vpn scheme xray-split
