@@ -121,6 +121,43 @@ env-прокси одной вкладки (`vpncli on [порт]`), авто-п
 вкладке; `socks://`-схема = SOCKS4 = молча сломанная вкладка; только `socks5h://`
 (remote DNS).
 
+### 1.11 Мониторинг зондирования — `vds gateway probe-watch` (И33 v1)
+Серверный монитор активного зондирования — ранний сигнал перед TSPU-блоком
+(TSPU перед блоком обычно зондирует порт протокола). Без изменения конфигов
+xray/hysteria2 (access-log/loglevel — отдельное решение владельца):
+
+- **nft-таблица `inet vds_probe`** (`install --apply`, dry-run по умолчанию):
+  `syn_bare` — все SYNs на tcp/443; `syn_valid` — SYNs, чей IP-пакет длиннее
+  минимальных 40 б (клиентский SYN всегда несёт TCP-опции MSS/SACK; голый
+  SYN-сканер masscan/zmap — ровно 40). Отношение bare-no-payload к bare —
+  доля «глупых» зондирований. Set `probers4` (timeout 1h, per-element
+  counter) — уникальные пробующие IP со счётчиками; при ядре без counter в
+  set-элементе — fallback без счётчиков на IP (explain честно покажет).
+- **`watch [--since 1h] [--threshold 50] [--json]`** (read-only, без
+  `--record` ничего не пишет; `--record` — только юнит таймера
+  перезаписывает снапшот): дельта счётчиков против снапшота
+  `/var/lib/vds/probe-watch.json` (0600) + journal-сигнатуры (только
+  реальные: REALITY invalid — виден лишь при повышенном loglevel;
+  hysteria2 auth-fail; UFW BLOCK DPT=443 из kernel-лога с извлечением SRC).
+  IP из RU-CIDR-агрегата (пишет relay-cidr) помечаются «[RU]», иначе geo
+  unknown — честно.
+- **Счётчик `udp_443`** — объём QUIC к Hysteria2/обфс: QUIC-Initial зонды
+  различить от легитимного UDP на nft-уровне нельзя — счётчик даёт объём,
+  аномалия = объём/окно.
+- **Вердикты**: `RU-PROBE-SUSPECT` (приоритет) — появились новые IP из
+  RU-зоны (не из снапшота, не свой IP сервера), ≥ 2/окно, при живом
+  syn_valid — профиль ТСПУ: точечное зондирование даже при 2–5 шт/час;
+  без RU-CIDR-файла вердикт недоступен. `PROBE-BURST`: unique probers ≥
+  threshold **или** доля bare-SYN без payload ≥ 90% при объёме > 100;
+  иначе `quiet`.
+- **`explain`** (=`probe-watch --explain`): честная карта покрытия — что
+  меряется, что слепо (access-log выключен; IPv6-пробы — non-goal v1).
+  Персистентность после ребута: ExecStartPre юнита сам применяет
+  nft-файл, если таблицы нет.
+- **`remove --apply`** — демонтаж таблицы и юнитов (идемпотентно).
+Таймер `vds-probe-watch.timer` — часовой тик watch; журнал
+`journalctl -u vds-probe-watch.service`.
+
 ## 2. Паттерны ландшафта (рассмотрены, статус)
 
 ### 2.1 RU-relay («домашний» релей) ⭐ главный кандидат

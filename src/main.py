@@ -24,6 +24,9 @@ acme_app = typer.Typer(help="ACME / Let's Encrypt certificates (certbot, HTTP-01
 relay_app = typer.Typer(
     help="RU-relay (ADR-007): AWG udp/443 + Reality tcp/443 + policy-routing до asv1"
 )
+probe_watch_app = typer.Typer(
+    help="Монитор активного зондирования tcp/443 (И33 v1: nft counters + journal)"
+)
 app.add_typer(zerotier_app, name="zerotier")
 app.add_typer(wireguard_app, name="wireguard")
 app.add_typer(coturn_app, name="coturn")
@@ -33,6 +36,7 @@ app.add_typer(hysteria2_app, name="hysteria2")
 app.add_typer(amneziawg_app, name="amneziawg")
 app.add_typer(acme_app, name="acme")
 app.add_typer(relay_app, name="relay")
+gateway_app.add_typer(probe_watch_app, name="probe-watch")
 
 @app.callback(invoke_without_command=True)
 def main_menu(ctx: typer.Context):
@@ -610,6 +614,106 @@ def gateway_links(
     # по ширине терминала и ломает парсер на клиенте — поэтому print().
     for name, proto, link in links:
         print(f"{name}: {link}")
+
+
+@probe_watch_app.callback(invoke_without_command=True)
+def probe_watch_callback(
+    ctx: typer.Context,
+    explain: bool = typer.Option(
+        False,
+        "--explain",
+        help="Карта покрытия сигналов на этом сервере (что активно, что слепо)",
+    ),
+):
+    """Монитор активного зондирования tcp/443 (И33 v1): dry-run по умолчанию,
+    read-only watch, RU-классификация по relay-CIDR при наличии."""
+    from src.core.logger import console
+
+    if ctx.invoked_subcommand is not None:
+        return
+    from src.gateway.probing import cmd_explain
+
+    if explain:
+        raise typer.Exit(cmd_explain())
+    ctx.get_help()
+
+
+@probe_watch_app.command("install")
+def probe_watch_install(
+    apply: bool = typer.Option(False, "--apply", help="Исполнить (по умолчанию dry-run)"),
+):
+    """Установить nft-таблицу vds_probe + таймер vds-probe-watch (root).
+
+    Идемпотентно; счётчики при переустановке сбрасываются (см. --help plan)."""
+    from src.core.logger import console
+    from src.gateway.probing import cmd_install
+
+    import os
+
+    if apply and os.geteuid() != 0:
+        console.print("[error][probe] install требует root (sudo).[/error]")
+        raise typer.Exit(1)
+    raise typer.Exit(cmd_install(apply=apply))
+
+
+@probe_watch_app.command("watch")
+def probe_watch_watch(
+    since: str = typer.Option(
+        "1h", "--since", help="Окно journal-сканирования: '1h' или Nh"
+    ),
+    threshold: int = typer.Option(
+        50, "--threshold", help="Порог unique probers за окно для PROBE-BURST"
+    ),
+    json_out: bool = typer.Option(False, "--json", help="Машиночитаемый JSON-отчёт"),
+    record: bool = typer.Option(
+        False,
+        "--record",
+        help="Перезаписать снапшот текущими счётчиками (ТОЛЬКО для юнита "
+        "таймера; ручной watch read-only, дельта считается от таймерного снапшота)",
+    ),
+):
+    """Read-only отчёт: дельта счётчиков nft + journal-сигнатуры + вердикт
+    (quiet / PROBE-BURST / RU-PROBE-SUSPECT). Без --record ничего не пишет."""
+    import re as _re
+
+    from src.core.logger import console
+    from src.gateway.probing import cmd_watch
+
+    match = _re.fullmatch(r"(\d+)\s*h", since.strip())
+    if not match:
+        console.print(f"[error][probe] --since: ожидался формат Nh (например 1h), получено {since!r}[/error]")
+        raise typer.Exit(1)
+    hours = int(match.group(1))
+    if hours <= 0:
+        console.print("[error][probe] --since: N должно быть > 0[/error]")
+        raise typer.Exit(1)
+    raise typer.Exit(
+        cmd_watch(since_hours=hours, threshold=threshold, json_out=json_out, record=record)
+    )
+
+
+@probe_watch_app.command("explain")
+def probe_watch_explain():
+    """Честная карта покрытия: nft/counter/юниты/journal/RU-CIDR/IPv6 (non-goal)."""
+    from src.gateway.probing import cmd_explain
+
+    raise typer.Exit(cmd_explain())
+
+
+@probe_watch_app.command("remove")
+def probe_watch_remove(
+    apply: bool = typer.Option(False, "--apply", help="Исполнить (по умолчанию dry-run)"),
+):
+    """Демонтаж nft-таблицы vds_probe + юнитов (идемпотентно, root)."""
+    from src.core.logger import console
+    from src.gateway.probing import cmd_remove
+
+    import os
+
+    if apply and os.geteuid() != 0:
+        console.print("[error][probe] remove требует root (sudo).[/error]")
+        raise typer.Exit(1)
+    raise typer.Exit(cmd_remove(apply=apply))
 
 
 @xray_app.command("install")

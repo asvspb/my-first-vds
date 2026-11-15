@@ -44,7 +44,7 @@ src/
 ├── amneziawg/           # AmneziaWG (UDP 51825): install, clients, status, remove
 ├── relay/               # RU-relay (ADR-007): init, status, clients, cidr (AWG udp/443 + Reality tcp/443 + policy-routing до asv1)
 ├── acme/                # ACME/LE: issue (HTTP-01) + deploy-hook для Hysteria2
-├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание)
+├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание), probing (probe-watch: монитор активного зондирования tcp/443)
 ├── sysinfo/             # dashboard
 └── system/              # setup, cleanup
 systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg/vds-relay-{exit,nat,policy,cidr} .service.tpl; sysctl/99-vds-gateway.conf.tpl

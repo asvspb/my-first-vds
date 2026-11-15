@@ -68,7 +68,7 @@ vds/
     ├── hysteria2/      # Hysteria2 QUIC (443): adapter, install, clients, config, status, hop, obfs, sysctl, remove
     ├── amneziawg/      # AmneziaWG (UDP 51825): install, clients, status, remove
     ├── acme/           # ACME/Let's Encrypt (certbot HTTP-01 + deploy-hook)
-    ├── gateway/        # paths, store (state.json 0600), links, blockcheck
+    ├── gateway/        # paths, store (state.json 0600), links, blockcheck, probing (probe-watch)
     ├── sysinfo/        # Dashboard метрик сервера
     └── system/         # Базовая настройка, cleanup
 ```
@@ -148,6 +148,9 @@ vds gateway links --include-obfs    # + obfs-ссылки hysteria2 (`<name>@obf
 vds gateway blockcheck              # «Блок IP» vs «деградация» vs «локальная проблема»
 vds gateway healthcheck             # Юниты/порты/сертификат (<14 дн. warning, <7 error)
 vds gateway healthcheck --install-timer  # Таймер vds-gateway-health (каждые 5 мин)
+vds gateway probe-watch install --apply  # Монитор зондирования tcp/443 (nft + таймер, dry-run по умолчанию)
+vds gateway probe-watch watch            # Дельта счётчиков + journal-сигнатуры + вердикт (read-only)
+vds gateway probe-watch explain          # Карта покрытия: что меряется, что слепо (access-log/IPv6)
 
 vds xray install                    # Установить Xray VLESS Reality (TCP 443)
 vds xray install --sni www.cloudflare.com   # Сайт-маска (по умолчанию www.google.com)
