@@ -49,7 +49,7 @@
 | SSH без паролей | **нет** (пароли разрешены) | ⚠️ `server-setup` (на asv1 не применено) | см. §4 |
 | Swap 2G | нет | ⚠️ `server-setup` (в контейнерах недоступен) | см. §3 |
 | unattended-upgrades | ? | ⚠️ `server-setup` | `dpkg -l unattended-upgrades` |
-| UFW | **выключен** | ⚠️ `server-setup`, **список портов устарел** | §5 |
+| UFW | **выключен** | ⚠️ `vds system ufw harden` (SPEC-20261116) | §5 |
 | Docker | нет | ⚠️ `server-setup` (не нужен без ZTNET) | `vds zerotier install` |
 | BBR + UDP-буферы | да | ✅ `hysteria2 install` (sysctl.d) | `vds hysteria2 install` |
 | `ip_forward` + MASQUERADE | да | ✅ `amneziawg install` | `vds amneziawg install` |
@@ -93,35 +93,216 @@
 > `yes` — при переустановке решите осознанно (доступ по ключу должен быть
 > проверен **до** отключения паролей).
 
-## 5. UFW: фактическая матрица портов
+**Откат переноса ssh-порта (файлы проекта, SPEC-20261116):** за файлы отвечает
+двухфазная команда §5.4; вручную:
+```bash
+install -m600 /dev/null /tmp/port.conf.new && printf 'Port 22\nPort 49222\n' > /tmp/port.conf.new
+cp /tmp/port.conf.new /etc/ssh/sshd_config.d/99-vds-port.conf        # вернуться к dual-listen
+mkdir -p /etc/systemd/system/ssh.socket.d && printf '[Socket]\nListenStream=\nListenStream=22\nListenStream=49222\n' \
+  > /etc/systemd/system/ssh.socket.d/99-port.conf                    # либо удалить drop-in = чистый 22
+sshd -t && systemctl daemon-reload && systemctl restart ssh.socket   # вне socket-activation: restart ssh
+ufw limit 22/tcp   # правило 22 вернуть, если было снято finalize'ом
+```
+Бэкапы прежних конфигов — `<STATE_PATH>/ufw-ssh-backups/` (создаёт Фаза A).
 
-`server-setup` открывает устаревший набор (`ssh,80/tcp,443/tcp,51820/udp,9993/udp`).
-Для текущего стека при включении UFW нужно:
+## 5. UFW hardening — `vds system ufw harden` (SPEC-20261116)
+
+Устаревший путь `server-setup` (`ufw --force reset` + список `ssh,80,443,51820,9993`)
+**не использовать**: он сбрасывает правила relay init / amneziawg / hop. Текущий
+путь — идемпотентная команда harden (dry-run по умолчанию, `--apply` для применения,
+`--undo --apply` для отката). Существующие правила (relay init `allow 443/udp`,
+amneziawg `allow 51825/udp`, hop `20000:20500/udp`, CDN `2053/tcp`) детектируются
+и не дублируются; `ufw reset` в новом коде запрещён.
+
+### 5.1 Команды
 
 ```bash
-for p in 22/tcp 80/tcp 443/tcp 443/udp 8443/tcp 2053/tcp 51825/udp 51826/udp; do
-  ufw allow "$p"
-done
-ufw allow 20000:20500/udp   # только если включён hop
-ufw default deny incoming
-ufw default allow outgoing
-ufw --force enable
+sudo vds system ufw harden --profile gateway                          # dry-run: план
+sudo vds system ufw harden --profile gateway --apply                  # asv2 (exit-сервер)
+sudo vds system ufw harden --profile relay --apply                    # RU-релей
+sudo vds system ufw harden --profile exit-cascade --allow-from <RELAY_IP> --apply
+sudo vds system ufw harden --profile gateway --undo --apply           # откат по журналу
+sudo vds system ufw status                                            # сводка + pending
 ```
 
-| Порт | Назначение | Кто открывает |
-|---|---|---|
-| 22/tcp | SSH | вручную |
-| 80/tcp | ACME HTTP-01 | `server-setup` |
-| 443/tcp | Reality | `server-setup` |
-| 443/udp | Hysteria2 | **вручную** |
-| 8443/tcp | XHTTP | **вручную** |
-| 2053/tcp | CDN origin (CF) | **вручную** |
-| 51825/udp | AmneziaWG | `amneziawg install` |
-| 51826/udp | obfs salamander | **вручную** |
-| 20000–20500/udp | hop | `add-hop-ports` |
+Fail-safe порядок (SPEC §1.10): defaults → `ufw limit <ssh>/tcp` **первым** из
+allow-набора → сервисные порты по `state.protocols` → DEFAULT_FORWARD_POLICY
+(для всех профилей; при уже-active ufw — `ufw reload`) → `ufw --force enable`
+**строго последним** и только при подтверждённом ssh-правиле. Ранбук: держать
+открытой вторую ssh-сессию до завершения приёмки.
+
+### 5.2 Матрица портов по профилям
+
+Правила выводятся из `state.protocols` (открывается только установленное).
+Факт asv1 (в бою, 2026-11-16): `22/limit→49222`, `443/tcp` Reality,
+`443/udp` Hy2, `8443/tcp` XHTTP(LE), `2053/tcp` CF-WS CDN, `51825/udp` AWG
+(пиры живы), `20000-20500/udp` hop (в бою с 2026-11-13).
+
+| Порт | Назначение | gateway | relay | exit-cascade |
+|---|---|---|---|---|
+| `<ssh>/tcp` (limit) | SSH (22; 49222 после finalize; при pending — оба) | ✔ | ✔ | ✔ |
+| 443/tcp | Reality / Xray | ✔ | ✔ (добавит, если нет) | только `allow from <RELAY_IP>` |
+| 443/udp | Hysteria2 / AWG-релей | ✔ | ✔ (relay init уже открыл) | только `allow from <RELAY_IP>` |
+| 51825/udp | AmneziaWG | ✔ (install уже открыл) | — | ✔ |
+| 51826/udp | obfs salamander | ✔ | — | ✔ |
+| 8443/tcp | XHTTP | ✔ | — | ✔ |
+| 2053/tcp | CDN origin (CF) | ✔ | — | ✔ |
+| 80/tcp | ACME HTTP-01 | ✔ | — | ✔ |
+| 20000:20500/udp | hop (если включён) | ✔ | — | ✔ |
+| FORWARD / ip_forward | маршрутизация | ACCEPT + проверка | ACCEPT + проверка | ACCEPT + проверка |
+
+Панели/метрики наружу НЕ открываются нигде (ZTNET 9993, dashboard — только ssh-туннель).
+Docker обходит UFW (nat PREROUTING/DOCKER раньше ufw-before-input) — слушающие
+порты вне плана печатаются как `[warning]` (включая docker-proxy; см. §5.7).
+
+Проверка приёмки: `ufw status verbose` → deny incoming / allow outgoing;
+`grep DEFAULT_FORWARD_POLICY /etc/default/ufw` → ACCEPT; `sysctl net.ipv4.ip_forward`
+→ 1; `ping <ip>` отвечает (ICMP не трогаем); набор открытых портов = матрице.
+Раздельный NAT: MASQUERADE awg0 — в `/etc/ufw/before.rules` (amneziawg install),
+awg1/relay — отдельный юнит `vds-amneziawg-nat` (не зависит от ufw); harden
+дублировать MASQUERADE-секцию не должен (SPEC §1.8).
+
+### 5.3 Правило знаний: ICMP и диагностика маршрута (решено 2026-11-16)
+
+ICMP — **НЕ трогаем вовсе** (drop echo-request НЕ реализуем, опция удалена из
+спеки). Обоснование: (а) ТСПУ находит серверы пассивным DPI исходящего трафика,
+не пингом; (б) echo-request — главный диагностический инструмент (маршрут жив vs
+порт режется: ping, ping.pe, check-host.net); (в) Reality-сервер, отдающий
+TLS-сертификат на 443, но молча дропающий ICMP, — аномалия для эвристик.
+destination-unreachable / time-exceeded / parameter-problem / icmp type 3 code 4
+(fragmentation-needed, PMTU) — никогда не блокировать.
+
+### 5.4 Правило двухфазного переноса SSH-порта 22 → 49222
+
+Одна команда **не может** закрыть 22 в той же операции, что перенос (нужен живой
+второй терминал владельца):
+
+1. **Фаза A:** `sudo vds system ufw ssh-port --to 49222 --apply` —
+   `ufw limit 49222/tcp` → `/etc/ssh/sshd_config.d/99-vds-port.conf`
+   (**dual-listen: Port 22 + Port 49222**, вход по 22 гарантированно жив даже при
+   режущем 49222 провайдер-файрволе) → `sshd -t` → ssh.socket drop-in (Ubuntu
+   24.04: `ListenStream=` сброс + 22 + 49222) или `restart ssh` → ss-чек →
+   pending-маркер → команда останавливается.
+2. Владелец проверяет вход на 49222 **со ВТОРОГО терминала** (пока 22 жив, откат
+   безопасен; при режущем 49222 облачном файрволе хостера — открыть порт в панели).
+3. **Фаза B:** `sudo vds system ufw ssh-port --finalize --apply` — порядок:
+   sshd-конфиг → только Port 49222 → restart → ss-чек → `ufw delete` правил 22 →
+   pending снят. Если вход на 49222 не работает — НЕ финализировать: 22 остаётся
+   открытым; восстановление из бэкапов `<state>/ufw-ssh-backups/` вручную.
+
+### 5.5 Чеклист отката (ручной, стиль DEPLOY-RU-RELAY)
+
+1. Посмотреть, что harden добавил: `sudo vds system ufw status` (meta `applied_rules`).
+2. Автооткат: `sudo vds system ufw harden --undo --apply` — снимает ровно
+   применённые правила (реверс), восстанавливает широкие 443-правила, удалённые
+   каскадом; если ufw был inactive до harden — `ufw disable`.
+3. Проверка после отката: `ufw status verbose`; ssh-сессия жива; VPN-клиенты
+   работают (`vds gateway status`).
+4. Ручной откат (если state потерян), построчно:
+   ```bash
+   ufw delete limit 22/tcp
+   ufw delete allow 443/tcp
+   ufw delete allow 443/udp          # НЕ удалять на релее — его открыл relay init
+   ufw delete allow 20000:20500/udp  # НЕ удалять, если hop жив
+   ufw disable                       # только если ufw был включён harden'ом
+   ```
+5. НЕ делать `ufw reset` — стирает правила relay init / amneziawg / CDN.
 
 Проверка: `ufw status numbered`; снаружи — из **чистой** точки (не параллельно,
 И26): `nc -vz <ip> <port>`, для UDP — реальный клиент.
+
+### 5.6 Правило знаний: изоляция nft-таблиц (probe-watch ↔ UFW)
+
+**Правило:** таблица `inet vds_probe` (probe-watch: `vds-probe-watch.service` +
+`vds-probe-watch.timer`, hook priority −140) — независимая от UFW; не смешивать
+и не выполнять `nft flush ruleset`.
+**Почему:** ufw (iptables-nft) живёт в своих стандартных цепочках INPUT/FORWARD/
+OUTPUT; счётчики vds_probe стоят в prerouting **до** ufw-фильтрации — это
+наблюдение, не фильтрация; flush ruleset стёр бы обе таблицы.
+**Проверка:** после `ufw reload` / enable — `nft list table inet vds_probe`
+(цепочки и счётчики на месте, счётчики растут).
+**Откат:** `sudo vds probe-watch remove --apply` (юниты + таблица снимаются
+целиком), затем reinstall.
+
+### 5.7 Правило знаний: Docker обходит UFW
+
+**Правило:** публикация портов Docker только на loopback (`-p 127.0.0.1:…`);
+`-p 0.0.0.0:…` запрещён — nat PREROUTING/DOCKER стоит раньше ufw-before-input,
+опубликованный порт открыт **мимо** любого UFW-правила.
+**Почему:** правило знаний, не следствие текущего стека — Docker на проекте
+только ZTNET (сейчас disabled; П.6 внешнего ревью).
+**Проверка:** `ss -tulnp | grep docker-proxy` — слушающие адреса только
+`127.0.0.1`/`::1`; harden печатает docker-proxy в `[warning]` (см. §5.2).
+**Откат:** контейнер с `-p 127.0.0.1:…` (compose/`docker run` правка + recreate).
+
+### 5.8 Правило знаний: персистентность после ребута
+
+**Правило:** после ребута ничего не «оживает руками» — всё enabled: `ufw`,
+`vds-amneziawg-nat` (идемпотентный oneshot, не зависит от ufw),
+`vds-probe-watch.timer`, транспортные юниты (vds-xray/vds-hysteria2*/vds-amneziawg).
+sysctl-профиль проекта — `/etc/sysctl.d/99-vds-gateway.conf` (из
+`systemd/sysctl/99-vds-gateway.conf.tpl`; BBR/буферы — hysteria2 install;
+ip_forward — `99-vds-awg-forward.conf` от amneziawg install).
+**Почему:** MASQUERADE awg0 persist в `before.rules` (ufw перечитывает на
+enable/reload) — дублей нет; правило знаний П.7.
+**Проверка (reboot-гейт):** `systemctl is-enabled ufw vds-amneziawg-nat vds-probe-watch.timer …`
++ `sysctl --system` без ошибок + `sysctl net.ipv4.ip_forward` = 1.
+**Откат:** недостающий юнит — reinstall соответствующего модуля (`vds … install`).
+
+### 5.9 Правило: прогрев свежего IP
+
+Свежевыпущенный IP прогревается (сутки-двое низкоамплитудного трафика) перед
+боевой нагрузкой — иначе первая волна трафика на чистом IP триггерит эвристики.
+Детально: [CENSORSHIP-PATTERNS.md](CENSORSHIP-PATTERNS.md) (П.8 внешнего ревью).
+
+### 5.11 Правило знаний: детект активных проб РКН — L3/L4-телеметрия, не логи Xray
+
+**Правило:** Внимание цензора оценивается только по почасовым дельтам
+`vds gateway probe-watch` (`syn_bare` 40B vs `syn_valid` в set `probers4`
+с timeout 1h, `udp_443`), НЕ по логам Reality-демона.
+**Почему:** probe-resistance Reality молча уводит чужие plain-TLS пробы в
+dest-fallback (валидный google-серт) и не пишет их в лог при default
+loglevel — логи демона слепы к пробам. Единственный способ отличить фоновый
+шум (масс-сканеры, голый SYN = 40 байт `ip length`) от целевого зондирования
+ТСПУ — считать в ядре (nft hook −140) пакеты с валидным ClientHello
+(`syn_valid`) от новых RU-IP.
+**Проверка:** `vds gateway probe-watch` (дельты за час);
+`systemctl status vds-probe-watch.timer` → `active (waiting)`.
+**Откат:** рассинхрон снапшота со счётчиками ядра → переинициализация базовой
+линии: `vds gateway probe-watch install --apply` (переустанавливает таблицу —
+счётчики и снапшот с нуля; идемпотентно).
+
+### 5.12 Правило знаний: реагирование на вердикты PROBE-BURST / RU-PROBE-SUSPECT
+
+**Правило:** `PROBE-BURST` (всплеск 40-байтных `syn_bare`) — конфигурацию не
+менять. `RU-PROBE-SUSPECT` (≥2 новых RU-IP с валидным ClientHello в окне) —
+готовить переключение клиента на резервный транспорт (Hy2 / asv1 / RU-relay).
+**Почему:** PROBE-BURST — слепой масс-скан (Shodan/Censys), TLS-пейлоада не
+несёт. RU-PROBE-SUSPECT = ТСПУ зафиксировал подозрительный паттерн и запустил
+распределённое активное зондирование из подсетей РФ; если вслед за ним падает
+AWG (UDP/51825) или Reality (TCP/443) — это подтверждённый бан по
+протоколу/IP, а не локальный сбой. Вердикт активен только при наличии
+`/etc/vds-relay/ru-cidrs.txt` (появляется с relay-модулем; до этого
+geo: unknown).
+**Проверка:** `vds gateway probe-watch` (вердикт + ru_top);
+`nft list set inet vds_probe probers4`.
+**Откат (манёвр уклонения, на клиенте):** `vpn` переключение профиля с AWG
+asv2 на Hysteria2 (asv1, port hopping + salamander) / VLESS+WS :2053
+(Cloudflare) / транзитный RU-relay (когда развёрнут).
+
+### 5.10 Матрица рисков правил знаний
+
+| Правило | Главный риск при нарушении |
+|---|---|
+| §5.3 ICMP | потеря диагностики маршрута; аномалия «TLS есть, ICMP дропается» |
+| §5.4 двухфазный ssh | потеря доступа: 22 закрыт при непроверенном 49222 |
+| §5.6 nft-изоляция | снесённые счётчики/детект зондирования после flush |
+| §5.7 Docker | порт открыт мимо UFW наружу |
+| §5.8 персистентность | «после ребута всё молчит», ручной ремонт на сервере |
+| §5.5 откат | `ufw reset` стирает правила relay/amneziawg/hop |
+| §5.11 детект через vds_probe | слепота к началу зондирования: Reality молча уводит пробы в dest-fallback, логи демона пусты |
+| §5.12 раздельные реакции | паранойя на каждый масс-скан (BURST) или игнор реальной атаки (SUSPECT) → простой при блокировке |
+| Fail-safe порядок §5.1 | enable без ssh-правила → отрезание по ssh |
 
 ## 6. Провайдер и DNS (руками, без API-токена не автоматизируется)
 
@@ -145,7 +326,9 @@ ufw --force enable
 2. `bash install.sh` → venv, `vds`. Проверка: `vds --help`.
 3. `vds gateway init --apply --protocols …` (см. SPEC) → протоколы, сертификаты,
    healthcheck. Проверка: `vds gateway status`, `systemctl is-active …`.
-4. Порты/UFW по §5 (если UFW будет включён). Проверка: `ufw status`.
+4. Порты/UFW: `sudo vds system ufw harden --profile <gateway|relay|exit-cascade> --apply`
+   (dry-run по умолчанию — сначала план; §5). Проверка: `ufw status verbose`.
+   После любых правок файрвола — reboot-гейт §5.8 (is-enabled + sysctl --system).
 5. Провайдерский файрвол + DNS/CF по §6. Проверка: внешние пробы.
 6. Данные: либо миграция (`20_vds-migrate.sh`, §8), либо новые клиенты
    (`vds … add-client`) и ре-импорт ссылок.
@@ -179,10 +362,37 @@ TEST-20261114-fresh-install-v3).
 | Проверка | `vpn speed`, `vpn probe`, `vpn monitor` | TTFB/throughput/статусы |
 | DoH | `vpn doh on/off/status` | `resolvectl status` |
 
+**Инвариант dnsmasq (П.9, 2026-11-15):** `/etc/dnsmasq.d/awg-split.conf`
+**генерируется** `scripts/15_domain-split.sh` — руками не править (править
+`/opt/awg-split/domains.txt` + перезапуск dnsmasq). Чеклист-инвариант:
+1. `grep conf-dir /etc/dnsmasq.conf` — строка **раскомментирована** (иначе
+   awg-split.conf вообще не читается).
+2. Апстримы в awg-split.conf: `127.0.0.1#5053` (cloudflared DoH) + fallback
+   `77.88.8.8`; `neg-ttl=60` — от генератора, не руками.
+3. Проверка: `dnsmasq --test`, `dig @127.0.0.1 youtu.be` → split-резолвер отвечает.
+
+### 9.1 VPN не работает — чеклист первого порядка (П.10)
+
+Порядок диагностики строго сверху вниз, **без слепых рестартов демонов**
+(рестарт сбрасывает телеметрию probe-watch и маскирует картину зондирования):
+
+1. **ping** сервера (`ping <ip>`): нет → сеть/ICMP/провайдер (§5.3: ICMP не
+   режем — если пинг пропал, это внешняя политика или хостер).
+2. **Туннель/split**: `awg show` (handshake свежий?), `vpn probe`; на ноутбуке —
+   split-зоны §9 (dnsmasq-инвариант выше).
+3. **DNS**: `dig @127.0.0.1 <split-домен>`; DoH `127.0.0.1#5053` жив?
+4. **TCP-vs-UDP / ТСПУ-окно**: `check-host.net` ICMP vs TCP на 443; попробуйте
+   другой транспорт (Reality↔Hy2↔CDN) — режется один протокол или всё.
+5. **CDN-резерв**: клиенты переводятся на CDN-фронт (CDN-FRONTS.md), пока
+   основной нога деградирует.
+Только после п.1–5 — серверные действия (`vds gateway status`, journal), и
+только осознанно рестарты.
+
 ## 10. Известные расхождения (дрейф asv1)
 
 1. **UFW выключен**, `server-setup` не применялся; список портов в
-   `server-setup` устарел (§5) — при включении UFW открыть вручную.
+   `server-setup` устарел — при включении UFW использовать
+   `vds system ufw harden --profile …` (§5), не `server-setup`.
 2. **Swap отсутствует** (0), хотя `server-setup` его создаёт.
 3. **SSH-пароли разрешены** (`PasswordAuthentication yes`), хотя
    `server-setup` их отключает.

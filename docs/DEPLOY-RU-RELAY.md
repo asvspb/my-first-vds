@@ -138,6 +138,12 @@ ufw allow 443/udp && ufw allow 443/tcp && ufw allow 22/tcp && ufw --force enable
 Проверка: `iptables -t nat -S POSTROUTING | grep MASQ` — два правила;
 `ufw status | grep 443`.
 
+> **Финальный шаг файрвола (SPEC-20261116):** после того как relay init /
+> ручной ранбук отработали — `sudo vds system ufw harden --profile relay --apply`
+> (dry-run по умолчанию; детектирует уже открытые `443/udp`+`443/tcp`, дотягивает
+> deny-in/allow-out и ssh-лимит). Откат: `sudo vds system ufw harden --undo --apply`.
+> Матрица портов и чеклист отката — [SERVER-BASELINE §5](SERVER-BASELINE.md).
+
 ### 6. Policy-routing: nft RU-CIDR set + fwmark + table 100
 
 ```bash
