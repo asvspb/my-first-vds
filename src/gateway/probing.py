@@ -174,6 +174,23 @@ _ELEMENT_RE = re.compile(
 )
 
 
+def _set_has_counter_decl(text: str) -> bool:
+    """Декларирован ли per-element `counter` в блоке `set probers4 { ... }`.
+
+    Ревью 2026-11-16, edge-case 2: признак определяем по ДЕКЛАРАЦИИ, а не по
+    наличию элементов — пустой set с counter в декларации поддерживает
+    счётчики на IP (explain не должен врать «не поддерживается ядром»).
+    """
+    idx = text.find(f"set {PROBERS_SET} {{")
+    if idx == -1:
+        return False
+    rest = text[idx:]
+    # Граница блока set: следующая топ-секция таблицы (chain) или конец таблицы.
+    m = re.search(r"\n\s*(chain |}\s*$)", rest, re.MULTILINE)
+    block = rest[: m.start()] if m else rest
+    return re.search(r"^\s+counter\s*$", block, re.MULTILINE) is not None
+
+
 @dataclass
 class NftState:
     """Распарсенное состояние nft-таблицы монитора (read-only)."""
@@ -188,10 +205,12 @@ class NftState:
 def parse_nft_table(text: str) -> NftState:
     """Разобрать вывод `nft list table inet vds_probe`.
 
-    per_element_counters=True, когда в set-элементах есть счётчики
-    (`counter packets N bytes M`); иначе IP без счётчиков (packets=0).
+    per_element_counters — по декларации `counter` в блоке set (см.
+    _set_has_counter_decl): пустой set с декларацией = счётчики на IP
+    поддерживаются. Элементы без счётчиков (fallback-вариант) — packets=0.
     """
     state = NftState()
+    state.per_element_counters = _set_has_counter_decl(text)
     for match in _COUNTER_RE.finditer(text):
         name, packets = match.group(1), int(match.group(2))
         if name == "syn_bare":
@@ -206,8 +225,6 @@ def parse_nft_table(text: str) -> NftState:
             ip = item.group(1)
             packets = int(item.group(2) or 0)
             state.probers[ip] = packets
-            if item.group(2) is not None:
-                state.per_element_counters = True
     return state
 
 
@@ -331,9 +348,15 @@ def compute_delta(current: NftState, snapshot: dict[str, object]) -> Delta:
         else {}
     )
 
-    delta_bare = max(0, current.syn_bare - int(snapshot.get("syn_bare", 0)))
-    delta_valid = max(0, current.syn_valid - int(snapshot.get("syn_valid", 0)))
-    delta_udp = max(0, current.udp_443 - int(snapshot.get("udp_443", 0)))
+    def _win(cur: int, prev: int) -> int:
+        # Ревью 2026-11-16, edge-case 3a: cur < prev — счётчики сброшены
+        # (ребут/переустановка таблицы), вся текущая часть — за окно
+        # (те же правила, что для протухшего set-элемента).
+        return cur if cur < prev else cur - prev
+
+    delta_bare = _win(current.syn_bare, int(snapshot.get("syn_bare", 0)))
+    delta_valid = _win(current.syn_valid, int(snapshot.get("syn_valid", 0)))
+    delta_udp = _win(current.udp_443, int(snapshot.get("udp_443", 0)))
     bare_no_payload = max(0, delta_bare - delta_valid)
     ratio = bare_no_payload / delta_bare if delta_bare > 0 else None
 
@@ -380,11 +403,12 @@ def compute_verdict(
 ) -> Verdict:
     """Вердикты окна (границы тестируются):
 
-    - **RU-PROBE-SUSPECT** (приоритет): RU-CIDR доступен, есть базовая
-      активность (syn_valid_total > 0 — таблица работает на живом сервере
-      с клиентами) и новых IP из RU-зоны (не из снапшота, не свой IP
-      сервера) >= NEW_RU_IPS_THRESHOLD. Ловит профиль ТСПУ: точечное
-      зондирование с RU-адресов даже при 2–5 шт/час.
+    - **RU-PROBE-SUSPECT** (приоритет): RU-CIDR доступен, в окне были
+      легитимные (длиннее 40 б) SYN — syn_valid_total=delta.syn_valid > 0
+      (окно, не аптайм; окно из одних голых masscan-SYN SUSPECT не даёт,
+      ревью 2026-11-16 3c-iii) — и новых IP из RU-зоны (не из снапшота,
+      не свой IP сервера) >= NEW_RU_IPS_THRESHOLD. Ловит профиль ТСПУ:
+      точечное зондирование с RU-адресов даже при 2–5 шт/час.
     - **PROBE-BURST**: unique_probers >= threshold ИЛИ ratio bare-no-payload
       >= 0.90 при объёме SYNs > 100.
     - иначе quiet. При одновременном срабатывании — RU-PROBE-SUSPECT с
@@ -482,19 +506,32 @@ def scan_journal(
 # ---------------------------------------------------------------------------
 
 def load_ru_cidrs(path: Optional[Path] = None) -> Optional[list[ipaddress.IPv4Network]]:
-    """Загрузить RU-CIDR-агрегат; None — файла нет (geo unknown — честно)."""
+    """Загрузить RU-CIDR-агрегат.
+
+    None — файла нет (geo unknown). Пустой список — файл ЕСТЬ, но v4-агрегат
+    пуст (сплошь IPv6/мусор): geo unknown, но geo_source скажет честно
+    «файл есть, v4-агрегат пуст». Битая строка пропускается по-строчно —
+    остальной агрегат не теряется (ревью 2026-11-16, edge-case 1).
+    """
     path = path or RU_CIDR_FILE
     if not path.is_file():
         return None
     networks: list[ipaddress.IPv4Network] = []
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            networks.append(ipaddress.ip_network(line, strict=False))
-    except (ValueError, OSError):
-        return networks  # частичный/битый агрегат: что распарсили — то вернули
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return networks
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            net = ipaddress.ip_network(line, strict=False)
+        except ValueError:
+            continue  # мусорная строка — пропуск, не валим весь файл
+        if not isinstance(net, ipaddress.IPv4Network):
+            continue  # IPv6-строки игнорируем, но файл читаем (не None)
+        networks.append(net)
     return networks
 
 
@@ -542,7 +579,8 @@ class WatchReport:
     per_element_counters: bool
     geo_source: str  # "ru-cidrs" | "unknown (файл /etc/vds-relay/ru-cidrs.txt отсутствует)"
     journal_hits: list[JournalHit] = field(default_factory=list)
-    new_ru_ips: list[str] = field(default_factory=list)
+    new_ru_ips: list[str] = field(default_factory=list)  # триггер вердикта (новые)
+    ru_hits: list[RuIpHit] = field(default_factory=list)  # все активные RU-IP окна
 
     def geo(self, ip: str) -> str:
         """geo-метка с кэшем на один run (top-10 повторов)."""
@@ -554,8 +592,16 @@ class WatchReport:
             for ip, cnt in self.delta.top
         ]
         ru_top = [
-            {"ip": ip, "packets": self._current_probers.get(ip, 0), "geo": "[RU]"}
-            for ip in sorted(self.new_ru_ips, key=lambda i: (-self._current_probers.get(i, 0), i))
+            {
+                "ip": hit.ip,
+                "packets": hit.packets,
+                "delta": hit.delta,
+                "returned": hit.returned,
+                "geo": "[RU]",
+            }
+            for hit in sorted(
+                self.ru_hits, key=lambda h: (-h.delta, -h.packets, h.ip)
+            )
         ]
         return {
             "now": self.now,
@@ -591,6 +637,20 @@ class WatchReport:
     _current_probers: dict[str, int] = field(default_factory=dict)
 
 
+@dataclass
+class RuIpHit:
+    """Активный в окне RU-IP (для ru_top).
+
+    returned=True — IP был в снапшоте, но снова активен (положительная
+    дельта); returned=False — впервые появился в окне (кандидат SUSPECT).
+    """
+
+    ip: str
+    delta: int
+    packets: int
+    returned: bool
+
+
 def _server_public_ip() -> str:
     """Публичный IP сервера (исключение из «новых RU-IP»); '' — не определился."""
     from src.core.netcheck import public_ip  # лениво: gateway не тянет сеть
@@ -610,28 +670,54 @@ def build_report(
     """Собрать отчёт из уже прочитанного состояния таблицы (тестируемо).
 
     server_ip — публичный адрес сервера; None → определить через netcheck
-    (в тестах подменяется). Новые RU-IP: IP есть в set сейчас, отсутствовал
-    в снапшоте, не сервер и не loopback.
+    (в тестах подменяется).
+
+    RU-логика (ревью 2026-11-16, edge-case 3c):
+    - активность за окно — по ДЕЛЬТЕ per-IP (для отсутствовавших в снапшоте
+      дельта = current packets);
+    - ru_top: все RU-IP с положительной дельтой — новые (returned=False)
+      и «вернувшиеся» (были в снапшоте, снова активны — returned=True);
+    - триггер SUSPECT — только НОВЫЕ RU-IP (не из снапшота) >= 2 при
+      delta.syn_valid > 0: окно из одних голых masscan-SYN (delta.syn_valid
+      = 0) SUSPECT не даёт. Ограничение (в explain): probers4 включает и
+      masscan-IP — раздельный per-SYN-тип учёт невозможен на nft-уровне,
+      SUSPECT гасится условием delta.syn_valid > 0.
     """
     snapshot = load_snapshot(snapshot_path)
     delta = compute_delta(current, snapshot)
 
     if server_ip is None:
         server_ip = _server_public_ip()
-    snapshot_keys = set(snapshot.get("probers", {}))
-    new_ru_ips: list[str] = []
+    raw_probers = snapshot.get("probers")
+    snap_probers: dict[str, int] = (
+        {str(k): int(v) for k, v in dict(raw_probers).items()}
+        if isinstance(raw_probers, dict)
+        else {}
+    )
+    snapshot_keys = set(snap_probers)
+
     ru_networks = load_ru_cidrs()
     geo_cache: dict[str, str] = {}
+    new_ru_ips: list[str] = []
+    ru_hits: list[RuIpHit] = []
     if ru_networks:
-        for ip in current.probers:
-            if ip in snapshot_keys or ip == server_ip:
+        for ip, packets in current.probers.items():
+            prev = snap_probers.get(ip, 0)
+            d = packets if packets < prev else packets - prev
+            if d <= 0:
+                continue  # не активен в окне
+            if ip == server_ip:
                 continue
             try:
                 if ipaddress.ip_address(ip).is_loopback:
                     continue
             except ValueError:
                 continue
-            if classify_ip(ip, ru_networks, cache=geo_cache) == "[RU]":
+            if classify_ip(ip, ru_networks, cache=geo_cache) != "[RU]":
+                continue
+            returned = ip in snapshot_keys
+            ru_hits.append(RuIpHit(ip=ip, delta=d, packets=packets, returned=returned))
+            if not returned:
                 new_ru_ips.append(ip)
 
     verdict = compute_verdict(
@@ -639,7 +725,7 @@ def build_report(
         threshold,
         new_ru_ips=new_ru_ips,
         ru_available=bool(ru_networks),
-        syn_valid_total=current.syn_valid,
+        syn_valid_total=delta.syn_valid,  # окно, не аптайм (ревью 3b)
     )
 
     end = now()
@@ -647,11 +733,15 @@ def build_report(
     since = start.strftime("%Y-%m-%d %H:%M:%S")
     hits = scan_journal(since, run)
 
-    geo_source = (
-        "ru-cidrs (/etc/vds-relay/ru-cidrs.txt)"
-        if ru_networks
-        else "unknown (файл /etc/vds-relay/ru-cidrs.txt отсутствует)"
-    )
+    if ru_networks is None:
+        geo_source = "unknown (файл /etc/vds-relay/ru-cidrs.txt отсутствует)"
+    elif not ru_networks:
+        geo_source = (
+            "файл /etc/vds-relay/ru-cidrs.txt есть, но IPv4-агрегат пуст "
+            "(сплошь IPv6/мусор) — geo unknown"
+        )
+    else:
+        geo_source = "ru-cidrs (/etc/vds-relay/ru-cidrs.txt)"
     report = WatchReport(
         now=end.isoformat(timespec="seconds"),
         window=f"{start.isoformat(timespec='seconds')} .. {end.isoformat(timespec='seconds')}",
@@ -662,6 +752,7 @@ def build_report(
         geo_source=geo_source,
         journal_hits=hits,
         new_ru_ips=new_ru_ips,
+        ru_hits=ru_hits,
     )
     report._ru_networks = ru_networks
     report._geo_cache = geo_cache
@@ -728,17 +819,15 @@ def print_report(report: WatchReport) -> None:
         f"(порог {report.threshold}; {counter_note})[/info]"
     )
     console.print(f"[info][probe] geo: {escape(report.geo_source)}[/info]")
-    if report.new_ru_ips:
+    if report.ru_hits:
         console.print(
-            f"[warning][probe] Новые RU-IP за окно ({len(report.new_ru_ips)}):[/warning]"
+            f"[warning][probe] Активные RU-IP за окно ({len(report.ru_hits)}):[/warning]"
         )
-        for ip in sorted(
-            report.new_ru_ips,
-            key=lambda i: (-report._current_probers.get(i, 0), i),
-        ):
+        for hit in sorted(report.ru_hits, key=lambda h: (-h.delta, -h.packets, h.ip)):
+            mark = " [вернувшийся]" if hit.returned else " [новый]"
             console.print(
-                f"[warning][probe]   {escape(ip)}: "
-                f"{report._current_probers.get(ip, 0)}[/warning]"
+                f"[warning][probe]   {escape(hit.ip)}{escape(mark)}: "
+                f"delta={hit.delta}[/warning]"
             )
     if report.delta.top:
         console.print("[info][probe] Топ-10 пробующих IP:[/info]")
@@ -845,7 +934,9 @@ def build_explain(
                 "вердикт RU-PROBE-SUSPECT",
                 "ok",
                 f"{ru_cidr_path} присутствует — новые RU-IP (>= {NEW_RU_IPS_THRESHOLD}/окно) "
-                "сигнализируют точечное RU-зондирование; при отсутствии файла вердикт недоступен",
+                "сигнализируют точечное RU-зондирование; триггер гасится при delta.syn_valid=0 "
+                "(окно из одних masscan-SYN). Ограничение: probers4 включает и masscan-IP "
+                "(update на все SYN) — раздельный per-SYN-тип учёт невозможен на nft-уровне",
             )
         )
     else:
@@ -997,6 +1088,12 @@ def cmd_install(apply: bool = False) -> int:
         console.print(
             f"[success][probe] nft-таблица inet {NFT_TABLE} применена "
             f"(per-element counter: {'да' if used_counter else 'НЕТ — счётчики на IP недоступны'}).[/success]"
+        )
+        # Ревью 2026-11-16, edge-case 3d: после переустановки счётчики в ядре
+        # с нуля — сбрасываем снапшот, иначе первый watch дал бы ложную
+        # «отрицательную дельту» (0-до-догона против старых 5000).
+        save_snapshot(
+            NftState(per_element_counters=used_counter), SNAPSHOT_PATH
         )
 
         ctx = _unit_ctx()

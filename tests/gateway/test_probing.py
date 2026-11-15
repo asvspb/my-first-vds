@@ -67,7 +67,14 @@ NFT_LIST_WITH_COUNTERS = """table inet vds_probe {
 
 NFT_LIST_NO_COUNTERS = NFT_LIST_WITH_COUNTERS.replace(
     "203.0.113.5 counter packets 3 bytes 180", "203.0.113.5"
-).replace("203.0.113.9 counter packets 7 bytes 420", "203.0.113.9")
+).replace("203.0.113.9 counter packets 7 bytes 420", "203.0.113.9").replace(
+    "\t\tcounter\n", ""  # fallback-вариант: декларации counter в set нет
+)
+
+NFT_LIST_EMPTY_SET = NFT_LIST_WITH_COUNTERS.replace(
+    "\t\telements = { 203.0.113.5 counter packets 3 bytes 180, 203.0.113.9 counter packets 7 bytes 420 }\n",
+    "",
+)
 
 TABLES_PRESENT = "table inet vds_probe\ntable inet relay_cidr\n"
 TABLES_ABSENT = ""
@@ -167,6 +174,17 @@ class TestParseNftTable:
         assert sorted(state.probers) == ["203.0.113.5", "203.0.113.9"]
         assert state.per_element_counters is False
 
+    def test_empty_set_with_counter_decl_is_supported(self) -> None:
+        """Ревью 2026-11-16 (edge-case 2): пустой set + counter в декларации
+        = счётчики на IP поддерживаются (explain не врёт «ядро не умеет»)."""
+        state = probing.parse_nft_table(NFT_LIST_EMPTY_SET)
+        assert state.probers == {}
+        assert state.per_element_counters is True
+
+    def test_set_without_counter_decl_is_fallback(self) -> None:
+        state = probing.parse_nft_table(NFT_LIST_NO_COUNTERS)
+        assert state.per_element_counters is False
+
     def test_empty_output(self) -> None:
         state = probing.parse_nft_table("")
         assert state.syn_bare == 0 and state.syn_valid == 0
@@ -231,13 +249,16 @@ class TestDelta:
         assert delta.syn_bare == 30 and delta.syn_valid == 30
         assert delta.unique_probers == 2  # 113.5: +2, 113.9: +2
 
-    def test_counter_regression_clamped_to_zero(self, tmp_path: Path) -> None:
+    def test_counter_regression_counts_as_window(self, tmp_path: Path) -> None:
+        """Ревью 2026-11-16 (3a): current < snap — сброс счётчиков (ребут/
+        переустановка); дельта = current, а не кламп до 0 (счёт за окно
+        не теряется, см. test_global_counter_reset_after_reinstall)."""
         snap_path = tmp_path / "snap.json"
         prev = probing.NftState(syn_bare=200, syn_valid=100, per_element_counters=True)
         assert probing.save_snapshot(prev, snap_path)
         current = probing.NftState(syn_bare=50, syn_valid=10, per_element_counters=True)
         delta = probing.compute_delta(current, probing.load_snapshot(snap_path))
-        assert delta.syn_bare == 0 and delta.syn_valid == 0
+        assert delta.syn_bare == 50 and delta.syn_valid == 10
 
     def test_fallback_set_size_without_element_counters(self) -> None:
         current = probing.NftState(syn_bare=10, syn_valid=5,
@@ -254,6 +275,17 @@ class TestDelta:
         current = probing.NftState(udp_443=25, per_element_counters=True)
         delta = probing.compute_delta(current, probing.load_snapshot(snap_path))
         assert delta.udp_443 == 15
+
+    def test_global_counter_reset_after_reinstall(self) -> None:
+        """Ревью 2026-11-16 (edge-case 3a): current < snap — ребут/переустановка
+        таблицы; дельта = current (те же правила, что для протухшего элемента)."""
+        snap = {"syn_bare": 5000, "syn_valid": 4000, "udp_443": 500, "probers": {}}
+        current = probing.NftState(syn_bare=3, syn_valid=2, udp_443=1,
+                                   per_element_counters=True)
+        delta = probing.compute_delta(current, snap)
+        assert delta.syn_bare == 3
+        assert delta.syn_valid == 2
+        assert delta.udp_443 == 1
 
     def test_stale_element_restart_not_lost(self) -> None:
         """Ревью: элемент протух (timeout 1h) и пересоздан — packets < prev;
@@ -434,6 +466,50 @@ class TestRuClassification:
         assert probing.classify_ip("203.0.113.9", nets) == "[RU]"
         assert probing.classify_ip("203.0.114.9", nets) == "unknown"
 
+    def test_garbage_line_skipped_not_whole_file(self, tmp_path: Path) -> None:
+        """Ревью 2026-11-16 (edge-case 1): мусор на 5-й строке из 6 —
+        остальные 5 сетей не теряются."""
+        p = tmp_path / "ru-cidrs.txt"
+        p.write_text(
+            "203.0.113.0/24\n198.51.100.0/24\n192.0.2.0/24\n203.0.114.0/24\n"
+            "это не CIDR !!!\n198.51.101.0/24\n",
+            encoding="utf-8",
+        )
+        nets = probing.load_ru_cidrs(p)
+        assert nets is not None
+        assert len(nets) == 5
+
+    def test_ipv6_lines_ignored_file_still_read(self, tmp_path: Path) -> None:
+        p = tmp_path / "ru-cidrs.txt"
+        p.write_text("203.0.113.0/24\n2a00:5c00::/29\n2001:db8::/32\n", encoding="utf-8")
+        nets = probing.load_ru_cidrs(p)
+        assert nets is not None
+        assert len(nets) == 1  # только v4
+
+    def test_ipv6_only_file_is_empty_list_not_none(self, tmp_path: Path) -> None:
+        """Файл сплошь IPv6 → пустой v4-агрегат (НЕ None): classify даст
+        unknown, но geo_source скажет «файл есть, v4-агрегат пуст»."""
+        p = tmp_path / "ru-cidrs.txt"
+        p.write_text("2a00:5c00::/29\n2001:db8::/32\n", encoding="utf-8")
+        nets = probing.load_ru_cidrs(p)
+        assert nets == []
+
+    def test_empty_v4_aggregate_geo_source_honest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(probing, "RU_CIDR_FILE", tmp_path / "v6only.txt")
+        (tmp_path / "v6only.txt").write_text("2a00:5c00::/29\n", encoding="utf-8")
+        current = probing.NftState(syn_bare=5, syn_valid=5, per_element_counters=True)
+        report = probing.build_report(
+            current, run=lambda args, **kw: _shell_result(),
+            snapshot_path=tmp_path / "snap.json", server_ip="",
+            now=lambda: probing.datetime(2026, 11, 16, 12, 0, 0),
+        )
+        assert "есть" in report.geo_source
+        assert "пуст" in report.geo_source
+        assert "IPv4-агрегат" in report.geo_source
+        assert report.verdict.name == "quiet"
+
     def test_cache_reuses_verdicts_within_run(self, tmp_path: Path) -> None:
         p = tmp_path / "ru-cidrs.txt"
         p.write_text("203.0.113.0/24\n", encoding="utf-8")
@@ -504,28 +580,32 @@ class TestWatch:
 
 
 class TestNewRuIps:
-    """Логика «новых RU-IP» в build_report: снапшот/server IP/loopback."""
+    """RU-логика build_report (ревью 2026-11-16, edge-case 3c): активность
+    по дельте, вернувшиеся IP, masscan-гашение, server IP/loopback."""
 
     RU_FILE = "203.0.113.0/24\n"
 
     def _state(
-        self, probers: dict[str, int], syn_valid: int = 10
+        self, probers: dict[str, int], syn_valid: int = 10, syn_bare: int = 100
     ) -> probing.NftState:
         return probing.NftState(
-            syn_bare=100, syn_valid=syn_valid, udp_443=0,
+            syn_bare=syn_bare, syn_valid=syn_valid, udp_443=0,
             probers=probers, per_element_counters=True,
         )
+
+    def _ru_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ru_file = tmp_path / "ru-cidrs.txt"
+        ru_file.write_text(self.RU_FILE, encoding="utf-8")
+        monkeypatch.setattr(probing, "RU_CIDR_FILE", ru_file)
 
     def test_new_ru_ips_detected_and_verdict(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        ru_file = tmp_path / "ru-cidrs.txt"
-        ru_file.write_text(self.RU_FILE, encoding="utf-8")
-        monkeypatch.setattr(probing, "RU_CIDR_FILE", ru_file)
+        self._ru_file(tmp_path, monkeypatch)
         snap_path = tmp_path / "snap.json"
-        # 113.5 был в снапшоте (легитимный клиент) — не «новый»;
+        # 113.5 в снапшоте и активен (delta>0) — «вернувшийся», не триггер;
         # 113.101/113.102 — новые; 113.103 — свой IP сервера — исключён.
-        prev = probing.NftState(syn_bare=100, syn_valid=10, udp_443=0,
+        prev = probing.NftState(syn_bare=100, syn_valid=5, udp_443=0,
                                 probers={"203.0.113.5": 9}, per_element_counters=True)
         assert probing.save_snapshot(prev, snap_path)
         current = self._state({
@@ -534,19 +614,70 @@ class TestNewRuIps:
             "203.0.113.102": 1,
             "203.0.113.103": 3,
             "198.51.100.9": 5,  # не RU — не считается
-        })
+        }, syn_valid=10)
         report = probing.build_report(
             current, run=lambda args, **kw: _shell_result(),
             snapshot_path=snap_path, server_ip="203.0.113.103",
-            now=lambda: probing.datetime(2026, 11, 15, 12, 0, 0),
+            now=lambda: probing.datetime(2026, 11, 16, 12, 0, 0),
         )
         assert sorted(report.new_ru_ips) == ["203.0.113.101", "203.0.113.102"]
         assert report.verdict.name == "RU-PROBE-SUSPECT"
         data = report.to_json()
-        assert {item["ip"] for item in data["ru_top"]} == {  # type: ignore[index]
-            "203.0.113.101", "203.0.113.102",
+        ru_top = data["ru_top"]
+        assert {item["ip"] for item in ru_top} == {  # type: ignore[index]
+            "203.0.113.101", "203.0.113.102", "203.0.113.5",
         }
-        assert data["ru_top"][0]["ip"] == "203.0.113.101"  # type: ignore[index]
+        by_ip = {item["ip"]: item for item in ru_top}  # type: ignore[index]
+        assert by_ip["203.0.113.101"]["returned"] is False  # type: ignore[index]
+        assert by_ip["203.0.113.5"]["returned"] is True  # type: ignore[index]
+        assert by_ip["203.0.113.5"]["delta"] == 3  # type: ignore[index]
+        # в reasons — только НОВЫЕ (триггер), не вернувшийся
+        assert "113.101" in report.verdict.reasons[0]
+
+    def test_masscan_window_does_not_trigger(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Два 40-байтных masscan-IP из RU при delta.syn_valid=0 → quiet
+        (SUSPECT гасится условием delta.syn_valid > 0, ревью 3c-iii)."""
+        self._ru_file(tmp_path, monkeypatch)
+        snap_path = tmp_path / "snap.json"
+        # снапшот: syn_valid совпадает с current → дельта valid = 0
+        prev = probing.NftState(syn_bare=100, syn_valid=10, udp_443=0,
+                                per_element_counters=True)
+        assert probing.save_snapshot(prev, snap_path)
+        current = self._state({
+            "203.0.113.101": 5,  # masscan-IP: голые SYN, length=40
+            "203.0.113.102": 3,
+        }, syn_valid=10, syn_bare=110)
+        report = probing.build_report(
+            current, run=lambda args, **kw: _shell_result(),
+            snapshot_path=snap_path, server_ip="",
+            now=lambda: probing.datetime(2026, 11, 16, 12, 0, 0),
+        )
+        assert len(report.new_ru_ips) == 2
+        assert report.delta.syn_valid == 0
+        assert report.verdict.name == "quiet"
+
+    def test_returned_ru_ip_flagged_not_trigger(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Бывший в снапшоте RU-IP с положительной дельтой — «вернувшийся»:
+        в ru_top с returned=true, но вердикт НЕ триггерит (частый легитимный
+        клиент не должен держать SUSPECT постоянно)."""
+        self._ru_file(tmp_path, monkeypatch)
+        snap_path = tmp_path / "snap.json"
+        prev = probing.NftState(syn_bare=100, syn_valid=5, udp_443=0,
+                                probers={"203.0.113.5": 9}, per_element_counters=True)
+        assert probing.save_snapshot(prev, snap_path)
+        current = self._state({"203.0.113.5": 15}, syn_valid=10)
+        report = probing.build_report(
+            current, run=lambda args, **kw: _shell_result(),
+            snapshot_path=snap_path, server_ip="",
+            now=lambda: probing.datetime(2026, 11, 16, 12, 0, 0),
+        )
+        assert report.new_ru_ips == []
+        assert len(report.ru_hits) == 1
+        assert report.ru_hits[0].returned is True
+        assert report.ru_hits[0].delta == 6
+        assert report.verdict.name == "quiet"
 
     def test_without_cidr_file_verdict_absent(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -556,7 +687,7 @@ class TestNewRuIps:
         report = probing.build_report(
             current, run=lambda args, **kw: _shell_result(),
             snapshot_path=tmp_path / "snap.json", server_ip="",
-            now=lambda: probing.datetime(2026, 11, 15, 12, 0, 0),
+            now=lambda: probing.datetime(2026, 11, 16, 12, 0, 0),
         )
         assert report.new_ru_ips == []
         assert report.verdict.name == "quiet"
@@ -571,13 +702,16 @@ class TestNewRuIps:
         prev = probing.NftState(syn_bare=1, syn_valid=1, udp_443=0,
                                 probers={"203.0.113.9": 1}, per_element_counters=True)
         assert probing.save_snapshot(prev, snap_path)
-        current = self._state({"127.0.0.1": 5, "203.0.113.9": 2})
+        current = self._state({"127.0.0.1": 5, "203.0.113.9": 2}, syn_valid=5)
         report = probing.build_report(
             current, run=lambda args, **kw: _shell_result(),
             snapshot_path=snap_path, server_ip="",
-            now=lambda: probing.datetime(2026, 11, 15, 12, 0, 0),
+            now=lambda: probing.datetime(2026, 11, 16, 12, 0, 0),
         )
         assert report.new_ru_ips == []
+        # 113.9 в снапшоте и дельта = 2-1 = 1 > 0 → «вернувшийся» в ru_hits
+        assert len(report.ru_hits) == 1
+        assert report.ru_hits[0].ip == "203.0.113.9"
 
 
 # ---------------------------------------------------------------------------
@@ -652,6 +786,36 @@ def _no_shell(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
 
     monkeypatch.setattr(probing, "run_list", _fail)
     return calls
+
+
+class TestInstallSnapshotReset:
+    """Ревью 2026-11-16 (edge-case 3d): install --apply сбрасывает снапшот —
+    иначе первый watch после переустановки дал бы ложную «отрицательную
+    дельту» (0-до-догона) против старых счётчиков."""
+
+    def test_install_resets_snapshot(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        snap_path = tmp_path / "snap.json"
+        prev = probing.NftState(syn_bare=5000, syn_valid=4000,
+                                probers={"203.0.113.5": 100}, per_element_counters=True)
+        assert probing.save_snapshot(prev, snap_path)
+        monkeypatch.setattr(probing, "SNAPSHOT_PATH", snap_path)
+        monkeypatch.setattr(probing, "LOCK_FILE", str(tmp_path / "probe.lock"))
+        monkeypatch.setattr(probing, "_atomic_write", lambda path, text, mode: True)
+        monkeypatch.setattr(probing, "_apply_nft", lambda pec: (True, True))
+        monkeypatch.setattr(probing, "run_list", lambda args, **kw: _shell_result())
+        import src.core.units as units_mod
+        monkeypatch.setattr(units_mod, "install_unit", lambda *a, **kw: True)
+
+        assert probing.cmd_install(apply=True) == 0
+
+        snap = probing.load_snapshot(snap_path)
+        assert snap["syn_bare"] == 0 and snap["probers"] == {}
+        # дельта с нуля, не 0-до-догона:
+        current = probing.NftState(syn_bare=3, syn_valid=2, per_element_counters=True)
+        delta = probing.compute_delta(current, snap)
+        assert delta.syn_bare == 3
 
 
 class TestCLI:
