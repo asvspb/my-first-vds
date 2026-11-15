@@ -150,7 +150,10 @@ class ClientParams:
     obf: dict  # серверные S1/S2/H1..H4
     psk: Optional[str] = None
     allowed_ips: str = DEFAULT_CLIENT_ALLOWED_IPS
-    keepalive: int = PERSISTENT_KEEPALIVE
+    # И44 (SPEC probe-response §14): дефолт — НЕ писать PersistentKeepalive
+    # (радиомолчание в простое; метроном 25с = DPI-маяк). keepalive=N (для
+    # нужд NAT-дырки) — только явным указанием; рекомендованное простое 113.
+    keepalive: Optional[int] = None
 
 
 def render_server_conf(params: ServerParams) -> str:
@@ -203,8 +206,9 @@ def render_client_conf(params: ClientParams) -> str:
     lines += [
         f"Endpoint = {params.endpoint}",
         f"AllowedIPs = {params.allowed_ips}",
-        f"PersistentKeepalive = {params.keepalive}",
     ]
+    if params.keepalive:
+        lines.append(f"PersistentKeepalive = {params.keepalive}")
     return "\n".join(lines) + "\n"
 
 

@@ -75,7 +75,7 @@ H4 = 4
 PublicKey = {SERVER_PUB}
 Endpoint = 103.45.247.172:51825
 AllowedIPs = 0.0.0.0/0, ::/0
-PersistentKeepalive = 25
+
 """
 
     def test_table_off_and_mtu_added(self):

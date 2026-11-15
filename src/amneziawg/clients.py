@@ -206,6 +206,7 @@ def _endpoint_host(state: GatewayState) -> str:
 def add_client(
     name: str,
     no_psk: bool = False,
+    keepalive: Optional[int] = None,
     state_path: Optional[str] = None,
 ) -> dict:
     """Добавить amneziawg-клиента; вернуть dict с conf_path (без секретов).
@@ -252,6 +253,7 @@ def add_client(
             obf=server_obf,
             psk=psk,
             allowed_ips=DEFAULT_CLIENT_ALLOWED_IPS,
+            keepalive=keepalive,
         )
     )
     profile = ClientProfile(

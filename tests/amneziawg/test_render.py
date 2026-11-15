@@ -91,7 +91,6 @@ PublicKey = FIXTURE_PW_AWG_SERVER_PUBLIC_KEY_0123456789abcdef=
 PresharedKey = FIXTURE_PW_AWG_PRESHARED_KEY_0123456789abcdef0123456789abcdef012=
 Endpoint = 203.0.113.10:51825
 AllowedIPs = 0.0.0.0/0,::/0
-PersistentKeepalive = 25
 """
 
 EXPECTED_CLIENT_NO_PSK = """\
@@ -112,7 +111,6 @@ H4 = 881236702
 PublicKey = FIXTURE_PW_AWG_SERVER_PUBLIC_KEY_0123456789abcdef=
 Endpoint = 203.0.113.10:51825
 AllowedIPs = 0.0.0.0/0,::/0
-PersistentKeepalive = 25
 """
 
 
@@ -196,3 +194,18 @@ class TestRenderValidation:
         junk = {"Jc": 4, "Jmin": 200, "Jmax": 120}  # Jmin >= Jmax
         with pytest.raises(ValueError, match="Jmin.*меньше Jmax"):
             render_client_conf(_client(junk=junk))
+
+
+def test_client_keepalive_explicit_and_default_silence() -> None:
+    """И44: по умолчанию строка НЕ пишется (радиомолчание); явное N — пишется."""
+    base = dict(
+        private_key="FIXTURE_PW_AWG_CLIENT_PRIVATE_KEY_0123456789abcdef=",
+        address="10.9.0.9/32",
+        server_pubkey="FIXTURE_PW_AWG_SERVER_PUBLIC_KEY_0123456789abcdef=",
+        endpoint="203.0.113.10:51825",
+        junk={"Jc": 4, "Jmin": 32, "Jmax": 120},
+        obf={"S1": 88, "S2": 128, "H1": 1, "H2": 2, "H3": 3, "H4": 4},
+    )
+    assert "PersistentKeepalive" not in render_client_conf(ClientParams(**base))
+    text = render_client_conf(ClientParams(**base, keepalive=113))
+    assert "PersistentKeepalive = 113" in text

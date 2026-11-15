@@ -115,7 +115,7 @@ class TestAddClientHappyPath:
         assert f"PresharedKey = {FIX_PSK}" in text
         assert f"Endpoint = {PUBLIC_IP}:51825" in text
         assert "AllowedIPs = 0.0.0.0/0,::/0" in text
-        assert "PersistentKeepalive = 25" in text
+        assert "PersistentKeepalive" not in text  # И44: дефолт — радиомолчание
         # Серверные S1/S2/H1–H4 и клиентские J-параметры присутствуют
         for key in ("S1", "S2", "H1", "H2", "H3", "H4"):
             value = SERVER_OBF[key]

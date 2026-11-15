@@ -27,6 +27,9 @@ relay_app = typer.Typer(
 probe_watch_app = typer.Typer(
     help="Монитор активного зондирования tcp/443 (И33 v1: nft counters + journal)"
 )
+probe_rucidr_app = typer.Typer(
+    help="RU-CIDR-агрегат для exit-серверов без релея (SPEC-20261116-probe-response §3)"
+)
 system_app = typer.Typer(help="Системные утилиты: очистка, первичная настройка, файрвол UFW")
 ufw_app = typer.Typer(
     help="UFW hardening (SPEC-20261116): dry-run по умолчанию, --apply для изменений"
@@ -43,6 +46,7 @@ app.add_typer(relay_app, name="relay")
 app.add_typer(system_app, name="system")
 system_app.add_typer(ufw_app, name="ufw")
 gateway_app.add_typer(probe_watch_app, name="probe-watch")
+probe_watch_app.add_typer(probe_rucidr_app, name="ru-cidr")
 
 @app.callback(invoke_without_command=True)
 def main_menu(ctx: typer.Context):
@@ -631,8 +635,9 @@ def probe_watch_callback(
         help="Карта покрытия сигналов на этом сервере (что активно, что слепо)",
     ),
 ):
-    """Монитор активного зондирования tcp/443 (И33 v1): dry-run по умолчанию,
-    read-only watch, RU-классификация по relay-CIDR при наличии."""
+    """Монитор активного зондирования tcp/443 (И33 v1 + SPEC-20261116-probe-response):
+    dry-run по умолчанию, read-only watch, RU-классификация по relay-CIDR,
+    threat-level quiet/elevated/high и (opt-in) авто-лок 443."""
     from src.core.logger import console
 
     if ctx.invoked_subcommand is not None:
@@ -642,6 +647,96 @@ def probe_watch_callback(
     if explain:
         raise typer.Exit(cmd_explain())
     ctx.get_help()
+
+
+@probe_rucidr_app.command("install")
+def probe_rucidr_install(
+    apply: bool = typer.Option(False, "--apply", help="Исполнить (по умолчанию dry-run)"),
+):
+    """Поставить RU-CIDR-агрегат + еженедельный таймер vds-probe-rucidr (root).
+
+    Включает вердикт RU-PROBE-SUSPECT на exit-серверах без релея НЕМЕДЛЕННО:
+    агрегат ipdeny → /etc/vds-relay/ru-cidrs.txt (тот же путь, что ждёт relay).
+    Идемпотентно; сбой сети не портит прежний агрегат.
+
+    Примеры:
+      sudo vds gateway probe-watch ru-cidr install          # dry-run, план
+      sudo vds gateway probe-watch ru-cidr install --apply  # агрегат + таймер
+    """
+    import os
+
+    from src.core.logger import console
+    from src.gateway.probing_rucidr import cmd_ru_cidr_install
+
+    if apply and os.geteuid() != 0:
+        console.print("[error][probe-ru] install требует root (sudo).[/error]")
+        raise typer.Exit(1)
+    raise typer.Exit(cmd_ru_cidr_install(apply=apply))
+
+
+@probe_rucidr_app.command("update")
+def probe_rucidr_update(
+    apply: bool = typer.Option(False, "--apply", help="Исполнить (по умолчанию dry-run)"),
+):
+    """Разово обновить RU-CIDR-агрегат из ipdeny (root; зовётся и таймером).
+
+    Примеры:
+      sudo vds gateway probe-watch ru-cidr update --apply   # обновить сейчас
+    """
+    import os
+
+    from src.core.logger import console
+    from src.gateway.probing_rucidr import cmd_ru_cidr_update
+
+    if apply and os.geteuid() != 0:
+        console.print("[error][probe-ru] update требует root (sudo).[/error]")
+        raise typer.Exit(1)
+    raise typer.Exit(cmd_ru_cidr_update(apply=apply))
+
+
+@probe_watch_app.command("config")
+def probe_watch_config(
+    auto_lockdown: Optional[str] = typer.Option(
+        None,
+        "--auto-lockdown",
+        help="on|off: авто-лок 443 при threat high из часового тика (default off, SPEC §10 OQ-1)",
+    ),
+    lockdown_allow: Optional[str] = typer.Option(
+        None,
+        "--lockdown-allow",
+        help="IP[,IP…]: allow-list авто-лока (v4); пусто + только-443 профиль = fail-fast",
+    ),
+    lockdown_ttl: Optional[str] = typer.Option(
+        None,
+        "--lockdown-ttl",
+        help="TTL авто-лока: Nh, 1h..168h (default 48h, SPEC §10 OQ-2)",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Записать конфиг (по умолчанию dry-run)"),
+):
+    """Конфиг связки auto-lockdown (SPEC-20261116-probe-response §4.2).
+
+    Без параметров — показать текущий конфиг. При auto-lockdown on и
+    threat high часовой тик вызывает lock-443 (reason auto:RU-SUSPECT);
+    downgrade лок НЕ снимает (OQ-3), TTL страхует; elevated никогда не
+    триггерит лок. Fail-fast: on + пустой allow при профиле без 51825/2053
+    отклоняется (лок закрыл бы всё входящее).
+
+    Примеры:
+      sudo vds gateway probe-watch config                                     # показать
+      sudo vds gateway probe-watch config --auto-lockdown on --lockdown-allow 203.0.113.10 --apply
+      sudo vds gateway probe-watch config --auto-lockdown on --lockdown-ttl 24h --apply
+      sudo vds gateway probe-watch config --auto-lockdown off --apply
+    """
+    from src.gateway.probing import cmd_config
+
+    raise typer.Exit(
+        cmd_config(
+            auto_lockdown=auto_lockdown,
+            lockdown_allow=lockdown_allow,
+            lockdown_ttl=lockdown_ttl,
+            apply=apply,
+        )
+    )
 
 
 @probe_watch_app.command("install")
@@ -1068,6 +1163,11 @@ def amneziawg_install(
 def amneziawg_add_client(
     name: str = typer.Argument(..., help="Имя нового клиента"),
     no_psk: bool = typer.Option(False, "--no-psk", help="Без preshared key"),
+    keepalive: int = typer.Option(
+        0, "--keepalive",
+        help="PersistentKeepalive в конфиге клиента (И44: по умолчанию НЕ "
+             "пишется — радиомолчание в простое, метроном 25с = DPI-маяк; "
+             "для NAT-дырки рекомендовано простое 113)"),
 ):
     """Добавить клиента AmneziaWG: .conf (0600) для импорта в AmneziaVPN"""
     from src.amneziawg.clients import AWGClientError, add_client
@@ -1075,7 +1175,7 @@ def amneziawg_add_client(
     from src.gateway.store import StoreError
 
     try:
-        add_client(name, no_psk=no_psk)
+        add_client(name, no_psk=no_psk, keepalive=keepalive or None)
     except (StoreError, AWGClientError) as exc:
         console.print(f"[error][amneziawg] {exc}[/error]")
         raise typer.Exit(1)
@@ -1170,6 +1270,10 @@ def relay_status(
 def relay_add_client(
     name: str = typer.Argument(..., help="Имя клиента (напр. phone, laptop)"),
     no_psk: bool = typer.Option(False, "--no-psk", help="Без preshared key"),
+    keepalive: int = typer.Option(
+        0, "--keepalive",
+        help="PersistentKeepalive клиента (И44: по умолчанию НЕ пишется — "
+             "радиомолчание; для NAT-дырки простое 113)"),
 ):
     """Добавить пира AWG-сервера релея: .conf 0600 с endpoint <relay-домен>:443,
     MTU 1280 (двойная инкапсуляция), AllowedIPs 0.0.0.0/0 (DNS уходит на релей,
@@ -1183,7 +1287,7 @@ def relay_add_client(
     from src.relay.clients import RelayClientError, add_client
 
     try:
-        add_client(name, no_psk=no_psk)
+        add_client(name, no_psk=no_psk, keepalive=keepalive or None)
     except (StoreError, RelayClientError) as exc:
         console.print(f"[error][relay] {exc}[/error]")
         raise typer.Exit(1)
@@ -1330,6 +1434,11 @@ def ufw_harden(
     ),
     apply: bool = typer.Option(False, "--apply", help="Применить план (по умолчанию dry-run)"),
     undo: bool = typer.Option(False, "--undo", help="Откатить применённые harden'ом правила (по журналу в state)"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Обход guard'а активного lock-443 (SPEC §9.C; событие пишется в журнал лока)",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Machine-readable вывод (v1: не реализован, plan печатается текстом)"),
 ):
     """Идемпотентный харднинг UFW (SPEC-20261116): deny in / allow out,
@@ -1337,6 +1446,7 @@ def ufw_harden(
     (детекция существующих правил — relay init / amneziawg / hysteria2 hop
     не дублируются), forwarding для каскадных профилей, ufw enable строго
     последним. Docker/listeners-расхождения — [warning]. ICMP не трогаем.
+    Guard: при активном lock-443 — отказ (SPEC §9.C), обход только --force.
     Откат: --undo --apply. Dry-run по умолчанию.
 
     Примеры:
@@ -1345,6 +1455,7 @@ def ufw_harden(
       sudo vds system ufw harden --profile exit-cascade --allow-from 203.0.113.10 --apply
       sudo vds system ufw harden --profile relay --apply      # asv1/релей
       sudo vds system ufw harden --profile gateway --undo --apply  # откат
+      sudo vds system ufw harden --profile gateway --force --apply # при активном lock-443
     """
     from src.system.ufw import HardeningOpts, UfwError, run_harden
 
@@ -1352,7 +1463,10 @@ def ufw_harden(
         from src.core.logger import console
         console.print("[warning][ufw] --json в v1 не реализован — план печатается текстом.[/warning]")
     try:
-        code = run_harden(profile, apply=apply, undo=undo, opts=HardeningOpts(allow_from=allow_from))
+        code = run_harden(
+            profile, apply=apply, undo=undo, opts=HardeningOpts(allow_from=allow_from),
+            force=force,
+        )
     except UfwError as exc:
         from src.core.logger import console
         console.print(f"[error][ufw] {exc}[/error]")
@@ -1401,6 +1515,68 @@ def ufw_status():
     from src.system.ufw import run_status
 
     raise typer.Exit(run_status())
+
+
+@ufw_app.command("lock-443")
+def ufw_lock443(
+    allow_from: Optional[str] = typer.Option(
+        None,
+        "--allow-from",
+        help="IP[,IP…]: кому оставить 443/tcp (только IPv4); пусто = 443 закрыт всем",
+    ),
+    ttl: str = typer.Option(
+        "48h", "--ttl", help="TTL само-разблокировки: Nh в диапазоне 1h..168h (SPEC §10 OQ-2)"
+    ),
+    reason: str = typer.Option(
+        "", "--reason", help="Причина лока (в журнал/статус; авто-тик пишет auto:RU-SUSPECT)"
+    ),
+    with_udp: bool = typer.Option(
+        False,
+        "--with-udp",
+        help="Закрыть и 443/udp, и Hy2-hop-диапазон (по умолчанию НЕ трогаются — §9.B)",
+    ),
+    status: bool = typer.Option(
+        False, "--status", help="Показать состояние лока + TTL (read-only)"
+    ),
+    unlock: bool = typer.Option(
+        False, "--unlock", help="Досрочное снятие: восстановить широкие правила из журнала"
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Исполнить (по умолчанию dry-run)"),
+):
+    """Изоляция 443 по вердиктам probe-watch (SPEC-20261116-probe-response §4.1).
+
+    Удаляет широкие 443/tcp (в undo-журнал state["ufw_lockdown"]), добавляет
+    allow from <IP> для 443. AWG 51825/udp, CDN 2053, ssh — НЕ трогаются
+    (плейбук Фаза 3). Hy2-hop (asv1) остаётся открытым с warning (§9.B);
+    полное молчание — явным --with-udp. TTL обязателен (default 48h):
+    истечение снимает лок тиком probe-watch (§11), забытый лок невозможен.
+    Повторный --apply идемпотентен: продлевает TTL, allow-from заменяется.
+    Guard: harden при активном локе отказывает (обход --force, §9.C).
+
+    Примеры:
+      sudo vds system ufw lock-443                                          # dry-run: план
+      sudo vds system ufw lock-443 --reason "RU-PROBE-SUSPECT" --apply     # лок (443 всем закрыт)
+      sudo vds system ufw lock-443 --allow-from 203.0.113.10,203.0.113.11 --ttl 24h --apply
+      sudo vds system ufw lock-443 --status                                # состояние + TTL
+      sudo vds system ufw lock-443 --unlock --apply                        # досрочное снятие
+    """
+    from src.system.ufw import UfwError, run_lock443
+
+    try:
+        code = run_lock443(
+            allow_from=allow_from,
+            ttl=ttl,
+            reason=reason,
+            with_udp=with_udp,
+            status=status,
+            unlock=unlock,
+            apply=apply,
+        )
+    except UfwError as exc:
+        from src.core.logger import console
+        console.print(f"[error][ufw] {exc}[/error]")
+        raise typer.Exit(1)
+    raise typer.Exit(code)
 
 
 if __name__ == "__main__":

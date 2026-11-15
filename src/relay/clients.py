@@ -120,6 +120,7 @@ def _append_mtu(client_conf: str, mtu: int) -> str:
 def add_client(
     name: str,
     no_psk: bool = False,
+    keepalive: Optional[int] = None,
     state_path: Optional[str] = None,
 ) -> dict:
     """Добавить пир awg0; вернуть dict с conf_path (без секретов)."""
@@ -156,6 +157,7 @@ def add_client(
                 obf=server_obf,
                 psk=psk,
                 allowed_ips=DEFAULT_CLIENT_ALLOWED_IPS,
+                keepalive=keepalive,
             )
         ),
         RELAY_MTU,
