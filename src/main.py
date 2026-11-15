@@ -21,6 +21,9 @@ xray_app = typer.Typer(help="Xray VLESS Reality gateway (TCP 443)")
 hysteria2_app = typer.Typer(help="Hysteria2 QUIC gateway (UDP 443)")
 amneziawg_app = typer.Typer(help="AmneziaWG gateway (obfuscated WireGuard, UDP 51825)")
 acme_app = typer.Typer(help="ACME / Let's Encrypt certificates (certbot, HTTP-01)")
+relay_app = typer.Typer(
+    help="RU-relay (ADR-007): AWG udp/443 + Reality tcp/443 + policy-routing до asv1"
+)
 app.add_typer(zerotier_app, name="zerotier")
 app.add_typer(wireguard_app, name="wireguard")
 app.add_typer(coturn_app, name="coturn")
@@ -29,6 +32,7 @@ app.add_typer(xray_app, name="xray")
 app.add_typer(hysteria2_app, name="hysteria2")
 app.add_typer(amneziawg_app, name="amneziawg")
 app.add_typer(acme_app, name="acme")
+app.add_typer(relay_app, name="relay")
 
 @app.callback(invoke_without_command=True)
 def main_menu(ctx: typer.Context):
@@ -52,6 +56,7 @@ def main_menu(ctx: typer.Context):
                 questionary.Choice("Управление Xray (VLESS Reality)", "xray"),
                 questionary.Choice("Управление Hysteria2 (QUIC, UDP 443)", "hysteria2"),
                 questionary.Choice("Управление AmneziaWG (UDP 51825)", "amneziawg"),
+                questionary.Choice("Управление RU-relay (ADR-007)", "relay"),
                 questionary.Choice("Базовая настройка сервера (Setup)", "server_setup"),
                 questionary.Choice("Очистка системы (Cleanup)", "cleanup"),
                 questionary.Choice("Выход", "exit"),
@@ -235,6 +240,41 @@ def main_menu(ctx: typer.Context):
                     amneziawg_install()
                 except typer.Exit:
                     pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+
+        elif choice == "relay":
+            relay_choice = questionary.select(
+                "Меню RU-relay:",
+                choices=[
+                    questionary.Choice("Развёртывание релея (init, dry-run по умолчанию)", "init"),
+                    questionary.Choice("Статус (status)", "status"),
+                    questionary.Choice("Добавить клиента (add-client)", "add_client"),
+                    questionary.Choice("Назад", "back"),
+                ]
+            ).ask()
+
+            if relay_choice == "init":
+                exit_ip = questionary.text("Exit-сервер (asv1 IPv4):", default="103.45.247.172").ask() or ""
+                domain = questionary.text("Домен релея:", default="relay.asvpersonal.ru").ask() or ""
+                sni = questionary.text("SNI Reality (RU-сайт same-DC):").ask() or ""
+                try:
+                    relay_init(exit_ip=exit_ip, domain=domain, sni=sni)
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif relay_choice == "status":
+                try:
+                    relay_status()
+                except typer.Exit:
+                    pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif relay_choice == "add_client":
+                name = questionary.text("Имя клиента:", default="phone").ask()
+                if name:
+                    try:
+                        relay_add_client(name=name)
+                    except typer.Exit:
+                        pass
                 questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
 
         elif choice == "zerotier":
@@ -968,6 +1008,75 @@ def amneziawg_remove(
     from src.amneziawg.remove import run_remove
 
     raise typer.Exit(run_remove(apply=apply))
+
+
+_RELAY_INIT_EPILOG = (
+    "Примеры:\n"
+    "  sudo vds relay init --exit 103.45.247.172 --domain relay.asvpersonal.ru --sni www.rt.ru\n"
+    "  sudo vds relay init --exit 103.45.247.172 --domain relay.asvpersonal.ru --sni www.rt.ru \\\n"
+    "      --exit-conf /root/relay-awg1.conf --apply\n\n"
+    "Dry-run по умолчанию: печатает план (preflight + шаги) без мутаций.\n"
+    "Порядок подготовки: Фаза 0 — docs/DEPLOY-RU-RELAY.md (A-запись DNS-only,\n"
+    "leg smoke-test); Фаза 2 — этот init (--apply) либо ранбук руками.\n"
+    "Клиенты после установки: sudo vds relay add-client NAME."
+)
+
+
+@relay_app.command("init", epilog=_RELAY_INIT_EPILOG)
+def relay_init(
+    exit_ip: str = typer.Option(..., "--exit", help="Публичный IPv4 exit-сервера asv1 (нога awg1)"),
+    domain: str = typer.Option(..., "--domain", help="Домен релея (A-запись DNS-only! CF-прокси не пропускает UDP)"),
+    sni: str = typer.Option(..., "--sni", help="RU-сайт same-DC для Reality-фолбэка (SNI/dest)"),
+    exit_conf: str = typer.Option(
+        None, "--exit-conf", help="Путь к клиентскому .conf с asv1 (vds amneziawg add-client relay)"
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Исполнить план (по умолчанию dry-run)"),
+):
+    """Идемпотентно развернуть RU-relay (ADR-007 v1): AWG udp/443 (10.10.0.0/24),
+    Reality tcp/443 RU-SNI, awg1-нога до asv1, UFW, ip_forward, MASQUERADE,
+    nft policy-routing (RU-CIDR → eth0, прочее → awg1), недельный CIDR-таймер.
+    Dry-run по умолчанию; повторный запуск дотягивает, не ломает."""
+    from src.relay.init import run_init
+
+    raise typer.Exit(
+        run_init(exit_ip=exit_ip, domain=domain, sni=sni, exit_conf=exit_conf, apply=apply)
+    )
+
+
+@relay_app.command("status")
+def relay_status(
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable вывод"),
+):
+    """Статус релея: юниты, интерфейсы awg0/awg1, живость ноги до asv1
+    (handshake-возраст), nft/ip rule, RU-CIDR, слушание 443. Read-only.
+
+    Пример: sudo vds relay status; sudo vds relay status --json"""
+    from src.relay.status import run_status
+
+    raise typer.Exit(run_status(json_output=json_output))
+
+
+@relay_app.command("add-client")
+def relay_add_client(
+    name: str = typer.Argument(..., help="Имя клиента (напр. phone, laptop)"),
+    no_psk: bool = typer.Option(False, "--no-psk", help="Без preshared key"),
+):
+    """Добавить пира AWG-сервера релея: .conf 0600 с endpoint <relay-домен>:443,
+    MTU 1280 (двойная инкапсуляция), AllowedIPs 0.0.0.0/0 (DNS уходит на релей,
+    там RU-CIDR → напрямую, прочее → asv1). Секреты в stdout не выводятся.
+
+    Пример: sudo vds relay add-client phone
+    Конфиг копируется с сервера по ssh → импорт в AmneziaVPN
+    (docs/DEPLOY-RU-RELAY.md §Клиенты)."""
+    from src.core.logger import console
+    from src.gateway.store import StoreError
+    from src.relay.clients import RelayClientError, add_client
+
+    try:
+        add_client(name, no_psk=no_psk)
+    except (StoreError, RelayClientError) as exc:
+        console.print(f"[error][relay] {exc}[/error]")
+        raise typer.Exit(1)
 
 
 @acme_app.command("issue")

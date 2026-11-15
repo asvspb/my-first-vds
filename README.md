@@ -177,6 +177,12 @@ vds amneziawg remove-client <name>  # Удалить клиента (dry-run; --
 vds amneziawg remove --apply        # Удалить сервис (пакеты PPA — вручную)
 
 vds acme issue --domain vpn.example.ru --email admin@example.ru   # LE (HTTP-01) + deploy-hook
+
+vds relay init --exit 103.45.247.172 --domain relay.asvpersonal.ru --sni www.example.ru
+                                    # RU-relay (ADR-007): dry-run план; --apply развёртывает
+                                    # AWG udp/443 + Reality tcp/443 + policy-routing (DEPLOY-RU-RELAY.md)
+vds relay status                    # Юниты, awg0/awg1, живость ноги до asv1, nft, CIDR
+vds relay add-client phone          # Пир awg0: .conf (0600), endpoint relay-домен:443
 ```
 
 Ссылки импортируются в v2rayNG / NekoRay / Hiddify / sing-box; AmneziaWG-конфиг —

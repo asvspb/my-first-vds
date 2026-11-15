@@ -42,13 +42,14 @@ src/
 ├── xray/                # Reality (443), XHTTP (8443), CDN (2053): adapter, install, clients, config, status, remove
 ├── hysteria2/           # QUIC (443): adapter, install, clients, config, hop, obfs, status, sysctl, remove
 ├── amneziawg/           # AmneziaWG (UDP 51825): install, clients, status, remove
+├── relay/               # RU-relay (ADR-007): init, status, clients, cidr (AWG udp/443 + Reality tcp/443 + policy-routing до asv1)
 ├── acme/                # ACME/LE: issue (HTTP-01) + deploy-hook для Hysteria2
 ├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание)
 ├── sysinfo/             # dashboard
 └── system/              # setup, cleanup
-systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg .service.tpl; sysctl/99-vds-gateway.conf.tpl
-tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/, amneziawg/, acme/
-docs/                    # TEAM.md, DEPLOY.md, VPN-PROTOCOLS.md, CDN-FRONTS.md,
+systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg/vds-relay-{exit,nat,policy,cidr} .service.tpl; sysctl/99-vds-gateway.conf.tpl
+tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/, amneziawg/, acme/, relay/
+docs/                    # TEAM.md, DEPLOY.md, DEPLOY-RU-RELAY.md, VPN-PROTOCOLS.md, CDN-FRONTS.md,
                          # CENSORSHIP-ROADMAP.md, CENSORSHIP-PATTERNS.md, MIGRATE-VDS.md, adr/, team/
 install.sh, preinstall.sh, local-init.sh, myhelp.sh
 ```

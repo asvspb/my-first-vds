@@ -1,7 +1,11 @@
 # ADR-007: RU-relay — входной релей на российском VDS; mobile-whitelist сценарий
 
-- **Дата:** 2026-11-12
-- **Статус:** proposed (ждёт решения владельца: покупка RU VDS ~150–300₽/мес)
+- **Дата:** 2026-11-12 (решение владельца 2026-11-14/15)
+- **Статус:** **accepted** (владелец, 2026-11-14/15: «жду код для релея;
+  развертывание скриптами и руками»); реализация —
+  [REQ-20261114-ru-relay](../team/requirements/REQ-20261114-ru-relay.md) /
+  [SPEC-20261114-ru-relay](../team/specs/SPEC-20261114-ru-relay.md) /
+  [DEPLOY-RU-RELAY](../DEPLOY-RU-RELAY.md), см. «Девиации v1» ниже
 - **Контекст:** [CENSORSHIP-PATTERNS](../CENSORSHIP-PATTERNS.md) §2a/§3a/§3b,
   [REQ-20261112-transport-hardening](../team/requirements/REQ-20261112-transport-hardening.md),
   [MIGRATE-VDS](../MIGRATE-VDS.md), анализ видео-источников 2026-11-11..12
@@ -155,6 +159,22 @@ RU VDS, KVM, без ограничений UDP, Москва/Питер (RTT ~10
 | gov-CDN домены (Яндекс CDN)? | curl до известного RU-CDN фронта | да → паттерн 2.1 |
 | SNI-фильтр или IP-фильтр? | curl c SNI=RU-домен на relay-IP vs без SNI | различие → SNI-режим |
 
+## Девиации v1 (зафиксированы владельцем 2026-11-14/15, SPEC-20261114-ru-relay)
+
+| пункт ADR | v1 |
+|---|---|
+| R1a: две инстанции AWG (51825 domestic + 443 whitelist) | **одна** серверная инстанция на **UDP 443** (второй порт — только при появлении «нормальной» схемы на релее) |
+| R1a: Hysteria2-инстанция на релее (опц.) | вне v1 (non-goal) |
+| Шаг 2: лёгкий скрипт `21_ru-relay-deploy.sh` | код `src/relay/` в vds + **ручной ранбук** `docs/DEPLOY-RU-RELAY.md`; CLI `vds relay init/status/add-client` повторяет ранбук 1:1 (deploy-скрипт ubuntuInstaller не требуется) |
+| Шаг 3: «статические маршруты на relay» | **policy-routing через fwmark**: nftables set RU-CIDR + prerouting mark 0x1 + `ip rule fwmark 0x1 table 100` (default dev awg1); RU → direct eth0; MASQUERADE на awg1/eth0; еженедельный таймер обновления CIDR |
+| Подсеть клиентов | **10.10.0.0/24** (awg0) — 10.9.0.0/24 занята asv1-ногой awg1; awg1 — v4-only (у asv1 нет IPv6) |
+| R2 нога 2 (IPv6→asv1) | non-goal v1 (asv1 без v6; критерий exit-хостера при миграции остаётся) |
+| DNS-политика | dnsmasq-схема — **предложение** (рендер конфига + ранбук), исполнение — OQ |
+| MTU/MSS | **MTU awg0 = 1280** (двойная инкапсуляция); MSS-clamp не требуется |
+| Фаза 0 gate | leg smoke-test UDP-handshake relay→asv1:51825 ДО развёртывания; мёртвая/шейпящаяся нога → стоп + эскалация владельцу |
+| W-strict | только матрица полевой проверки (§Whitelist/Test-plan); без реализации |
+| Домен | `relay.asvpersonal.ru` A-запись **DNS-only/серое облако** (CF-прокси не пропускает UDP и не-HTTP TCP) — обязательный пункт приёмки Фазы 0 |
+
 ## Альтернативы (рассмотрены и отклонены/отложены)
 
 | альтернатива | вердикт |
@@ -186,3 +206,21 @@ RU VDS, KVM, без ограничений UDP, Москва/Питер (RTT ~10
 4. Ноутбук: `vpn-awg-split@relay` инстанция + `vpn amneziawg add-client relay`.
 5. Телефон: AmneziaVPN профиль до relay.
 6. Полевая приёмка по Test-plan (при доступном whitelist-профиле оператора).
+
+## Заимствования из AWG-Router (habr 1107904, 2026-11-15)
+
+Сторонняя реализация той же схемы (RU-вход → зарубежный выход, split на
+сервере) подтвердила архитектуру (ipdeny/nftables/fwmark/JSON-state) и дала
+четыре паттерна, принятых в SPEC-20261114-ru-relay (WP-6, кроме OQ-5):
+
+1. **Unreachable-default fail-safe** — в таблице выхода правило
+   `unreachable default metric 4096`: падение ноги relay→exit не пускает
+   не-RU-трафик с RU-IP напрямую. Уточнение к §Топология: kill-switch
+   обязателен и на релее, не только на клиентах.
+2. **MSS-clamp обе стороны** — страховка двойной инкапсуляции помимо MTU.
+3. **DNS через путь выхода** (SO_MARK) — иначе RU-CDN возвращает RU-узел.
+4. **Кастомные I1-маски AWG** — отложено (OQ-5 SPEC): до полевой приёмки v1
+   не трогаем obf-параметры; кандидат следующего WP.
+
+Панель AWG-Router как решение отклонена (инварианты репо: CLI + systemd,
+панель наружу не ставим).
