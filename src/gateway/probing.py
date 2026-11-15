@@ -634,7 +634,6 @@ class WatchReport:
 
     _ru_networks: Optional[list[ipaddress.IPv4Network]] = None
     _geo_cache: dict[str, str] = field(default_factory=dict)
-    _current_probers: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -643,6 +642,8 @@ class RuIpHit:
 
     returned=True — IP был в снапшоте, но снова активен (положительная
     дельта); returned=False — впервые появился в окне (кандидат SUSPECT).
+    На фолбэке (без per-element счётчиков) delta=packets=0: присутствие
+    в set с timeout 1h само по себе означает активность в окне.
     """
 
     ip: str
@@ -672,11 +673,14 @@ def build_report(
     server_ip — публичный адрес сервера; None → определить через netcheck
     (в тестах подменяется).
 
-    RU-логика (ревью 2026-11-16, edge-case 3c):
+    RU-логика (ревью 2026-11-16, edge-case 3c; фикс 2026-11-16 ревью 3):
     - активность за окно — по ДЕЛЬТЕ per-IP (для отсутствовавших в снапшоте
       дельта = current packets);
-    - ru_top: все RU-IP с положительной дельтой — новые (returned=False)
-      и «вернувшиеся» (были в снапшоте, снова активны — returned=True);
+    - на фолбэке (per_element_counters=False) все элементы set с нулевыми
+      счётчиками: присутствие в set (timeout 1h) = активность в окне —
+      ru_hits включают IP с delta=0, new_ru_ips = новые IP сета за ~час;
+    - ru_top: новые (returned=False) и «вернувшиеся» (были в снапшоте,
+      снова активны — returned=True);
     - триггер SUSPECT — только НОВЫЕ RU-IP (не из снапшота) >= 2 при
       delta.syn_valid > 0: окно из одних голых masscan-SYN (delta.syn_valid
       = 0) SUSPECT не даёт. Ограничение (в explain): probers4 включает и
@@ -686,8 +690,6 @@ def build_report(
     snapshot = load_snapshot(snapshot_path)
     delta = compute_delta(current, snapshot)
 
-    if server_ip is None:
-        server_ip = _server_public_ip()
     raw_probers = snapshot.get("probers")
     snap_probers: dict[str, int] = (
         {str(k): int(v) for k, v in dict(raw_probers).items()}
@@ -700,12 +702,21 @@ def build_report(
     geo_cache: dict[str, str] = {}
     new_ru_ips: list[str] = []
     ru_hits: list[RuIpHit] = []
-    if ru_networks:
+    if ru_networks and current.probers:
+        # Ревью 2026-11-16 (чистка): server_ip нужен только когда есть что
+        # фильтровать — сетевой вызов не происходит на пустом set.
+        if server_ip is None:
+            server_ip = _server_public_ip()
         for ip, packets in current.probers.items():
-            prev = snap_probers.get(ip, 0)
-            d = packets if packets < prev else packets - prev
-            if d <= 0:
-                continue  # не активен в окне
+            if current.per_element_counters:
+                prev = snap_probers.get(ip, 0)
+                d = packets if packets < prev else packets - prev
+                if d <= 0:
+                    continue  # не активен в окне
+            else:
+                # Фолбэк: счётчиков нет, но элемент в set с timeout 1h —
+                # значит зондировал/коннектился в пределах последнего часа.
+                d = 0
             if ip == server_ip:
                 continue
             try:
@@ -756,7 +767,6 @@ def build_report(
     )
     report._ru_networks = ru_networks
     report._geo_cache = geo_cache
-    report._current_probers = dict(current.probers)
     return report
 
 
@@ -864,8 +874,13 @@ def build_explain(
 
     Только факты: что установлено, что слепо. Без root тоже работает
     (read-only проверки, отказ shell — честный "нет/не доступно").
+
+    RU-строки — по ТРЁМ состояниям load_ru_cidrs (ревью 2026-11-16):
+    None (файла нет) → missing; [] (файл есть, v4-агрегат пуст) → warn
+    «RU-SUSPECT отключён»; непустой → ok.
     """
     rows: list[ExplainRow] = []
+    ru_nets = load_ru_cidrs(ru_cidr_path)
 
     if nft_table_exists(run):
         rows.append(ExplainRow("nft-таблица inet vds_probe", "ok", "установлена"))
@@ -928,7 +943,7 @@ def build_explain(
         )
     )
 
-    if ru_cidr_path.is_file():
+    if ru_nets:
         rows.append(
             ExplainRow(
                 "вердикт RU-PROBE-SUSPECT",
@@ -937,6 +952,15 @@ def build_explain(
                 "сигнализируют точечное RU-зондирование; триггер гасится при delta.syn_valid=0 "
                 "(окно из одних masscan-SYN). Ограничение: probers4 включает и masscan-IP "
                 "(update на все SYN) — раздельный per-SYN-тип учёт невозможен на nft-уровне",
+            )
+        )
+    elif ru_nets is not None:
+        rows.append(
+            ExplainRow(
+                "вердикт RU-PROBE-SUSPECT",
+                "warn",
+                f"{ru_cidr_path} есть, но валидного v4-агрегата нет (сплошь IPv6/мусор) — "
+                "RU-SUSPECT отключён; обновите агрегат (relay-cidr)",
             )
         )
     else:
@@ -956,12 +980,20 @@ def build_explain(
         )
     )
 
-    if ru_cidr_path.is_file():
+    if ru_nets:
         rows.append(
             ExplainRow(
                 "RU-CIDR агрегат",
                 "ok",
                 f"{ru_cidr_path} присутствует — пробующие IP помечаются [RU]",
+            )
+        )
+    elif ru_nets is not None:
+        rows.append(
+            ExplainRow(
+                "RU-CIDR агрегат",
+                "warn",
+                f"{ru_cidr_path} есть, но валидного v4-агрегата нет — geo: unknown",
             )
         )
     else:

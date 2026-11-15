@@ -520,6 +520,48 @@ class TestRuClassification:
         assert probing.classify_ip("203.0.113.9", None, cache=cache) == "[RU]"  # из кэша
         assert cache == {"203.0.113.9": "[RU]"}
 
+    def test_public_ip_not_called_on_empty_probers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Чистка 3 (ревью 2026-11-16): _server_public_ip ленивый — сетевой
+        вызов только при непустом current.probers и непустом RU-агрегате."""
+        calls: list[int] = []
+
+        def _spy() -> str:
+            calls.append(1)
+            return "203.0.113.254"
+
+        monkeypatch.setattr(probing, "_server_public_ip", _spy)
+        state = probing.NftState(syn_bare=5, syn_valid=5, per_element_counters=True)
+        probing.build_report(
+            state, run=lambda args, **kw: _shell_result(),
+            snapshot_path=tmp_path / "snap.json",  # server_ip=None → ленивый путь
+            now=lambda: probing.datetime(2026, 11, 16, 12, 0, 0),
+        )
+        assert calls == []
+
+        # непустой set, но RU-файла нет → server_ip по-прежнему не нужен
+        state_full = probing.NftState(
+            syn_bare=5, syn_valid=5, probers={"198.51.100.9": 1},
+            per_element_counters=True,
+        )
+        probing.build_report(
+            state_full, run=lambda args, **kw: _shell_result(),
+            snapshot_path=tmp_path / "snap.json",
+            now=lambda: probing.datetime(2026, 11, 16, 12, 0, 0),
+        )
+        assert calls == []
+
+        # непустой set И непустой RU-агрегат → ровно один вызов
+        monkeypatch.setattr(probing, "RU_CIDR_FILE", tmp_path / "ru-cidrs.txt")
+        (tmp_path / "ru-cidrs.txt").write_text("203.0.113.0/24\n", encoding="utf-8")
+        probing.build_report(
+            state_full, run=lambda args, **kw: _shell_result(),
+            snapshot_path=tmp_path / "snap.json",
+            now=lambda: probing.datetime(2026, 11, 16, 12, 0, 0),
+        )
+        assert calls == [1]  # непустой set → один вызов
+
     def test_report_geo_uses_shared_cache(self, tmp_path: Path) -> None:
         nets = [probing.ipaddress.ip_network("203.0.113.0/24")]
         state = probing.NftState(
@@ -692,6 +734,60 @@ class TestNewRuIps:
         assert report.new_ru_ips == []
         assert report.verdict.name == "quiet"
 
+    def test_fallback_set_still_sees_ru_ips(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ревью 2026-11-16 (баг): при per_element_counters=False (наш asv2 на
+        фолбэке) цикл с d=packets-prev=0 отбрасывал ВСЕ IP — ru_hits/new_ru_ips
+        были слепы. Фикс: присутствие в set с timeout 1h = активность в окне."""
+        self._ru_file(tmp_path, monkeypatch)
+        snap_path = tmp_path / "snap.json"
+        prev = probing.NftState(syn_bare=100, syn_valid=5, udp_443=0,
+                                probers={"203.0.113.5": 0}, per_element_counters=False)
+        assert probing.save_snapshot(prev, snap_path)
+        current = probing.NftState(
+            syn_bare=120, syn_valid=10, udp_443=0,  # delta.syn_valid=5 > 0
+            probers={
+                "203.0.113.5": 0,     # был в снапшоте → вернувшийся (fallback)
+                "203.0.113.101": 0,   # новый
+                "203.0.113.102": 0,   # новый
+                "198.51.100.9": 0,    # не RU — не считается
+            },
+            per_element_counters=False,
+        )
+        report = probing.build_report(
+            current, run=lambda args, **kw: _shell_result(),
+            snapshot_path=snap_path, server_ip="",
+            now=lambda: probing.datetime(2026, 11, 16, 12, 0, 0),
+        )
+        assert sorted(report.new_ru_ips) == ["203.0.113.101", "203.0.113.102"]
+        assert len(report.ru_hits) == 3
+        assert all(h.delta == 0 and h.packets == 0 for h in report.ru_hits)
+        assert report.verdict.name == "RU-PROBE-SUSPECT"
+
+    def test_fallback_set_quiet_without_valid_delta(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Фолбэк + новые RU-IP, но delta.syn_valid=0 (голые masscan-SYN)
+        → quiet (то же гашение, что в per-element ветке)."""
+        self._ru_file(tmp_path, monkeypatch)
+        snap_path = tmp_path / "snap.json"
+        prev = probing.NftState(syn_bare=100, syn_valid=10, udp_443=0,
+                                per_element_counters=False)
+        assert probing.save_snapshot(prev, snap_path)
+        current = probing.NftState(
+            syn_bare=105, syn_valid=10,
+            probers={"203.0.113.101": 0, "203.0.113.102": 0},
+            per_element_counters=False,
+        )
+        report = probing.build_report(
+            current, run=lambda args, **kw: _shell_result(),
+            snapshot_path=snap_path, server_ip="",
+            now=lambda: probing.datetime(2026, 11, 16, 12, 0, 0),
+        )
+        assert len(report.new_ru_ips) == 2
+        assert report.verdict.name == "quiet"
+
     def test_loopback_and_snapshot_ips_excluded(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -760,15 +856,31 @@ class TestExplain:
         assert "unknown" in ru_row.note
 
     def test_ru_probe_suspect_verdict_availability(self, tmp_path: Path) -> None:
+        """Три состояния RU-CIDR (ревью 2026-11-16, чистка 2): ok / warn
+        (файл есть, v4-агрегат пуст) / missing — explain не врёт зелёным."""
         fake = FakeRun({"nft list tables": _shell_result(TABLES_ABSENT)})
         (tmp_path / "ok.txt").write_text("203.0.113.0/24\n", encoding="utf-8")
+        (tmp_path / "v6.txt").write_text("2a00:5c00::/29\n", encoding="utf-8")
         present = probing.build_explain(fake, ru_cidr_path=tmp_path / "ok.txt")
+        empty_v4 = probing.build_explain(fake, ru_cidr_path=tmp_path / "v6.txt")
         absent = probing.build_explain(fake, ru_cidr_path=tmp_path / "no.txt")
+
         ok_row = next(r for r in present if "RU-PROBE-SUSPECT" in r.item)
-        no_row = next(r for r in absent if "RU-PROBE-SUSPECT" in r.item)
+        ok_cidr = next(r for r in present if "RU-CIDR агрегат" in r.item)
         assert ok_row.status == "ok"
+        assert ok_cidr.status == "ok"
+
+        warn_row = next(r for r in empty_v4 if "RU-PROBE-SUSPECT" in r.item)
+        warn_cidr = next(r for r in empty_v4 if "RU-CIDR агрегат" in r.item)
+        assert warn_row.status == "warn"
+        assert "отключён" in warn_row.note
+        assert warn_cidr.status == "warn"
+
+        no_row = next(r for r in absent if "RU-PROBE-SUSPECT" in r.item)
+        no_cidr = next(r for r in absent if "RU-CIDR агрегат" in r.item)
         assert no_row.status == "missing"
         assert "недоступен" in no_row.note
+        assert no_cidr.status == "missing"
 
 
 # ---------------------------------------------------------------------------
