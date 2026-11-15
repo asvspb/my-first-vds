@@ -70,8 +70,17 @@ _ARCH_MAP = {
     "arm64": "arm64-v8a",
 }
 
-_X25519_PRIVATE_RE = re.compile(r"Private key:\s*([A-Za-z0-9_-]+)")
-_X25519_PUBLIC_RE = re.compile(r"Public key:\s*([A-Za-z0-9_-]+)")
+# Два формата вывода `xray x25519`:
+#  ≤25.x: "Private key: X" + "Public key: Y"
+#  26.x+: "PrivateKey: X" + "Password: Y" (= публичный ключ) + "Hash32: ..."
+# Якорь на заголовок строки исключает ложное совпадение Hash32 (тот же
+# алфавит base64.RawURLEncoding).
+_X25519_PRIVATE_RE = re.compile(
+    r"^(?:Private key|PrivateKey):\s*([A-Za-z0-9_-]+)", re.MULTILINE
+)
+_X25519_PUBLIC_RE = re.compile(
+    r"^(?:Public key|Password):\s*([A-Za-z0-9_-]+)", re.MULTILINE
+)
 
 
 class InstallError(Exception):

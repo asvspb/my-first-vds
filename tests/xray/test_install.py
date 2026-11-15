@@ -72,13 +72,46 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
     def _run_list(args: list[str], timeout: int = 10) -> ShellResult:
         if args[1:] == ["x25519"]:
             return ShellResult(
-                stdout="Private key: PRIVKEYABC\nPublic key: PUBKEYXYZ\n",
+                stdout="PrivateKey: PRIVKEYABC\nPassword: PUBKEYXYZ\nHash32: HASHABC\n",
                 stderr="",
                 returncode=0,
             )
         return ShellResult(stdout="", stderr="", returncode=0)
 
     monkeypatch.setattr(install, "run_list", _run_list)
+
+    # Формат 26.x+: Password = публичный ключ; Hash32 не должен совпасть
+    private_key, public_key = install._gen_x25519()
+    assert (private_key, public_key) == ("PRIVKEYABC", "PUBKEYXYZ")
+
+    def _run_list_old(args: list[str], timeout: int = 10) -> ShellResult:
+        if args[1:] == ["x25519"]:
+            return ShellResult(
+                stdout="Private key: PRIVKEYABC\nPublic key: PUBKEYXYZ\n",
+                stderr="",
+                returncode=0,
+            )
+        return ShellResult(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(install, "run_list", _run_list_old)
+
+    # Формат ≤25.x: Private key/Public key
+    private_key, public_key = install._gen_x25519()
+    assert (private_key, public_key) == ("PRIVKEYABC", "PUBKEYXYZ")
+
+    def _run_list_hash_trap(args: list[str], timeout: int = 10) -> ShellResult:
+        # ловушка: Hash32 идёт первым и имеет тот же алфавит
+        if args[1:] == ["x25519"]:
+            return ShellResult(
+                stdout="Hash32: HASHSHOULDMATCHNOT\nPrivateKey: PRIVKEYABC\nPassword: PUBKEYXYZ\n",
+                stderr="",
+                returncode=0,
+            )
+        return ShellResult(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(install, "run_list", _run_list_hash_trap)
+    private_key, public_key = install._gen_x25519()
+    assert (private_key, public_key) == ("PRIVKEYABC", "PUBKEYXYZ")
 
     test_env = Env(root=tmp_path)
 
