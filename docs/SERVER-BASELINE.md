@@ -38,6 +38,23 @@
 | SSH | порт 22, `PermitRootLogin prohibit-password`, **`PasswordAuthentication yes`** |
 | Юниты gateway | xray, hysteria2, hysteria2-obfs, hysteria2-hop, amneziawg, health.timer — active |
 
+## 1.1 Профиль asv2 (факт на 2026-11-16; основной AWG-exit)
+
+| Параметр | Значение |
+|---|---|
+| IP / гео | `213.108.23.119` · зарубеж (ptr.network) |
+| IPv6 | **да**: `2a0b:4140:9a2e::/48` (адрес `::2`, egress проверен) — первый dual-stack exit |
+| Домен | `asv2.asvpersonal.ru` A + AAAA, **DNS-only** (CF-прокси нельзя), LE (89 дн.) |
+| RAM | 2 ГБ |
+| UFW | **active** (harden --profile gateway, 2026-11-16): deny in / allow out / allow routed |
+| Порты | `49222/tcp LIMIT` (ssh, двухфазный перенос завершён), `443/tcp+udp`, `80/tcp` (ACME), `51825/udp` |
+| SSH | **только 49222** (limit), ключи; `PasswordAuthentication` — как в образе |
+| Юниты | vds-xray, vds-hysteria2 (secure LE), vds-amneziawg + vds-amneziawg-nat, vds-probe-watch.timer |
+| Роль | основной AWG-exit ноутбука (`vpn start`), AWG-подсеть 10.9.0.0/24 |
+
+> asv1 остаётся запасным exit: UFW inactive, ssh 22 — целевой профиль §5.2
+> (harden + 49222 применит полевка asv1 после TSPU-окна).
+
 ## 2. Матрица «авто / вручную»
 
 | Настройка | asv1 | Автоматически? | Где/как |
@@ -74,7 +91,7 @@
 | unattended-upgrades | `apt install -y unattended-upgrades && dpkg-reconfigure -f noninteractive unattended-upgrades` | `systemctl is-active unattended-upgrades` |
 | journald (ограничить) | `mkdir -p /etc/systemd/journald.conf.d && printf '[Journal]\nSystemMaxUse=500M\n' > /etc/systemd/journald.conf.d/99-vds.conf && systemctl restart systemd-journald` | `journalctl --disk-usage` |
 | logrotate (дефолт) | ничего (пакетный) | `logrotate --debug /etc/logrotate.conf` |
-| fd-лимиты | `printf "* soft nofile 65535\n* hard nofile 65535\n" > /etc/security/limits.d/99-vds.conf` | новый логин: `ulimit -n` |
+| fd-лимиты (PAM-сессии) | `printf "* soft nofile 65535\n* hard nofile 65535\n" > /etc/security/limits.d/99-vds.conf` | новый логин: `ulimit -n`. ⚠️ systemd-демоны **игнорируют** limits.d — их лимит задаётся `LimitNOFILE=` в юните; юниты проекта (vds-xray/vds-hysteria2 tpl) уже содержат LimitNOFILE |
 | kernel/sysctl gateway | `vds hysteria2 install` (BBR, fq, rmem/wmem) | `sysctl net.ipv4.tcp_congestion_control net.core.rmem_max` |
 | ip_forward + NAT (AWG) | `vds amneziawg install` | `sysctl net.ipv4.ip_forward`; `iptables -t nat -S POSTROUTING` |
 | hop nat-цепочка | `vds hysteria2 add-hop-ports <range> --apply` | `iptables -t nat -S VDS_HY2_HOP` |
@@ -90,8 +107,17 @@
 | sudo без пароля (опционально) | ? | `/etc/sudoers.d/<user>` (440) |
 
 > ⚠️ `vds server-setup` пишет `PasswordAuthentication no`, но на asv1 сейчас
-> `yes` — при переустановке решите осознанно (доступ по ключу должен быть
+> `yes` — при переустановке решайте осознанно (доступ по ключу должен быть
 > проверен **до** отключения паролей).
+
+**Правило имён `sshd_config.d` (first-match-wins):** побеждает ПЕРВАЯ
+прочитанная директива; cloud-образы несут `50-cloud-init.conf` /
+`60-cloudimg-settings.conf` с `PasswordAuthentication yes`. Override-файлы
+проекта именовать с префиксом **`00-`** (`00-vds-ssh.conf`), чтобы читаться
+раньше cloud-init. Исключение — **`Port`**: директива аддитивная (несколько
+Port = слушаются все), поэтому `99-vds-port.conf` из §5.4 корректен при любом
+порядке. Факт asv2: cloud-init-файла в `sshd_config.d` нет, но правило
+обязательно для новых образов/релея.
 
 **Откат переноса ssh-порта (файлы проекта, SPEC-20261116):** за файлы отвечает
 двухфазная команда §5.4; вручную:
@@ -134,9 +160,17 @@ allow-набора → сервисные порты по `state.protocols` → 
 ### 5.2 Матрица портов по профилям
 
 Правила выводятся из `state.protocols` (открывается только установленное).
-Факт asv1 (в бою, 2026-11-16): `22/limit→49222`, `443/tcp` Reality,
-`443/udp` Hy2, `8443/tcp` XHTTP(LE), `2053/tcp` CF-WS CDN, `51825/udp` AWG
-(пиры живы), `20000-20500/udp` hop (в бою с 2026-11-13).
+**Факт asv2 (harden применён 2026-11-16, приёмка PASS):** `49222/tcp LIMIT`,
+`443/tcp+udp`, `80/tcp`, `51825/udp` (+v6-дубли).
+**Целевой профиль asv1 (harden ещё НЕ применён — сейчас UFW inactive, ssh 22,
+полевка после TSPU-окна):** `22→limit→49222`, `443/tcp` Reality, `443/udp`
+Hy2, `8443/tcp` XHTTP(LE), `2053/tcp` CF-WS CDN, `51825/udp` AWG (пиры живы),
+`20000-20500/udp` hop (в бою с 2026-11-13).
+
+Примечание к `exit-cascade`: порты `51825/udp`, `8443/tcp`, `2053/tcp`, `80`
+остаются открытыми всем — в v1 прямые клиенты (ноут/телефон) продолжают
+ходить мимо релея, каскад ограничивает только 443. Если прямые клиенты
+исключаются из схемы — сузить и эти порты (`--allow-from`).
 
 | Порт | Назначение | gateway | relay | exit-cascade |
 |---|---|---|---|---|
@@ -158,9 +192,13 @@ Docker обходит UFW (nat PREROUTING/DOCKER раньше ufw-before-input) 
 Проверка приёмки: `ufw status verbose` → deny incoming / allow outgoing;
 `grep DEFAULT_FORWARD_POLICY /etc/default/ufw` → ACCEPT; `sysctl net.ipv4.ip_forward`
 → 1; `ping <ip>` отвечает (ICMP не трогаем); набор открытых портов = матрице.
-Раздельный NAT: MASQUERADE awg0 — в `/etc/ufw/before.rules` (amneziawg install),
-awg1/relay — отдельный юнит `vds-amneziawg-nat` (не зависит от ufw); harden
-дублировать MASQUERADE-секцию не должен (SPEC §1.8).
+Раздельный NAT: **стандарт проекта — systemd-юнит `vds-amneziawg-nat`**
+(oneshot `-C||-A`, не зависит от ufw; asv1 improved 2026-11-13, asv2 —
+install). `amneziawg install` дополнительно пишет MASQUERADE в
+`/etc/ufw/before.rules` — живой дубль (факт asv2: оба присутствуют); при
+inactive ufw before.rules не применяется, персистентность обеспечивает юнит.
+harden MASQUERADE-секцию не трогает (SPEC §1.8); дедупликация before.rules —
+TECHDEBT.
 
 ### 5.3 Правило знаний: ICMP и диагностика маршрута (решено 2026-11-16)
 
@@ -221,8 +259,8 @@ OUTPUT; счётчики vds_probe стоят в prerouting **до** ufw-фил�
 наблюдение, не фильтрация; flush ruleset стёр бы обе таблицы.
 **Проверка:** после `ufw reload` / enable — `nft list table inet vds_probe`
 (цепочки и счётчики на месте, счётчики растут).
-**Откат:** `sudo vds probe-watch remove --apply` (юниты + таблица снимаются
-целиком), затем reinstall.
+**Откат:** `sudo vds gateway probe-watch remove --apply` (юниты + таблица
+снимаются целиком), затем reinstall.
 
 ### 5.7 Правило знаний: Docker обходит UFW
 
@@ -243,8 +281,10 @@ OUTPUT; счётчики vds_probe стоят в prerouting **до** ufw-фил�
 sysctl-профиль проекта — `/etc/sysctl.d/99-vds-gateway.conf` (из
 `systemd/sysctl/99-vds-gateway.conf.tpl`; BBR/буферы — hysteria2 install;
 ip_forward — `99-vds-awg-forward.conf` от amneziawg install).
-**Почему:** MASQUERADE awg0 persist в `before.rules` (ufw перечитывает на
-enable/reload) — дублей нет; правило знаний П.7.
+**Почему:** правило знаний П.7. NAT-персистентность — юнит
+`vds-amneziawg-nat` (стандарт, см. §5.2: before.rules — живой дубль от
+install, при inactive ufw не применяется и НЕ обеспечивает персистентность —
+та самая грабля asv1 2026-11-13, закрытая юнитом).
 **Проверка (reboot-гейт):** `systemctl is-enabled ufw vds-amneziawg-nat vds-probe-watch.timer …`
 + `sysctl --system` без ошибок + `sysctl net.ipv4.ip_forward` = 1.
 **Откат:** недостающий юнит — reinstall соответствующего модуля (`vds … install`).
@@ -253,7 +293,10 @@ enable/reload) — дублей нет; правило знаний П.7.
 
 Свежевыпущенный IP прогревается (сутки-двое низкоамплитудного трафика) перед
 боевой нагрузкой — иначе первая волна трафика на чистом IP триггерит эвристики.
-Детально: [CENSORSHIP-PATTERNS.md](CENSORSHIP-PATTERNS.md) (П.8 внешнего ревью).
+**Боевой факт (asv2, 2026-11-15):** в первые ~30 минут ТСПУ душит именно
+TCP-443 TLS-payload (SYN/ACK проходит, данные дропаются) при живом UDP-443 —
+Reality «мёртв», Hy2 работает. Не чинить Xray в этом окне — греть Hy2 и ждать.
+Детально: [CENSORSHIP-PATTERNS.md](CENSORSHIP-PATTERNS.md).
 
 ### 5.11 Правило знаний: детект активных проб РКН — L3/L4-телеметрия, не логи Xray
 
@@ -298,10 +341,14 @@ SNI, TLS-отпечаток бота цензора) кольцевым захв
 
 ```bash
 tcpdump -i any -nn 'tcp port 443 and (tcp[tcpflags] & (tcp-syn|tcp-push) != 0) \
-  and not src host <СВОЙ_ДОМАШНИЙ_IP>' -s 512 -C 10 -W 5 -w /tmp/tspu_probes.pcap
+  and not src host <СВОЙ_ДОМАШНИЙ_IP>' -s 512 -C 10 -W 5 -G 3600 \
+  -w /var/tmp/tspu_probes.pcap
 # разбор: TLS-отпечаток (JA3/JA4) сканера:
-tshark -r /tmp/tspu_probes.pcap -Y "tls.handshake.type == 1" -V
+tshark -r /var/tmp/tspu_probes.pcap -Y "tls.handshake.type == 1" -V
 ```
+
+Путь — `/var/tmp` (на диск; `/tmp` в Ubuntu 24.04 — tmpfs в RAM), `-G 3600`
+гасит забытый фоновый захват через час.
 
 Интерпретация: одиночный ClientHello vs серия из 8 специфических проб
 (механика J3/TSPU active probing, схема ByeByeVPN — см. И40 банка идей);
@@ -309,7 +356,7 @@ tshark -r /tmp/tspu_probes.pcap -Y "tls.handshake.type == 1" -V
 Дамп содержит метаданные соединений — в git не класть, локально, стереть
 после разбора.
 
-### 5.10 Матрица рисков правил знаний
+### 5.14 Матрица рисков правил знаний
 
 | Правило | Главный риск при нарушении |
 |---|---|
@@ -318,9 +365,13 @@ tshark -r /tmp/tspu_probes.pcap -Y "tls.handshake.type == 1" -V
 | §5.6 nft-изоляция | снесённые счётчики/детект зондирования после flush |
 | §5.7 Docker | порт открыт мимо UFW наружу |
 | §5.8 персистентность | «после ребута всё молчит», ручной ремонт на сервере |
+| §5.9 прогрев IP | ложная диагностика «Reality сломан» в 30-мин TCP-карантине |
 | §5.5 откат | `ufw reset` стирает правила relay/amneziawg/hop |
 | §5.11 детект через vds_probe | слепота к началу зондирования: Reality молча уводит пробы в dest-fallback, логи демона пусты |
 | §5.12 раздельные реакции | паранойя на каждый масс-скан (BURST) или игнор реальной атаки (SUSPECT) → простой при блокировке |
+| §5.13 дамп проб | tmpfs-переполнение RAM на слабых VDS; вечный фоновый tcpdump |
+| §9 dnsmasq-инвариант | утечка split-доменов в открытый DNS или 30-мин NXDOMAIN-кеш |
+| §9.1 чеклист аварии | починка исправного сервера при локальном сбое ноутбука |
 | Fail-safe порядок §5.1 | enable без ssh-правила → отрезание по ssh |
 
 ## 6. Провайдер и DNS (руками, без API-токена не автоматизируется)
@@ -328,7 +379,7 @@ tshark -r /tmp/tspu_probes.pcap -Y "tls.handshake.type == 1" -V
 | Что | Как | Проверка |
 |---|---|---|
 | Провайдерский файрвол | панель хостера: открыть TCP 22/80/443/8443/2053, UDP 443/51825/51826 (+hop) | `nc` с внешней точки; `traceroute` |
-| Anti-DDoS / geo-фильтр | панель хостера. **Факт asv1:** TCP с не-РФ ASN получает `refused/timeout`, ICMP проходит | `check-host.net`: ICMP vs TCP |
+| Anti-DDoS / geo-фильтр | панель хостера. **Факт asv1:** TCP с не-РФ ASN получает `refused/timeout`, ICMP проходит. ⚠️ CDN origin `:2053` должен быть достижим с ASN Cloudflare (AS13335, не-РФ) — CDN на asv1 работает ⇒ подсети CF проходят; при смене панели/фильтра внести [cloudflare.com/ips-v4](https://www.cloudflare.com/ips-v4/) в белый список, иначе 521/522 | `check-host.net`: ICMP vs TCP; `curl -I https://<cdn>:2053/` |
 | Cloudflare DNS (apex) | A → IP сервера, proxied для CDN (orange), иначе DNS-only | `dig +short <домен>` |
 | LE-сертификаты | `vds acme issue --domain <домен> --email <email>` (после A-записи) | `openssl x509 -enddate`; `certbot renew --dry-run` |
 | CDN-запись | origin-домен + порт 2053, Full (strict) | `curl -I https://<cdn-домен>:2053/` |
@@ -380,6 +431,15 @@ TEST-20261114-fresh-install-v3).
 | Split-зоны | `/opt/awg-split/domains.txt` (например, `youtu.be`) | `sudo bash scripts/15_domain-split.sh` |
 | Проверка | `vpn speed`, `vpn probe`, `vpn monitor` | TTFB/throughput/статусы |
 | DoH | `vpn doh on/off/status` | `resolvectl status` |
+
+**Tradeoff fallback-резолвера (осознанный):** в awg-split.conf второй
+апстрим `77.88.8.8` (Яндекс.DNS) держит RU-домены при падении DoH (инцидент
+2026-11-11 «интернет мёртв»). Риск: при таймауте cloudflared dnsmasq
+(`strict-order`) может уйти в fallback — запрос split-домена открытым UDP в
+RU-резолвер = DNS-спуфинг/заглушка → битый IP в nft-сете. Живучесть vs
+утечка; митигируется: strict-order (есть), здоровье cloudflared в
+`vpn monitor`, долгосрочно — `server=/домен/`-маршрутизация только RU-зон в
+77.88.8.8 вместо общего fallback.
 
 **Инвариант dnsmasq (П.9, 2026-11-15):** `/etc/dnsmasq.d/awg-split.conf`
 **генерируется** `scripts/15_domain-split.sh` — руками не править (править
