@@ -432,6 +432,13 @@ socket duration). Xray 26.x поддерживает всё из коробки,
 **Оценка.** 10 строк JSON + связка версий; 0.5–1 день с приёмкой.
 **Файлы.** `src/xray/config.py`, `vpnm/xclient.py` (ubuntuInstaller).
 
+**Статус 2026-11-16:** сервер — `7af391b` (`mode: auto` + `xPaddingBytes`,
+T-XM1/T-XM2), клиент — `1807945` (`xPaddingBytes` + `xmux`, Xray 26.1.23,
+T-XM4/T-XM5). Осталось: миграция **уже установленного** XHTTP на asv1
+(`add-transport xhttp` при существующем инбаунде делает early-return без
+пере-рендера) и живая T-XM6 (2–4 сокета, ротация 3–5 мин). Долг:
+`vpnm/bins.py` не проверяет SHA256 `.dgst` при скачивании.
+
 ### GR-22. Флаги pull только в CLI — **P2**
 
 **Факт.** `--include-obfs` (и `--protocol` на сервере) доступны только в

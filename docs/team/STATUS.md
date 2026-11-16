@@ -231,7 +231,12 @@
 ## Бэклог идей (вход для intake)
 
 - **Точки роста схем/протоколов:** [docs/GROWTH-POINTS.md](../GROWTH-POINTS.md) —
-  24 пункта (GR-01…GR-24) с фактами, действиями и AC.
+  25 пунктов (GR-01…GR-25) с фактами, действиями и AC.
+- **GR-25 (XHTTP padding/xmux) — код готов 2026-11-16:** сервер `7af391b`
+  (`mode:auto` + `xPaddingBytes:"100-1000"`, T-XM1/T-XM2), клиент `1807945`
+  (`xPaddingBytes` + `xmux`-ротация, Xray 26.1.23, T-XM4/T-XM5). Осталось:
+  миграция живого XHTTP на asv1 (early-return без пере-рендера) + T-XM6
+  (2–4 сокета, ротация 3–5 мин). Долг: SHA256 `.dgst` в `vpnm/bins.py`.
 - **Цикл CDN-usability — G4 CLOSED 2026-11-13:**
   [SPEC-20261113-cdn-usability](specs/SPEC-20261113-cdn-usability.md),
   отчёт [TEST-20261113-cdn-mux](reports/TEST-20261113-cdn-mux.md) §9.
