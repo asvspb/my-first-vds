@@ -6,6 +6,7 @@ T1–T6, T12 без root/сети: ss/nf_conntrack за моками и фикс
 мутирует снапшот).
 """
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -447,12 +448,29 @@ class TestWatchNoRecordDoesNotMutate:
     ) -> None:
         _patch_common(tmp_path, monkeypatch, _nft_state({}))
         snap_path = self._seed_snapshot(tmp_path)
+        # AC-16: проверяем оба файла, которые sync/guard не вправе мутировать.
+        from src.gateway.store import GatewayState, save_state
+
+        state_path = tmp_path / "state.json"
+        state = GatewayState()
+        state.protocols = {"xray": {"installed": True, "port": 443}}
+        save_state(state, str(state_path))
+
+        def fingerprint(path: Path) -> tuple[int, str]:
+            stat = path.stat()
+            return stat.st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest()
+
+        snapshot_before = fingerprint(snap_path)
+        state_before = fingerprint(state_path)
         before = snap_path.read_bytes()
         run = FakeRun({"ss": _shell_result(SS_VERIFIED)})  # свежий verified есть
         rc = probing.cmd_watch(
-            json_out=True, snapshot_path=snap_path, run=run, now=T0,
+            json_out=True, snapshot_path=snap_path, state_path=str(state_path),
+            run=run, now=T0,
         )
         assert rc == 0
+        assert fingerprint(snap_path) == snapshot_before
+        assert fingerprint(state_path) == state_before
         assert snap_path.read_bytes() == before  # файл не тронут (AC-16/M1)
         data = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
         # ...но в памяти отчёта verified учтён (источник виден в тегах)
