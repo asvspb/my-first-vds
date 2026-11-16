@@ -82,6 +82,15 @@
 - **asv2 = основной AWG-exit** (213.108.23.119): deploy 2026-11-15 — UFW harden
   gateway-профиль (ADR-011), SSH → 49222, /48 IPv6, LE `asv2.asvpersonal.ru`
   (Hy2 secure, без insecure=1). **asv1 = запасной exit** (TSPU-окна).
+- **asv2: Wave 0 + W1-1 выкачены 2026-11-16** (`4fb1956`): HF-1 verified
+  sessions, HF-2 (код; xhttp/cdn на asv2 нет), W1-1 probers4
+  `{443,8443,2053}` + extra-счётчики. Юниты пере-рендерены с venv;
+  `systemctl --failed` = 0, все vds-таймеры active, `logs sample` пишет
+  телеметрию, `auto_lockdown=false`. Найден и закрыт EROFS-lock
+  (`vds-logs-sample`: `ReadWritePaths=/var/lib/vds /var/run`).
+  Отчёт: [DEPLOY-20261116-asv2-wave0-w1](reports/DEPLOY-20261116-asv2-wave0-w1.md).
+  Остаток: **HF-3** (`resolve_python()` в `_unit_ctx`, чтобы install без
+  venv-PATH не ломал юниты).
 - **RU-relay: код готов (WP-1..5 по SPEC/ADR-007), релей НЕ куплен** —
   развёртывание отложено до покупки VDS; WP-6 (харднинг) в спеке.
 - **probe-watch v3** (SPEC-20261116-probe-response): threat-level quiet/elevated/high,
