@@ -95,9 +95,12 @@ sudo vds gateway probe-watch config \
 - При downgrade ниже `high` — **НЕ** автоснимает (человек решает; TTL
   подстрахует), но `watch` печатает `[warning] лок активен, уровень снизился`.
 - `elevated` никогда не триггерит лок.
-- Если `lockdown-allow` пуст и основной прямой канал сервера = только 443
-  (нет 51825/2053 в state.protocols) — конфиг отказывается принимать
-  `auto-lockdown on` (fail-fast: лок закрыл бы всё входящее).
+- Если `lockdown-allow` пуст и allow-файл `/etc/vds-probe-watch/allow-ips.txt`
+  отсутствует/пуст — конфиг отказывается принимать `auto-lockdown on`
+  (fail-fast: лок закрыл бы всё входящее). Ужесточение HF-1
+  (SPEC-20261116-surface-hardening §1.3): наличие резервных портов 51825/2053
+  в state.protocols больше НЕ основание — заполненный allow-ips.txt достаточен
+  без `--lockdown-allow`, но без любого allow-источника отказ всегда.
 - Один лок-на-восход: повторный high во время активного лока = только
   продление TTL, не дубль правил.
 
@@ -203,6 +206,33 @@ Unlock восстанавливает пары v4+v6 стандартными `u
 - **WP-3:** TTL-проверка — ВНУТРИ часового тика probe-watch (отдельный
   systemd-timer не плодим): `now >= ttl_until` → auto-unlock
   (`reason=ttl-expired`) через внутренний вызов ufw-модуля.
+
+### 11.1 own_ips: verified_session_ips + кэш + conntrack (HF-1)
+
+Поправка HF-1 (SPEC-20261116-surface-hardening §1.2): own_ips на входе в
+RU-классификацию = `awg_endpoints ∪ allow-ips.txt ∪ own_ips_cache` —
+клиенты на Reality/XHTTP/Hy2 без активного AWG-туннеля больше не попадают
+в new_ru_ips как «зондировщики» (anti Self-DoS):
+
+- **verified_session_ips (TCP 443/8443/2053):** `ss -tniH state established`
+  с порогами `bytes_acked >= 16384` И `bytes_received >= 4096` — проба
+  ТСПУ/Censys не проходит авторизацию VLESS/XHTTP и двусторонний трафик не
+  качает. IPv4-mapped префикс `::ffff:` срезается (dual-stack listener),
+  строки без обоих bytes-полей игнорируются fail-closed (голый ESTABLISHED
+  бота не верифицируется).
+- **UDP (Hy2 443/udp, 51826/udp):** `/proc/net/nf_conntrack` (без пакета
+  conntrack): `[ASSURED]` всегда; при `nf_conntrack_acct=1` (включаем в
+  `systemd/sysctl/99-vds-gateway.conf.tpl`) — дополнительно
+  `bytes_orig + bytes_reply > 32768`; полей bytes нет (acct=0) — фолбэк на
+  один `[ASSURED]`. Файла нет — тихая деградация до TCP+AWG+кэш (тег
+  источника в выводе `watch` / поле `own_ips_sources` JSON).
+- **Кэш-аффинность:** verified-IP пишутся в `snapshot["own_ips_cache"]`
+  (пары ip/last_seen, TTL 24 ч, чистка на каждом тике): клиент, закрывший
+  сессию между тиками таймера, не выпадает из own_ips, пока last_seen < 24 ч;
+  last_seen обновляется на каждом тике, пока сессия верифицируется. Запись
+  кэша — только в `--record`-прогоне тика; ручной `watch` без `--record`
+  объединяет свежие verified с кэшем ТОЛЬКО в памяти (файл не мутируется —
+  совместимость с vpn guard ADR-014/M1).
 
 ## 12. Стратегический контекст: теневые архитектуры (ревью владельца, 2026-11-16)
 

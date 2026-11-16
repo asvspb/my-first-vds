@@ -14,6 +14,12 @@
   journal-сигнатуры (см. JOURNAL_PATTERNS — только реальные сигнатуры,
   «нелишнее» не парсится: plain-TLS-пробы к 443 уходят в Reality
   dest-fallback и в журнал не пишутся — проверено на asv2);
+- verified_session_ips (SPEC-20261116-surface-hardening §1.2, HF-1): IP с
+  верифицированными двусторонними сессиями на серверных портах (TCP 443/8443/
+  2053 через `ss -tniH` по порогам bytes_acked/bytes_received; UDP 443/51826
+  через /proc/net/nf_conntrack по [ASSURED]+bytes) исключаются из new_ru_ips
+  вместе с AWG/allow-ips; кэш verified-IP в снапшоте с TTL 24 ч (аффинность
+  между тиками — клиент закрыл ноутбук до тика таймера);
 - RU-классификация IP: если есть агрегат /etc/vds-relay/ru-cidrs.txt
   (пишет relay-cidr или `probe-watch ru-cidr install`), помечает «[RU]»;
   иначе geo: unknown — честно;
@@ -82,6 +88,18 @@ BURST_RATIO = 0.90           # доля bare-SYN без payload
 BURST_MIN_VOLUME = 100       # минимальный объём SYNs для ratio-критерия
 DEFAULT_WINDOW_HOURS = 1
 NEW_RU_IPS_THRESHOLD = 2     # новых RU-IP за окно для RU-PROBE-SUSPECT
+
+# --- verified_session_ips (SPEC-20261116-surface-hardening §1.2, HF-1) ---
+# Инвариант против «бот ТСПУ проходит handshake»: бот устанавливает
+# ESTABLISHED и шлёт ClientHello, но авторизацию VLESS/XHTTP не проходит и
+# двусторонний трафик не качает — пороги отсекают его fail-closed.
+VERIFIED_TCP_PORTS: tuple[int, ...] = (443, 8443, 2053)  # серверные TCP-порты
+VERIFIED_BYTES_ACKED = 16384    # отправлено клиенту (Reality/XHTTP ответ)
+VERIFIED_BYTES_RECEIVED = 4096  # получено от клиента
+VERIFIED_UDP_PORTS: tuple[int, ...] = (443, 51826)  # Hy2 443/udp + hop
+CONNTRACK_BYTES_MIN = 32768     # bytes_orig+bytes_reply при nf_conntrack_acct=1
+NF_CONNTRACK_PROC = Path("/proc/net/nf_conntrack")
+OWN_IPS_CACHE_TTL_H = 24        # аффинность verified-IP между тиками watch
 
 # --- threat-level машина (SPEC-20261116-probe-response §2, §9.A, §11) ---
 THREAT_QUIET = "quiet"
@@ -289,6 +307,7 @@ def _empty_snapshot() -> dict[str, object]:
         "threat": {},
         "config": {},
         "own_ips": {},
+        "own_ips_cache": [],
     }
 
 
@@ -312,7 +331,7 @@ def load_snapshot(path: Path = SNAPSHOT_PATH) -> dict[str, object]:
     threat = data.get("threat")
     config = data.get("config")
     own_ips = data.get("own_ips")
-    return {
+    snap = {
         "version": data.get("version", SNAPSHOT_VERSION),
         "ts": str(data.get("ts", "")),
         "syn_bare": int(data.get("syn_bare", 0) or 0),
@@ -323,6 +342,8 @@ def load_snapshot(path: Path = SNAPSHOT_PATH) -> dict[str, object]:
         "config": config if isinstance(config, dict) else {},
         "own_ips": own_ips if isinstance(own_ips, dict) else {},
     }
+    snap["own_ips_cache"] = own_ips_cache_entries(data)
+    return snap
 
 
 def write_snapshot_payload(payload: dict[str, object], path: Path) -> bool:
@@ -729,6 +750,211 @@ def cached_own_ips(snapshot: dict[str, object]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# verified_session_ips (SPEC-20261116-surface-hardening §1.2, HF-1)
+# ---------------------------------------------------------------------------
+
+_SS_BYTES_ACKED_RE = re.compile(r"\bbytes_acked:(\d+)\b")
+_SS_BYTES_RECEIVED_RE = re.compile(r"\bbytes_received:(\d+)\b")
+_CT_SRC_RE = re.compile(r"\bsrc=(\d{1,3}(?:\.\d{1,3}){3})\b")
+_CT_DPORT_RE = re.compile(r"\bdport=(\d+)\b")
+_CT_BYTES_ORIG_RE = re.compile(r"\bbytes_orig=(\d+)\b")
+_CT_BYTES_REPLY_RE = re.compile(r"\bbytes_reply=(\d+)\b")
+
+
+def _normalize_client_ip(host: str) -> Optional[str]:
+    """IPv4-ключ probers4 из адреса ss/conntrack: срезать ::ffff: (dual-stack
+    listener Xray/Hy2 показывает клиента как IPv4-mapped IPv6), взять только
+    IPv4 (v6 — non-goal v1); loopback/мусор — None."""
+    host = host.strip().strip("[]")
+    if host.startswith("::ffff:"):
+        host = host[len("::ffff:"):]
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if addr.version != 4 or addr.is_loopback:
+        return None
+    return host
+
+
+def parse_ss_verified(
+    text: str, ports: tuple[int, ...] = VERIFIED_TCP_PORTS
+) -> set[str]:
+    """Парсер `ss -tniH`: IP пиров с двусторонним трафиком (fail-closed).
+
+    Строки ss идут ПАРАМИ: адресная строка + индентированная строка метрик
+    сокета (bytes_acked/bytes_received печатаются только на второй). Регулярка
+    склеивает пару: адресная строка запоминает (local, peer), метрики
+    подтверждают. Строка метрик без ОБОИХ bytes-полей (кривой вывод, не -ti) —
+    сокет игнорируется (fail-closed, не исключение): голый ESTABLISHED бот
+    ТСПУ не должен верифицироваться. Локальный порт обязан быть серверным
+    (443/8443/2053) — исходящие сессии сервера не считаются.
+    """
+    portset = {str(p) for p in ports}
+    verified: set[str] = set()
+    pending: Optional[tuple[str, str]] = None  # (local addr:port, peer addr:port)
+    for raw_line in text.splitlines():
+        if not raw_line.strip():
+            continue
+        indented = raw_line[:1] in (" ", "\t")
+        if not indented:
+            # Адресная строка: ... local_addr:port peer_addr:port (последние
+            # два токена; ss не печатает заголовок при -H).
+            parts = raw_line.split()
+            if len(parts) < 2:
+                pending = None
+                continue
+            pending = (parts[-2], parts[-1])
+            continue
+        if pending is None:
+            continue
+        acked = _SS_BYTES_ACKED_RE.search(raw_line)
+        received = _SS_BYTES_RECEIVED_RE.search(raw_line)
+        local, peer = pending
+        pending = None
+        if acked is None or received is None:
+            continue  # fail-closed: без обоих bytes-полей сокет не верифицируем
+        _, _, local_port = local.rpartition(":")
+        peer_host, _, _ = peer.rpartition(":")
+        if local_port not in portset:
+            continue
+        ip = _normalize_client_ip(peer_host)
+        if ip is None:
+            continue
+        if (
+            int(acked.group(1)) >= VERIFIED_BYTES_ACKED
+            and int(received.group(1)) >= VERIFIED_BYTES_RECEIVED
+        ):
+            verified.add(ip)
+    return verified
+
+
+def read_verified_session_ips(
+    ports: tuple[int, ...] = VERIFIED_TCP_PORTS, run: RunFn = run_list
+) -> set[str]:
+    """IP с верифицированными TCP-сессиями на серверных портах (root, read-only).
+
+    Сбой ss — пустое множество (тихая деградация: остаётся AWG+allow+кэш).
+    """
+    sport_expr = " or ".join(f"sport = :{p}" for p in ports)
+    res = run(
+        ["ss", "-tniH", "state", "established", f"( {sport_expr} )"], timeout=15
+    )
+    if not res.ok:
+        return set()
+    return parse_ss_verified(res.stdout, ports)
+
+
+def parse_conntrack_udp(
+    text: str, udp_ports: tuple[int, ...] = VERIFIED_UDP_PORTS
+) -> set[str]:
+    """Парсер /proc/net/nf_conntrack: src-IP UDP-сессий на серверные порты.
+
+    Первая пара src=/dport= в строке — направление клиент→сервер. Требования
+    (SPEC §1.2): [ASSURED] всегда; при наличии bytes_orig+bytes_reply
+    (nf_conntrack_acct=1) — их сумма > CONNTRACK_BYTES_MIN; полей нет
+    (acct=0) — фолбэк на один [ASSURED] (ядро ставит его только при
+    двустороннем обмене — в QUIC/Hysteria2 это признак живого клиента).
+    Битые строки пропускаются построчно (fail-closed, не исключение).
+    """
+    portset = {str(p) for p in udp_ports}
+    verified: set[str] = set()
+    for line in text.splitlines():
+        tokens = line.split()
+        if "udp" not in tokens[:5]:
+            continue
+        src = _CT_SRC_RE.search(line)
+        dport = _CT_DPORT_RE.search(line)
+        if src is None or dport is None or dport.group(1) not in portset:
+            continue
+        if "[ASSURED]" not in line:
+            continue
+        bytes_orig = _CT_BYTES_ORIG_RE.search(line)
+        bytes_reply = _CT_BYTES_REPLY_RE.search(line)
+        if bytes_orig is not None and bytes_reply is not None:
+            if (
+                int(bytes_orig.group(1)) + int(bytes_reply.group(1))
+                <= CONNTRACK_BYTES_MIN
+            ):
+                continue
+        elif bytes_orig is not None or bytes_reply is not None:
+            continue  # только одно поле — кривая строка, fail-closed
+        ip = _normalize_client_ip(src.group(1))
+        if ip is not None:
+            verified.add(ip)
+    return verified
+
+
+def read_conntrack_verified(
+    path: Path = NF_CONNTRACK_PROC,
+) -> tuple[set[str], bool]:
+    """(verified-UDP-IP, файл доступен). Файла нет / не читается —
+    (пусто, False): тихая деградация до TCP+AWG+кэш (тег в выводе watch)."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return set(), False
+    return parse_conntrack_udp(text), True
+
+
+def own_ips_cache_entries(snapshot: dict[str, object]) -> list[list[str]]:
+    """Нормализованный кэш verified-IP из снапшота: [[ip, last_seen_iso], ...].
+
+    Битые записи (не пара строк) отбрасываются построчно — кэш переживает
+    эволюцию формата и ручные правки файла.
+    """
+    raw = snapshot.get("own_ips_cache")
+    if not isinstance(raw, list):
+        return []
+    entries: list[list[str]] = []
+    for item in raw:
+        if (
+            isinstance(item, (list, tuple))
+            and len(item) == 2
+            and isinstance(item[0], str)
+            and isinstance(item[1], str)
+        ):
+            entries.append([item[0], item[1]])
+    return entries
+
+
+def _cache_seen(ts: str, now: datetime) -> bool:
+    """last_seen внутри TTL 24 ч; битая/несовместимая метка — считаем протухшей."""
+    try:
+        seen = datetime.fromisoformat(ts)
+        return now - seen <= timedelta(hours=OWN_IPS_CACHE_TTL_H)
+    except (ValueError, TypeError):
+        return False
+
+
+def active_cache_ips(entries: list[list[str]], now: datetime) -> set[str]:
+    """IP кэша с непротухшим last_seen (< 24 ч)."""
+    return {ip for ip, ts in entries if _cache_seen(ts, now)}
+
+
+def merge_own_ips_cache(
+    entries: list[list[str]], verified: set[str], now: datetime
+) -> list[list[str]]:
+    """Новый кэш для записи: живые (< 24 ч) записи + свежие verified.
+
+    last_seen верифицированного в этом окне IP обновляется на now — кэш не
+    протухает у постоянно подключённого клиента даже когда сокет закрылся
+    между тиками. Записи старше TTL и битые метки удаляются (чистка при
+    каждом record-тике). Сортировка по IP — детерминизм файла.
+    """
+    stamp = now.isoformat(timespec="seconds")
+    merged: dict[str, str] = {}
+    for ip, ts in entries:
+        if ip in verified:
+            continue  # перезапишется свежей меткой ниже
+        if _cache_seen(ts, now):
+            merged[ip] = ts
+    for ip in verified:
+        merged[ip] = stamp
+    return [[ip, merged[ip]] for ip in sorted(merged)]
+
+
+# ---------------------------------------------------------------------------
 # Journal-сигнатуры
 # ---------------------------------------------------------------------------
 
@@ -871,6 +1097,9 @@ class WatchReport:
     threat: ThreatState = field(default_factory=ThreatState)  # post-update уровень окна
     lockdown: dict[str, object] = field(default_factory=dict)  # {active,since,ttl_until,allow_from}
     ru_syn_new: list[str] = field(default_factory=list)  # §9.A: наблюдательное поле
+    # HF-1: теги источников own_ips этого прогона (verified-tcp/udp, деградация
+    # conntrack) — заполняет cmd_watch; расширение JSON-контракта, не смена.
+    own_sources: list[str] = field(default_factory=list)
 
     def geo(self, ip: str) -> str:
         """geo-метка с кэшем на один run (top-10 повторов)."""
@@ -924,6 +1153,7 @@ class WatchReport:
             "threat_level": self.threat.level,
             "threat_reason": self.threat.reason,
             "ru_syn_new": list(self.ru_syn_new),
+            "own_ips_sources": list(self.own_sources),
             "lockdown": {
                 "active": bool(self.lockdown.get("active")),
                 "since": str(self.lockdown.get("since", "")),
@@ -990,9 +1220,11 @@ def build_report(
       SUSPECT гасится условием delta.syn_valid > 0.
 
     SPEC-20261116-probe-response:
-    - own_ips — endpoint-IP активных AWG-пиров (кэш снапшота, §11): исключаются
-      из new_ru_ips вместе с серверным IP и whitelist /etc/vds-probe-watch/
-      allow-ips.txt (ноут+телефон владельца ≠ SUSPECT);
+    - own_ips — исключаются из new_ru_ips: endpoint-IP активных AWG-пиров
+      (кэш снапшота, §11), серверный IP, whitelist /etc/vds-probe-watch/
+      allow-ips.txt и — с HF-1 (SPEC-20261116-surface-hardening §1.2) —
+      verified_session_ips (кэш снапшота 24 ч + свежие сессии; передаются
+      вызывающим в own_ips одним множеством);
     - lockdown — нормализованный dict лока 443: активный лок ослепляет
       syn_valid (§9.A) → threat-decay замирает, а новые RU-IP по SYN идут
       в наблюдательное поле ru_syn_new (продлевает TTL, вердикт не поднимает);
@@ -1199,6 +1431,11 @@ def print_report(report: WatchReport) -> None:
         f"(порог {report.threshold}; {counter_note})[/info]"
     )
     console.print(f"[info][probe] geo: {escape(report.geo_source)}[/info]")
+    if report.own_sources:
+        console.print(
+            f"[info][probe] own_ips источники: awg + allow-ips + кэш; "
+            f"verified: {', '.join(escape(s) for s in report.own_sources)}[/info]"
+        )
     if report.ru_hits:
         console.print(
             f"[warning][probe] Активные RU-IP за окно ({len(report.ru_hits)}):[/warning]"
@@ -1534,6 +1771,7 @@ def cmd_install(apply: bool = False) -> int:
                 "threat": old.get("threat", {}),
                 "config": old.get("config", {}),
                 "own_ips": old.get("own_ips", {}),
+                "own_ips_cache": old.get("own_ips_cache", []),
             },
         )
 
@@ -1647,26 +1885,57 @@ def cmd_watch(
 
     record=True — только для юнита таймера: после отчёта снапшот
     перезаписывается текущими счётчиками (базой следующего окна) + машиной
-    threat-level, обновляется кэш AWG-endpoints (root) и выполняются
-    авто-реакции локa (SPEC §4.2/§11). Ручной `watch` без --record ничего
-    не пишет и реакций не триггерит.
+    threat-level, обновляется кэш AWG-endpoints (root) и кэш verified-IP
+    (own_ips_cache, TTL 24 ч, SPEC-20261116-surface-hardening §1.2) и
+    выполняются авто-реакции локa (SPEC §4.2/§11). Ручной `watch` без
+    --record ничего не пишет и реакций не триггерит: свежие verified-IP
+    объединяются с кэшем ТОЛЬКО в памяти для текущего отчёта (стык с
+    vpn guard ADR-014/M1: файл не мутируется).
     """
     snapshot_path = snapshot_path or SNAPSHOT_PATH
     from src.core.lock import FileLock, LockError
 
+    now_fn: Callable[[], datetime] = (lambda: now) if now is not None else datetime.now
     snapshot = load_snapshot(snapshot_path)
     cfg = dict(snapshot.get("config") or {})
+    # verified_session_ips (HF-1): read-only, для record и ручного watch alike
+    verified_tcp = read_verified_session_ips(run=run)
+    verified_udp, ct_available = read_conntrack_verified()
+    verified = verified_tcp | verified_udp
+    cache_entries = own_ips_cache_entries(snapshot)
     if record:
         # Тик (root): свежие endpoint-IP пиров; сбой awg → кэш снапшота (§11)
         endpoints = read_awg_endpoints(run)
-        own_ips = endpoints if endpoints else cached_own_ips(snapshot)
+        awg_ips = endpoints if endpoints else cached_own_ips(snapshot)
+        stamp = now_fn()
+        new_cache = merge_own_ips_cache(cache_entries, verified, stamp)
+        own_ips = sorted(
+            {*awg_ips, *active_cache_ips(new_cache, stamp)}  # verified уже в кэше
+        )
         own_cache: dict[str, object] = {
-            "ips": own_ips,
-            "ts": datetime.now().isoformat(timespec="seconds"),
+            "ips": awg_ips,
+            "ts": stamp.isoformat(timespec="seconds"),
         }
     else:
-        own_ips = cached_own_ips(snapshot)
+        awg_ips = cached_own_ips(snapshot)
+        # В памяти только: свежие verified не пишутся на диск (AC-16/M1-стык)
+        own_ips = sorted(
+            {
+                *awg_ips,
+                *active_cache_ips(cache_entries, now_fn()),
+                *verified,
+            }
+        )
         own_cache = dict(snapshot.get("own_ips") or {})
+        new_cache = cache_entries
+    sources = [
+        f"tcp/ss: {len(verified_tcp)} IP",
+        (
+            f"udp/conntrack: {len(verified_udp)} IP"
+            if ct_available
+            else "udp: /proc/net/nf_conntrack недоступен (TCP+AWG+кэш)"
+        ),
+    ]
     try:
         with FileLock(LOCK_FILE):
             report, current = run_watch(
@@ -1674,7 +1943,7 @@ def cmd_watch(
                 snapshot_path=snapshot_path,
                 lockdown=_load_lockdown(state_path),
                 own_ips=own_ips,
-                now=now or datetime.now,
+                now=now_fn,
             )
             if report is None or current is None:
                 console.print(
@@ -1682,6 +1951,7 @@ def cmd_watch(
                     "выполните `vds gateway probe-watch install --apply`.[/error]"
                 )
                 return 1
+            report.own_sources = sources
             if record:
                 # реакции ДО вывода: json отдаёт пост-реакционное состояние лока
                 run_auto_reactions(report, cfg, state_path=state_path)
@@ -1697,6 +1967,7 @@ def cmd_watch(
                         "threat": report.threat.to_dict(),
                         "config": cfg,
                         "own_ips": own_cache,
+                        "own_ips_cache": new_cache,
                     },
                 )
     except LockError:
@@ -1718,12 +1989,14 @@ def cmd_config(
 ) -> int:
     """config: связка auto-lockdown (SPEC §4.2; default off — §10 OQ-1).
 
-    Без параметров — показать текущий конфиг (read-only). Fail-fast §4.2:
-    `--auto-lockdown on` с пустым allow-list при только-443 профиле
-    (нет 51825/2053 в state.protocols) отклоняется. Dry-run по умолчанию.
+    Без параметров — показать текущий конфиг (read-only). Fail-fast §4.2
+    (ужесточение HF-1, SPEC-20261116-surface-hardening §1.3): `--auto-lockdown on`
+    требует НЕПУСТОЙ allow-list — заполненный /etc/vds-probe-watch/allow-ips.txt
+    достаточен без --lockdown-allow; наличие 51825/2053 в state.protocols
+    больше НЕ основание (резервный канал без allow-IP всё равно закрывает
+    владельцу 443). Dry-run по умолчанию.
     """
     from src.core.lock import FileLock, LockError
-    from src.gateway.store import StoreError, load_state
     from src.system import ufw as ufw_mod
 
     snapshot_path = snapshot_path or SNAPSHOT_PATH
@@ -1762,19 +2035,16 @@ def cmd_config(
         "lockdown_allow": allow_ips,
         "lockdown_ttl_hours": ttl_hours,
     }
-    if planned["auto_lockdown"] and not planned["lockdown_allow"]:
-        try:
-            state = load_state(state_path)
-        except StoreError as exc:
-            console.print(f"[error][probe] {exc}[/error]")
-            return 1
-        if not ufw_mod.has_non_443_channel(state):
-            console.print(
-                "[error][probe] --auto-lockdown on отклонён (fail-fast SPEC §4.2): "
-                "lockdown-allow пуст, а в state.protocols нет 51825/2053 — авто-лок "
-                "закрыл бы всё входящее. Укажите --lockdown-allow IP[,IP…].[/error]"
-            )
-            return 1
+    if planned["auto_lockdown"] and not (planned["lockdown_allow"] or load_own_ips()):
+        console.print(
+            "[error][probe] --auto-lockdown on отклонён (fail-fast SPEC §4.2, "
+            "ужесточение HF-1): allow-list пуст — нет --lockdown-allow, а "
+            f"{OWN_IPS_FILE} отсутствует/пуст. Авто-лок 443 без allow-IP закрыл бы "
+            "владельцу весь прямой доступ (резервные порты в state больше не "
+            "считаются основанием). Укажите --lockdown-allow IP[,IP…] или заполните "
+            "allow-ips.txt.[/error]"
+        )
+        return 1
     console.print(f"[info][probe] Планируемый конфиг: {planned}[/info]")
     if not apply:
         console.print("[info][probe] Dry-run: ничего не изменено. Для применения — --apply.[/info]")

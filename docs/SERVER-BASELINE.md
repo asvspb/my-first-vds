@@ -280,7 +280,10 @@ OUTPUT; счётчики vds_probe стоят в prerouting **до** ufw-фил�
 `vds-probe-watch.timer` (+`vds-probe-rucidr.timer`, `vds-gateway-health.timer`, если ставились), транспортные юниты (vds-xray/vds-hysteria2*/vds-amneziawg); relay-нога — юниты `vds-relay-{exit,nat,policy,cidr}` из `vds relay init` (релей не развёрнут, шаблоны в `systemd/`).
 sysctl-профиль проекта — `/etc/sysctl.d/99-vds-gateway.conf` (из
 `systemd/sysctl/99-vds-gateway.conf.tpl`; BBR/буферы — hysteria2 install;
-ip_forward — `99-vds-awg-forward.conf` от amneziawg install).
+`net.netfilter.nf_conntrack_acct = 1` (byte-счётчики conntrack для
+probe-watch verified-UDP, HF-1 SPEC-20261116-surface-hardening; на живых
+серверах применяется переустановкой sysctl-профиля — без него фолбэк на
+`[ASSURED]`); ip_forward — `99-vds-awg-forward.conf` от amneziawg install).
 **Почему:** правило знаний П.7. NAT-персистентность — юнит
 `vds-amneziawg-nat` (стандарт, см. §5.2: before.rules — живой дубль от
 install, при inactive ufw не применяется и НЕ обеспечивает персистентность —
