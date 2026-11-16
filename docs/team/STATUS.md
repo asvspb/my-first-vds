@@ -70,6 +70,10 @@
   `b42d4cc`/`20b52ff`. Осталось: **WP-G6** — 7 дней `vpn-guard.service`
   на живом ноутбуке (AWG/Reality/XHTTP/Hy2), 24 ч бенч AC-5, AC-17 на чистом
   десктопе, реальный `kill -9`, `selftest` из установленного wheel.
+- **Живой старт WP-G6 (2026-11-16):** pipx-wheel + `selftest` OK; unit
+  `hardened` (без fallback), `state=armed`, iface `laptop`; sync с asv2 —
+  `fresh=true`. AC-12/AC-15/AC-17 — PASS; 7-дневное наблюдение идёт.
+  Отчёт: [TEST-20261116-vpn-guard-live-start](reports/TEST-20261116-vpn-guard-live-start.md).
 - **Ревью (эволюция v1.0 → v2.0):** [ARCH-20261116-vpn-guard-evolution](reports/ARCH-20261116-vpn-guard-evolution.md) —
   стратегическая оценка + предложение v1.1 (ss/netlink, packet-size ratio,
   ленивый sync), v1.2 (`--client-report`) и v2.0 (Smart Failover, только через ADR).
