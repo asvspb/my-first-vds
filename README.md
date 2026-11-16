@@ -182,7 +182,9 @@ vds logs install --apply            # Таймеры vds-logs-sample/daily (dry-
 vds logs sample --apply             # Сэмпл journald/счётчиков (телеметрия; dry-run по умолчанию)
 vds logs analyze --live --since 24h # Разбор сэмплов/вердиктов probe-watch
 vds logs report --apply             # Ежедневный отчёт (reports/, 0600); --last — последний
-vds logs capture start|status|stop  # Ручной capture-бандл (pcap опционально)
+vds logs capture start              # Ручной capture-бандл (pcap опционально)
+vds logs capture status             # Статус активного capture
+vds logs capture stop               # Остановить capture, собрать бандл
 vds logs remove --apply             # Демонтаж таймеров/данных лог-конвейера (dry-run)
 
 vds xray install                    # Установить Xray VLESS Reality (TCP 443)
