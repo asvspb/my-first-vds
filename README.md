@@ -202,7 +202,7 @@ vds xray add-client phone           # Клиент + share-link vless://...
 vds xray add-transport              # XHTTP-инблэнд за SNI-фолбэком Reality (ADR-003); путь — случайный
                                      # секрет (state 0600; миграция не ломает ссылки; ротация — --regenerate-path,
                                      # после apply сразу `vpn profile pull` на клиентах). Инблэнд рендерится
-                                     # с mode=auto + xPaddingBytes=100-1000 (GR-25; Xray >= 26.1.23, ADR-010)
+                                     # с mode=auto + xPaddingBytes=100-1000 (GR-25; Xray >= 26.1.23, ADR-010).
 vds xray remove-transport           # Снять XHTTP (инблэнд + XHTTP-клиенты)
 vds xray use-domain --domain vpn.example.ru   # Reality-ссылки по домену (state.domain)
 vds xray add-cdn --domain cdn.example.ru      # CDN-транспорт VLESS+WS+TLS (ADR-006); ws-path — случайный

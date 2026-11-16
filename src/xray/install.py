@@ -24,6 +24,7 @@ import shutil
 import socket
 import tempfile
 import zipfile
+from copy import deepcopy
 from pathlib import Path
 
 import requests
@@ -47,7 +48,9 @@ from src.gateway.store import StoreError, load_state, save_state
 from src.xray.config import (
     DEFAULT_SNI,
     XHTTP_MODES,
+    XHTTP_PADDING_BYTES,
     XHTTP_PATH,
+    XHTTP_STREAM_MODE,
     XrayConfigParams,
     render_config,
 )
@@ -435,7 +438,41 @@ def _render_xhttp_config(
         raise InstallError(
             f"Неожиданная структура {XRAY_CONFIG_PATH}: {exc} (E8: не меняю)."
         ) from exc
-    return render_config(params)
+    rendered = render_config(params)
+    # GR-25/миграция: render_config(cdn_enabled=False) не знает о живом CDN.
+    # Переносим ws-инбаунды (2053) из current байт-в-байт, иначе add-transport
+    # xhttp на asv1 (XHTTP+CDN на одном узле) затёр бы CDN.
+    cdn_inbounds = _existing_cdn_inbounds(current)
+    if cdn_inbounds:
+        config = json.loads(rendered)
+        ports = {ib.get("port") for ib in config.get("inbounds", [])}
+        for inbound in cdn_inbounds:
+            if inbound.get("port") not in ports:
+                config["inbounds"].append(inbound)
+        rendered = json.dumps(config, indent=2, ensure_ascii=False) + "\n"
+    return rendered
+
+
+def _existing_cdn_inbounds(current: dict) -> list[dict]:
+    """Живые CDN-инбаунды (ws) из config.json — для пере-рендера без потерь."""
+    return [
+        deepcopy(inbound)
+        for inbound in current.get("inbounds", [])
+        if inbound.get("streamSettings", {}).get("network") == "ws"
+    ]
+
+
+def _xhttp_has_gr25_settings(current: dict) -> bool:
+    """Есть ли в живом xhttp-инбаунде поля GR-25 (`mode` + `xPaddingBytes`)."""
+    for inbound in current.get("inbounds", []):
+        if inbound.get("streamSettings", {}).get("network") != "xhttp":
+            continue
+        xhttp = inbound.get("streamSettings", {}).get("xhttpSettings") or {}
+        return (
+            xhttp.get("mode") == XHTTP_STREAM_MODE
+            and xhttp.get("xPaddingBytes") == XHTTP_PADDING_BYTES
+        )
+    return False
 
 
 def _existing_xhttp_path(current: dict) -> str | None:
@@ -496,7 +533,10 @@ def add_transport_xhttp(
     """
     current, backup_path = _xhttp_precheck(domain, mode, XRAY_CONFIG_PATH)
 
-    already = _existing_xhttp_path(current) is not None
+    already = (
+        _existing_xhttp_path(current) is not None
+        and _xhttp_has_gr25_settings(current)
+    )
     if already and not regenerate_path:
         return {
             "already_enabled": True,

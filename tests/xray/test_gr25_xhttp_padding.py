@@ -18,6 +18,7 @@
 """
 
 import json
+from pathlib import Path
 
 import src.xray.cdn as cdn
 import src.xray.install as install
@@ -246,3 +247,79 @@ class TestTXM2CrossRender:
         ]
         assert len(ws_inbounds) == 1
         assert "xPaddingBytes" not in json.dumps(ws_inbounds[0])
+
+
+class TestTXM3Migration:
+    """Мини-WP миграции asv1: ранний `already_enabled` только если GR-25
+    поля уже есть; пере-рендер не теряет живой CDN-инблэнд (ws/2053)."""
+
+    @staticmethod
+    def _old_config() -> dict:
+        current = json.loads(_xhttp_config())
+        for inbound in current["inbounds"]:
+            stream = inbound.get("streamSettings", {})
+            if stream.get("network") == "xhttp":
+                stream["xhttpSettings"].pop("mode", None)
+                stream["xhttpSettings"].pop("xPaddingBytes", None)
+        return current
+
+    def test_has_gr25_settings_detects_old_and_new(self) -> None:
+        assert install._xhttp_has_gr25_settings(self._old_config()) is False
+        assert install._xhttp_has_gr25_settings(json.loads(_xhttp_config())) is True
+
+    def test_old_config_is_not_already_enabled(
+        self, monkeypatch
+    ) -> None:
+        from src.gateway.store import GatewayState
+
+        old = self._old_config()
+        monkeypatch.setattr(
+            install, "_xhttp_precheck",
+            lambda domain, mode, path: (old, Path("/tmp/bak-pre-xhttp")),
+        )
+        monkeypatch.setattr(install, "load_state", lambda state_path=None: GatewayState())
+        result = install.add_transport_xhttp(DOMAIN, mode="port", apply=False)
+        assert not result.get("already_enabled")
+        assert result["path"] == SECRET_PATH  # путь-секрет не меняется
+
+    def test_new_config_is_already_enabled(self, monkeypatch) -> None:
+        from src.gateway.store import GatewayState
+
+        current = json.loads(_xhttp_config())
+        monkeypatch.setattr(
+            install, "_xhttp_precheck",
+            lambda domain, mode, path: (current, Path("/tmp/bak-pre-xhttp")),
+        )
+        monkeypatch.setattr(install, "load_state", lambda state_path=None: GatewayState())
+        result = install.add_transport_xhttp(DOMAIN, mode="port", apply=False)
+        assert result.get("already_enabled") is True
+
+    def test_render_preserves_live_cdn_inbound(self) -> None:
+        """asv1: XHTTP+CDN на одном узле — ws/2053 не должен исчезнуть."""
+        current = json.loads(_xhttp_config())
+        cdn_inbound = {
+            "port": 2053,
+            "protocol": "vless",
+            "settings": {"clients": [{"id": XHTTP_UUID}], "decryption": "none"},
+            "streamSettings": {
+                "network": "ws",
+                "security": "tls",
+                "wsSettings": {"path": "/cdnws-fixture"},
+                "tlsSettings": {"certificates": [{"certificateFile": CERT,
+                                                  "keyFile": KEY}]},
+            },
+        }
+        current["inbounds"].append(cdn_inbound)
+        rendered = json.loads(
+            install._render_xhttp_config(current, DOMAIN, "port", [XHTTP_UUID])
+        )
+        ws = [
+            ib for ib in rendered["inbounds"]
+            if ib.get("streamSettings", {}).get("network") == "ws"
+        ]
+        assert ws == [cdn_inbound]
+        assert _xhttp_settings(rendered) == {
+            "path": SECRET_PATH,
+            "mode": "auto",
+            "xPaddingBytes": "100-1000",
+        }

@@ -122,6 +122,10 @@ vless://<uuid>@<ip>:443?security=reality&sni=www.google.com&fp=chrome&pbk=<publi
   `ubuntuInstaller` (`vpnm/xclient.py`); серверный share-link не меняется:
   `vless://…&path=<path>&type=xhttp` — старые клиенты (только `path`)
   подключаются как раньше (§4 спеки).
+- **миграция уже установленного XHTTP:** `vds xray add-transport xhttp --mode
+  port --apply` дозаполняет `mode`/`xPaddingBytes`, если их ещё нет; `path`
+  сохраняется. Живой CDN-инбаунд (ws/2053) переносится из текущего конфига
+  без потерь — XHTTP+CDN на одном узле (asv1) не ломаются.
 
 ## 2.3. Hysteria2
 
