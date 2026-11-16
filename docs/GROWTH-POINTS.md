@@ -142,19 +142,27 @@ Xray включает начиная с 26.9.8.
 **Оценка.** 4–6 ч. **Файлы.** `src/xray/install.py`, `src/xray/status.py`,
 `src/main.py`.
 
-### GR-07. Reality: одна маска и нет проверки decoy — **P2**
+### GR-07. Reality: Self-Steal (маска = свой домен/LE на том же IP) + проверка decoy — **P0** (поднят из P2, решение архитектора 2026-11-16, вход [ARCH-20261116-tspu-blindspots](team/reports/ARCH-20261116-tspu-blindspots.md) §1)
 
 **Факт.** SNI по умолчанию `www.google.com`, задаётся только при `install`;
 `status` проверяет конфиг и порт, но не то, что `dest` реально отдаёт валидный TLS.
+Одновременно на 8443/tcp и 443/udp отдаётся наш LE-сертификат (светится в CT-логах)
+→ связка «ASN-SNI Mismatch + Cross-Port Cert Conflict» = красный флаг №1 для
+ML-классификатора АСБИ (пассивно) и 100% доказательство Reality для активного зонда.
 
-**Действие.** `xray set-sni --sni X [--apply]` с перевыпуском Reality-ссылок
-(public key/sid не меняются) + локальная проба: TLS-handshake на `dest:443` с
-`sni` и проверка `notAfter`. В `status` — строка «decoy ok/fail».
+**Действие.** Самый сильный вариант (Self-Steal): `dest`/`serverNames` = собственный
+домен на ЭТОМ же сервере — реальный Caddy/Nginx с LE-сертификатом и скучным
+легитимным контентом; DNS A честно указывает на этот IP; TCP 443 / 8443 / UDP 443
+не противоречат друг другу. Плюс `xray set-sni --sni X [--apply]` с перевыпуском
+Reality-ссылок + локальная проба TLS-handshake на `dest:443` (`notAfter`), в
+`status` — строка «decoy ok/fail». Требует ADR (меняет модель маскировки).
 
 **AC.** Смена SNI перевыпускает ссылки и поднимает Xray; при мёртвом decoy
-`status` даёт warning, а не молчит.
+`status` даёт warning; на Self-Steal-варианте cert на 443/tcp согласуется с
+8443/udp-443 (один домен/сертификатор).
 
-**Оценка.** 3–4 ч. **Файлы.** `src/xray/config.py|install.py|status.py`.
+**Оценка.** 4–6 ч (Self-Steal + set-sni). **Файлы.** `src/xray/config.py|install.py|status.py`,
+web-фронт (caddy/nginx, systemd).
 
 ### GR-08. CDN: пул фронтов реализован, но не используется — **P1**
 
@@ -400,6 +408,29 @@ Hysteria2 — `/metrics`.
 
 **Оценка.** 1–1.5 дня. **Файлы.** `vpnm/channels.py|probe.py|cli.py`,
 `systemd/`-шаблоны vpnm.
+
+### GR-22. XHTTP: xPaddingBytes + xmux против поведенческого ML АСБИ — **P1** (решение архитектора 2026-11-16)
+
+**Факт.** `xhttpSettings` сейчас содержит только `{"path": ...}` — ни рандомизации
+padding'а, ни ротации соединений. Длинный одиночный поток с фиксированными
+размерами пакетов — идеальная мишень для ML-признаков SPLT (packet size /
+socket duration). Xray 26.x поддерживает всё из коробки, но не включено.
+
+**Действие.** В `xhttpSettings` (сервер `src/xray/config.py` + клиент
+`vpnm/xclient.py`, репозиторий ubuntuInstaller): `xPaddingBytes: "100-1000"`
+(рандомизация на запрос) + xmux (`maxConcurrency`, `cMaxReuseTimes`,
+`hMaxRequestTimes` — рандомизация числа запросов на соединение и времени жизни).
+Один длинный подозрительный поток превращается в серию коротких
+рандомизированных HTTP-соединений. Требует Xray 26.x на обеих сторонах
+(клиентский бинарь унифицировать на 26.1.23 — см. ARCH-результат §7).
+
+**AC.** Сервер принимает конфиг с xmux+xPaddingBytes (`xray -test` ok);
+клиентский e2e через CDN-профиль жив; в config.json нет литералов вне словаря
+рандомизации. Приёмка A/B: SPLT-профиль (гистограмма длин) до/после на
+контрольной сессии — заметное размытие.
+
+**Оценка.** 10 строк JSON + связка версий; 0.5–1 день с приёмкой.
+**Файлы.** `src/xray/config.py`, `vpnm/xclient.py` (ubuntuInstaller).
 
 ### GR-22. Флаги pull только в CLI — **P2**
 
