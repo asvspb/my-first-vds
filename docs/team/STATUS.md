@@ -14,6 +14,59 @@
 - **Дальше:** WP-4 (хуки + процесс), WP-5 (warn → block).
 - **Doc audit:** in progress (WP-3 = G5 этого цикла).
 
+## Предложение на G2: survivability (SPEC-20261116-survivability)
+- **SPEC:** [SPEC-20261116-survivability](specs/SPEC-20261116-survivability.md) —
+  draft, ждёт `vds-architect` + техлида (G2). Не реализация.
+- **Суть:** packet-level стадии 1/2/3 (freeze → probing → RST-инъекция /
+  silent ClientHello drop / UDP response drop / L3-бан), новые правила
+  **T-18…T-23** + поле `stage`, stage-aware ранбук, портфель мер S-01…S-15
+  (P0: ранбук/keepalive/`surface audit`/XMUX; P1: failover/canary/пул фронтов;
+  P2: SPA по **ADR-013**, ротация IP, anti-fingerprint).
+- **Технические поправки:** `TcpInRsts` в nstat нет (есть `TcpEstabResets`/
+  `TcpExtEmbryonicRsts`/`TcpOutRsts`); `syn_valid` не видит ClientHello;
+  Δt<15 мс — сильная улика, абсолютным делает RTT-floor + TTL/TSopt/seq.
+- **Дальше:** G2 → WP-S1/S2 (детект+stage) → WP-S3 (surface audit) →
+  WP-S4 (canary); SPA (WP-S5) — только после приёмки probe-response v1.
+
+## G2 APPROVED: vpn guard (SPEC-20261116-vpn-guard)
+- **SPEC:** [SPEC-20261116-vpn-guard](specs/SPEC-20261116-vpn-guard.md) —
+  **G2 APPROVED 2026-11-16** (`vds-architect` + техлид). Пять правок ревью
+  внесены; открытых вопросов нет (OQ-1…OQ-20 закрыты). Не реализация.
+- **Суть:** клиентский **real-time** анализатор логов (`journalctl --user -f`)
+  — конвейер `tail → parse → normalize → window → rules → correlate →
+  finding`; правила **G-01…G-12** (no-handshake, reset storm, post-handshake
+  drop, UDP blackhole, auth/config, DNS, local-net, TLS, endpoint silent,
+  unit flap, degraded, self-health), `stage_hint` ↔ T-18…T-23, merge с
+  серверным `probe-watch --json` через файл (без сети в демоне).
+- **Границы:** read-only v1 (никаких restart/repair/switch), user-space,
+  без root/сети/LLM; findings 14 дней/20 МБ, только счётчики и хэши
+  шаблонов; юнит `vpn-guard.service` (не `vpnm-*` — иначе `vpn autostart off`
+  отключит guard).
+- **Правки G2:** (1) `probe-watch watch` без `--record` закреплён как
+  read-only + серверный regression-тест, sync 60 мин, свежесть 65 мин;
+  (2) AmneziaWG (`awg-quick@*`/`vpn-awg-split@*`, `dnsmasq`, sysfs-счётчики)
+  как полноценный канал — `idle` при живом AWG запрещён, ветка G-04
+  `awg_tx_no_rx`; (3) sandbox-профили `hardened`/`compat` + проверка
+  `226/NAMESPACE` и D-Bus; (4) пост-сканер не трогает `*_hash`/`*_sha256`;
+  (5) G-01 через `app_banner_ok`/`dial_*`, иначе `insufficient_data`.
+- **Реализация:** `ubuntuInstaller/scripts/vpn-manager` (`vpnm/guard/`);
+  спека здесь, потому что процесс/гейты — в `vds`. **ADR-014** утверждён,
+  создаётся в WP-G0.
+- **Доклад для G2-аудитории:**
+  [BRIEF-20261116-vpn-guard](reports/BRIEF-20261116-vpn-guard.md) — 13 слайдов,
+  тезисы, риски и 6 вопросов к архитектору/техлиду.
+- **Дальше:** WP-G0 (ADR-014 + схемы + `packages`) → WP-G1 ∥ WP-G2 →
+  WP-G3 (правила) → WP-G4 (корреляция + server verdict) → WP-G5 →
+  WP-G6 (7 дней поля). AC-1…AC-17 — §14.2.
+- **WP-G0 (код готов, не закоммичен, 2026-11-16):**
+  `docs/adr/ADR-014-vpn-guard.md`; клиент —
+  `vpnm/guard/{__init__,events,schema}.py` + `vpnm/guard/schemas/`
+  (7 схем: event/finding/incident/coverage/status/server_verdict/config),
+  `pyproject.toml` (`packages` + package-data), `tests/guard/`
+  (реестр ↔ enum'ы схем, schema_hash, примеры, негативы).
+  Клиентский прогон `pytest -q` — зелёный; wheel проверен —
+  схемы попадают в пакет, `schema_hashes()` работает после установки.
+
 ## Инфраструктура (live-ops, 2026-11-14..16)
 - **asv2 = основной AWG-exit** (213.108.23.119): deploy 2026-11-15 — UFW harden
   gateway-профиль (ADR-011), SSH → 49222, /48 IPv6, LE `asv2.asvpersonal.ru`
