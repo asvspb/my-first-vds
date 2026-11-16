@@ -81,7 +81,8 @@
 ## Инфраструктура (live-ops, 2026-11-14..16)
 - **asv2 = основной AWG-exit** (213.108.23.119): deploy 2026-11-15 — UFW harden
   gateway-профиль (ADR-011), SSH → 49222, /48 IPv6, LE `asv2.asvpersonal.ru`
-  (Hy2 secure, без insecure=1). **asv1 = запасной exit** (TSPU-окна).
+  (Hy2 secure, без insecure=1). **asv1 удалён 2026-11-16** — настройка
+  пропущена, единственный боевой exit — asv2.
 - **asv2: Wave 0 + W1-1 выкачены 2026-11-16** (`4fb1956`): HF-1 verified
   sessions, HF-2 (код; xhttp/cdn на asv2 нет), W1-1 probers4
   `{443,8443,2053}` + extra-счётчики. Юниты пере-рендерены с venv;
@@ -234,19 +235,15 @@
   25 пунктов (GR-01…GR-25) с фактами, действиями и AC.
 - **GR-25 (XHTTP padding/xmux) — живая приёмка 2026-11-16:** сервер
   `7af391b`, клиент `1807945`, миграция + CDN-preserve `9e43590`,
-  `--skip-domain-check` `43d1ee6`. На asv1 миграция применена (path/CDN/
-  Reality-хэши не изменились, `xray -test` OK), **T-XM6 PASS**: 2–3 сокета,
-  ротация в окне 3–5 мин, 451 МБ без разрыва. Отчёт:
-  [TEST-20261116-gr25-asv1-txm6](reports/TEST-20261116-gr25-asv1-txm6.md).
-  Остаток: A-запись старого домена всё ещё на 103.45.247.172 (мёртвый IP) —
-  клиенты по старым ссылкам не подключатся без DNS-переезда или сертификата
-  на `45-91-168-58.eu-cloud-xip.com`; после — `--regenerate-path`.
+  `--skip-domain-check` `43d1ee6`. На asv1 (до его удаления) миграция
+  применена (path/CDN/Reality-хэши не изменились, `xray -test` OK),
+  **T-XM6 PASS**: 2–3 сокета, ротация в окне 3–5 мин, 451 МБ без разрыва.
+  Отчёт: [TEST-20261116-gr25-asv1-txm6](reports/TEST-20261116-gr25-asv1-txm6.md).
+  **asv1 удалён 2026-11-16** — DNS/ACME-остаток по нему снят; код GR-25
+  готов для следующего XHTTP-узла (сервер + клиент).
   Долг: SHA256 `.dgst` в `vpnm/bins.py`.
-- **asv1: новый IP 45.91.168.58**; DNS старого домена пока смотрит на старый IP.
-- **⚠️ asv1 SSH lockout 2026-11-16 (открыт):** после UFW harden (active) и
-  Фазы A `ssh-port --to 49222` порты 22/49222 — Connection refused, слушателя
-  SSH нет; 443/8443 живы. Нужен консольный доступ провайдера для
-  `systemctl restart ssh.service` / откат socket-drop-in. Детали и команды:
+- **asv1 SSH lockout — закрыт декомиссией 2026-11-16:** узел удалён
+  владельцем, восстановление не требуется. Детали:
   [INCIDENT-20261116-asv1-ssh-lockout](reports/INCIDENT-20261116-asv1-ssh-lockout.md).
 - **Цикл CDN-usability — G4 CLOSED 2026-11-13:**
   [SPEC-20261113-cdn-usability](specs/SPEC-20261113-cdn-usability.md),
