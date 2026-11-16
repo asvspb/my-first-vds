@@ -242,8 +242,12 @@
   клиенты по старым ссылкам не подключатся без DNS-переезда или сертификата
   на `45-91-168-58.eu-cloud-xip.com`; после — `--regenerate-path`.
   Долг: SHA256 `.dgst` в `vpnm/bins.py`.
-- **asv1: новый IP 45.91.168.58** (SSH 22) — доступен с ноутбука; старый
-  103.45.247.172 не отвечает. DNS старого домена пока смотрит на старый IP.
+- **asv1: новый IP 45.91.168.58**; DNS старого домена пока смотрит на старый IP.
+- **⚠️ asv1 SSH lockout 2026-11-16 (открыт):** после UFW harden (active) и
+  Фазы A `ssh-port --to 49222` порты 22/49222 — Connection refused, слушателя
+  SSH нет; 443/8443 живы. Нужен консольный доступ провайдера для
+  `systemctl restart ssh.service` / откат socket-drop-in. Детали и команды:
+  [INCIDENT-20261116-asv1-ssh-lockout](reports/INCIDENT-20261116-asv1-ssh-lockout.md).
 - **Цикл CDN-usability — G4 CLOSED 2026-11-13:**
   [SPEC-20261113-cdn-usability](specs/SPEC-20261113-cdn-usability.md),
   отчёт [TEST-20261113-cdn-mux](reports/TEST-20261113-cdn-mux.md) §9.
