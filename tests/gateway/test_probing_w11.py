@@ -256,6 +256,32 @@ class TestW3ExtraPortProbers:
         assert data["verdict"] == "RU-PROBE-SUSPECT"
         assert sorted(data["new_ru_ips"]) == ["203.0.113.200", "203.0.113.201"]
 
+    def test_extra_only_ports_suspect_when_443_silent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        """Тихий час на 443 (syn_valid=0) + прицельные пробы 8443
+        (syn_valid_extra=5) + 2 новых RU-IP → RU-PROBE-SUSPECT.
+
+        Регресс ревью W1-1: до фикса `syn_valid_total=delta.syn_valid`
+        обнулял вердикт, хотя зондирование было видно на extra-портах.
+        """
+        _patch_common(tmp_path, monkeypatch, probing.NftState(
+            syn_bare=20, syn_valid=0, udp_443=0,
+            syn_valid_extra=5, syn_bare_extra=7,
+            per_element_counters=True,
+            probers={"203.0.113.200": 5, "203.0.113.201": 3},
+        ))
+        (tmp_path / "ru-cidrs.txt").write_text(RU_NET, encoding="utf-8")
+        rc = probing.cmd_watch(
+            json_out=True, snapshot_path=tmp_path / "snap.json",
+            run=FakeRun(), now=T0,
+        )
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert data["verdict"] == "RU-PROBE-SUSPECT"
+        assert sorted(data["new_ru_ips"]) == ["203.0.113.200", "203.0.113.201"]
+
     def test_verified_client_8443_not_suspect(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture,

@@ -1496,7 +1496,7 @@ def build_report(
         threshold,
         new_ru_ips=new_ru_ips,
         ru_available=bool(ru_networks),
-        syn_valid_total=delta.syn_valid,  # окно, не аптайм (ревью 3b)
+        syn_valid_total=delta.syn_valid + delta.syn_valid_extra,  # окно, не аптайм; extra-порты в SUSPECT, PROBE-BURST — только 443
     )
 
     end = now()
