@@ -74,3 +74,21 @@ ss -tlnp | grep -E ':(22|49222)\b'
 
 2026-11-16 владелец удалил asv1. Настройка/восстановление пропущены; asv2 —
 единственный боевой exit. Инцидент закрыт декомиссией, не восстановлением.
+
+## Пост-мортем: HF-SSH (`14999ec`)
+
+Исправлено в `src/system/ufw.py`:
+
+1. `was_socket = ssh_socket_active()` фиксируется **до** restart (после падения
+   `is-active` уже `False` и откат выбирал бы не тот юнит).
+2. Откат Фазы A сам делает `systemctl daemon-reload` + `restart ssh.socket`
+   (или `ssh`), затем fallback `start ssh`, если 22 не слушается; сообщение
+   «сделайте вручную» больше не единственная реакция.
+3. Drop-in `ssh.socket` пишется **0644** (systemd: 0600 unit-файл
+   «world-inaccessible»).
+4. Тесты: `test_phase_a_socket_failure_restarts_socket_automatically`,
+   `test_phase_a_socket_dropin_is_0644`, `test_port_not_listening_aborts_with_rollback`
+   (проверяют restart/fallback). Полный прогон `vds` — 1055 passed.
+
+На asv1 фикс живьём не применялся (узел удалён); для будущих нод
+`ssh-port --apply` теперь безопасен по построению.

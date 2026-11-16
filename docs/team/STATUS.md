@@ -74,6 +74,10 @@
   `hardened` (без fallback), `state=armed`, iface `laptop`; sync с asv2 —
   `fresh=true`. AC-12/AC-15/AC-17 — PASS; 7-дневное наблюдение идёт.
   Отчёт: [TEST-20261116-vpn-guard-live-start](reports/TEST-20261116-vpn-guard-live-start.md).
+- **Guard live-fix 2026-11-17 (`ubuntuInstaller 78ce00c`):** файл-подобный
+  `stderr` (TextIOWrapper) и гонка `cursor.json.tmp` (два reader-потока) —
+  исправлены; `journal:user/system` = ok, `cursor_write_failed` ушёл,
+  `verdict` обновляется после `sync`.
 - **Ревью (эволюция v1.0 → v2.0):** [ARCH-20261116-vpn-guard-evolution](reports/ARCH-20261116-vpn-guard-evolution.md) —
   стратегическая оценка + предложение v1.1 (ss/netlink, packet-size ratio,
   ленивый sync), v1.2 (`--client-report`) и v2.0 (Smart Failover, только через ADR).

@@ -135,3 +135,12 @@ $ vpn guard sync --host root@asv2 --timeout 20
 
 AC-12, AC-15, AC-17 — PASS на живом ноутбуке; AC-8 — PASS по схеме.
 WP-G6 (7 дней + AC-5 + kill -9 + wheel-selftest) продолжается.
+
+## Addendum 2026-11-17 — guard live-fix
+
+`ubuntuInstaller 78ce00c`: (1) `_stderr_text()` читает `Popen.stderr` как файл
+(TextIOWrapper) — поток больше не падает с `AttributeError`; (2) `cursor.json`
+пишется через уникальный `mkstemp`-tmp — гонка user/system reader'ов больше не
+даёт `cursor_write_failed`. После `pipx install --force` + restart:
+`journal:user`/`journal:system` = `ok`, `verdict` = `ok` после `sync`,
+`vpn guard status` без warning.
