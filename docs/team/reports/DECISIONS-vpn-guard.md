@@ -70,20 +70,24 @@ S3 (`state.json`, `activity.json`, `last-speed.json`, `server-verdict.json`)
 
 Обратная совместимость: существующие 14 тестов counters не меняются.
 
-## D-08. Персистентный `redaction_hits`
+## D-08. Приоритет `ROOT_CAUSE_PRIORITY` — по SPEC §9.2
 
-Кумулятивный счётчик хранится в `guard/state.json` через
-`store.write_state(accumulate_redaction_hits=True)`; при старте читается
-начальное значение, новые срабатывания прибавляются. `vpn guard status/sources`
-берут `max(state.json, install-state)`. `kill -9`/рестарт счётчик не обнуляет
-(AC-11).
+Выровнять `correlate.ROOT_CAUSE_PRIORITY` по §9.2:
 
-## D-09. Пост-сканер: голый `FIXTURE_*` — секрет
+`local_net > local_fault > config > dns > tunnel_down > censorship_suspect >
+endpoint_unreachable > degraded > observability`.
 
-В `redact.py` добавлен `\bFIXTURE_(?:PW|UUID|SECRET)_[A-Za-z0-9_-]+`:
-маскируется на записи (`<redacted>`) и детектируется пост-сканером
-(`fixture_marker`); голый токен без `password=`/`vless://` блокирует
-`export_gate` кодом 2 (AC-13).
+Физика: упавший юнит (G-10, `local_fault`) или битый конфиг/ключ (G-05,
+`config`) закономерно сыплет ошибками DNS (G-06) — первопричина локальная,
+DNS — вторичный симптом. Матрица задания `G-07 > G-06 > G-10 > G-05 > G-01…G-04`
+была временной; §9.2 главнее. Правка — 2 строки в `correlate.py`.
+
+## D-09. Персист кольца G-11 в `state.json`
+
+Кольцо ≤5 последних мини-записей (`ts`, `profile`, `proto`, `median_mbps`)
+персистится в `guard/state.json` в WP-G5. Причина: `vpn speed` запускается
+редко; рестарт демона/`kill -9` обнулял бы статистику, и G-11 никогда не
+набрал бы 2 отчёта `< 2.0` за 24 ч.
 
 ## D-10. `unparsed_ratio` — только app-строки
 
@@ -94,15 +98,29 @@ vpnm-юнитов без hint). `awg-quick`: `[#] ip link add` → `unit_start`,
 в знаменатель не входят. `PROBE-BURST` (сервер) по-прежнему калибруется
 только по 443.
 
+## D-11. Персистентный `redaction_hits`
+
+Кумулятивный счётчик хранится в `guard/state.json` через
+`store.write_state(accumulate_redaction_hits=True)`; при старте читается
+начальное значение, новые срабатывания прибавляются. `vpn guard status/sources`
+берут `max(state.json, install-state)`. `kill -9`/рестарт счётчик не обнуляет
+(AC-11). *(В отчётах WP-G3 значился как D-08.)*
+
+## D-12. Пост-сканер: голый `FIXTURE_*` — секрет
+
+В `redact.py` добавлен `\bFIXTURE_(?:PW|UUID|SECRET)_[A-Za-z0-9_-]+`:
+маскируется на записи (`<redacted>`) и детектируется пост-сканером
+(`fixture_marker`); голый токен без `password=`/`vless://` блокирует
+`export_gate` кодом 2 (AC-13). *(В отчётах WP-G2 значился как D-09.)*
+
 ---
 
-## Открытые вопросы к WP-G4
+## Открытые вопросы к WP-G5
 
-1. Синтетические S3-события и verdict — штамповать `clock.now_us()` (D-06),
-   не wall-clock из файла.
-2. `counters.py` — `pop_closed_window()` и `mono_s/mono_us` (D-07), затем
-   `engine.note_awg_window()` один раз за окно.
-3. `verdict.py`/`ServerContext`: `fresh` при `age_s <= 3900`, `lockdown`,
-   `threat_level`, `verdict`, `stage`.
-4. G-09…G-12, `correlate.py` (инциденты/подавления), `run`-петля,
-   `status --json`/`findings`/`explain`, `sync`, `export` — WP-G4/WP-G5.
+1. D-08: `ROOT_CAUSE_PRIORITY` → SPEC §9.2 (правка в `correlate.py`).
+2. D-09: персист кольца G-11 (≤5 записей) в `state.json`.
+3. `--trace`, `rules`, `export`, `selftest`, нотификации, TUI, доки клиента,
+   бенч AC-5.
+4. AC-16 server half: `tests/gateway/test_probing_hf1.py::test_t6_*` дополнен
+   проверкой `st_mtime_ns + sha256` для `probe-watch.json` и `gateway/state.json`
+   (коммит в `my-first-vds`).
