@@ -77,7 +77,10 @@
 - **Guard live-fix 2026-11-17 (`ubuntuInstaller 78ce00c`):** файл-подобный
   `stderr` (TextIOWrapper) и гонка `cursor.json.tmp` (два reader-потока) —
   исправлены; `journal:user/system` = ok, `cursor_write_failed` ушёл,
-  `verdict` обновляется после `sync`.
+  `verdict` обновляется после `sync`. APPROVE 2026-11-17; HF-SSH `14999ec`
+  тоже APPROVE. T0-снимок:
+  [TEST-20261117-vpn-guard-checkpoint-t0](reports/TEST-20261117-vpn-guard-checkpoint-t0.md);
+  следующая контрольная точка — T+24–48 ч.
 - **Ревью (эволюция v1.0 → v2.0):** [ARCH-20261116-vpn-guard-evolution](reports/ARCH-20261116-vpn-guard-evolution.md) —
   стратегическая оценка + предложение v1.1 (ss/netlink, packet-size ratio,
   ленивый sync), v1.2 (`--client-report`) и v2.0 (Smart Failover, только через ADR).
