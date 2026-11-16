@@ -889,13 +889,18 @@ def xray_add_transport(
         "--regenerate-path",
         help="Перевыпустить случайный path XHTTP (ломает выданные ссылки: после --apply сразу `vpn profile pull`)",
     ),
+    skip_domain_check: bool = typer.Option(
+        False,
+        "--skip-domain-check",
+        help="Только для миграции после смены IP: не требовать DNS==IP (сертификат/SNI не меняются)",
+    ),
 ):
     """Добавить XHTTP-транспорт к живому Xray (ADR-003, SPEC WP-3)"""
     from src.xray.install import run_add_transport_xhttp
     raise typer.Exit(
         run_add_transport_xhttp(
             transport, domain, mode=mode, apply=apply, yes=yes,
-            regenerate_path=regenerate_path,
+            regenerate_path=regenerate_path, skip_domain_check=skip_domain_check,
         )
     )
 

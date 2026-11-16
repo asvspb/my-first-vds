@@ -125,7 +125,9 @@ vless://<uuid>@<ip>:443?security=reality&sni=www.google.com&fp=chrome&pbk=<publi
 - **миграция уже установленного XHTTP:** `vds xray add-transport xhttp --mode
   port --apply` дозаполняет `mode`/`xPaddingBytes`, если их ещё нет; `path`
   сохраняется. Живой CDN-инбаунд (ws/2053) переносится из текущего конфига
-  без потерь — XHTTP+CDN на одном узле (asv1) не ломаются.
+  без потерь — XHTTP+CDN на одном узле (asv1) не ломаются. При смене IP
+  (DNS ещё старый) — `--skip-domain-check`: E1 пропускается, сертификат/SNI
+  остаются прежними.
 
 ## 2.3. Hysteria2
 

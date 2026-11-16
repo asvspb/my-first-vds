@@ -360,10 +360,17 @@ def _le_cert_paths(domain: str) -> tuple[Path, Path]:
     return live / FULLCHAIN_NAME, live / PRIVKEY_NAME
 
 
-def _xhttp_precheck(domain: str, mode: str, config_path: Path) -> tuple[dict, Path]:
+def _xhttp_precheck(
+    domain: str,
+    mode: str,
+    config_path: Path,
+    skip_domain_check: bool = False,
+) -> tuple[dict, Path]:
     """Валидации ДО любых изменений; вернуть (текущий конфиг, путь бэкапа).
 
     Порядок SPEC §5: xray установлен -> LE-сертификат есть -> DNS==IP (E1).
+    `skip_domain_check=True` — только для миграции после смены IP узла:
+    сертификат/SNI остаются прежними, DNS ещё указывает на старый IP.
     """
     if mode not in XHTTP_MODES:
         raise InstallError(
@@ -382,7 +389,9 @@ def _xhttp_precheck(domain: str, mode: str, config_path: Path) -> tuple[dict, Pa
             + domain + "`."
         )
     server_ip = public_ip()
-    if not server_ip or not _dns_resolves_to(domain, server_ip):
+    if not skip_domain_check and (
+        not server_ip or not _dns_resolves_to(domain, server_ip)
+    ):
         raise InstallError(
             f"E1: домен {domain} не указывает на IP этого сервера "
             f"({server_ip or 'неизвестен'}) — отклонено до изменений."
@@ -518,6 +527,7 @@ def add_transport_xhttp(
     state_path: str | None = None,
     apply: bool = False,
     regenerate_path: bool = False,
+    skip_domain_check: bool = False,
 ) -> dict:
     """Добавить XHTTP к живому Xray (SPEC WP-3, ADR-003).
 
@@ -531,7 +541,9 @@ def add_transport_xhttp(
     (config.json/state), ссылки не ломаются. regenerate_path=True — осознанная
     ротация: после --apply немедленно `vpn profile pull` на всех клиентах.
     """
-    current, backup_path = _xhttp_precheck(domain, mode, XRAY_CONFIG_PATH)
+    current, backup_path = _xhttp_precheck(
+        domain, mode, XRAY_CONFIG_PATH, skip_domain_check=skip_domain_check
+    )
 
     already = (
         _existing_xhttp_path(current) is not None
@@ -627,6 +639,7 @@ def run_add_transport_xhttp(
     yes: bool = False,
     state_path: str | None = None,
     regenerate_path: bool = False,
+    skip_domain_check: bool = False,
 ) -> int:
     """Точка входа `vds xray add-transport xhttp`. 0 — успех (в т.ч. dry-run)."""
     if os.geteuid() != 0:
@@ -648,6 +661,14 @@ def run_add_transport_xhttp(
             "[/warning]"
         )
 
+    if skip_domain_check:
+        console.print(
+            "[warning][xray] --skip-domain-check: DNS-проверка E1 отключена. "
+            "Использовать только для миграции после смены IP: LE-сертификат и "
+            "SNI должны соответствовать домену, иначе клиенты получат cert error."
+            "[/warning]"
+        )
+
     if apply and not yes:
         import questionary
 
@@ -666,6 +687,7 @@ def run_add_transport_xhttp(
             state_path=state_path,
             apply=apply,
             regenerate_path=regenerate_path,
+            skip_domain_check=skip_domain_check,
         )
     except (InstallError, StoreError) as exc:
         console.print(f"[error][xray] {exc}[/error]")

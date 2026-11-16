@@ -275,7 +275,7 @@ class TestTXM3Migration:
         old = self._old_config()
         monkeypatch.setattr(
             install, "_xhttp_precheck",
-            lambda domain, mode, path: (old, Path("/tmp/bak-pre-xhttp")),
+            lambda domain, mode, path, skip_domain_check=False: (old, Path("/tmp/bak-pre-xhttp")),
         )
         monkeypatch.setattr(install, "load_state", lambda state_path=None: GatewayState())
         result = install.add_transport_xhttp(DOMAIN, mode="port", apply=False)
@@ -288,7 +288,7 @@ class TestTXM3Migration:
         current = json.loads(_xhttp_config())
         monkeypatch.setattr(
             install, "_xhttp_precheck",
-            lambda domain, mode, path: (current, Path("/tmp/bak-pre-xhttp")),
+            lambda domain, mode, path, skip_domain_check=False: (current, Path("/tmp/bak-pre-xhttp")),
         )
         monkeypatch.setattr(install, "load_state", lambda state_path=None: GatewayState())
         result = install.add_transport_xhttp(DOMAIN, mode="port", apply=False)

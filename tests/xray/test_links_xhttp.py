@@ -156,6 +156,19 @@ class TestAddTransportXHTTP:
         assert "E1" in str(excinfo.value)
         assert (xray_env / "config.json").read_text(encoding="utf-8") == before
 
+    def test_dns_mismatch_allowed_with_skip_domain_check(
+        self, xray_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Миграция после смены IP: сертификат/SNI прежние, DNS ещё старый."""
+        state_path = str(xray_env / "state.json")
+        monkeypatch.setattr(install, "_dns_resolves_to", lambda domain, ip: False)
+        plan = install.add_transport_xhttp(
+            DOMAIN, state_path=state_path, apply=False,
+            skip_domain_check=True,
+        )
+        assert plan["dry_run"] is True
+        assert not plan.get("already_enabled")
+
     def test_xray_test_fail_rolls_back_e8(
         self, xray_env: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
