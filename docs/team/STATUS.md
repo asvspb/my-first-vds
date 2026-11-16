@@ -59,20 +59,20 @@
   [BRIEF-20261116-vpn-guard](reports/BRIEF-20261116-vpn-guard.md) — 13 слайдов,
   тезисы, риски и 6 вопросов к архитектору/техлиду. Промпт напарника
   (архитектор+техлид+ревьюер): [PROMPT-20261116-vpn-guard-arch-lead](reports/PROMPT-20261116-vpn-guard-arch-lead.md).
-- **Дальше:** WP-G0 (ADR-014 + схемы + `packages`) → WP-G1 ∥ WP-G2 →
-  WP-G3 (правила) → WP-G4 (корреляция + server verdict) → WP-G5 →
-  WP-G6 (7 дней поля). AC-1…AC-17 — §14.2.
+- **Дальше:** WP-G0…WP-G5 — ✅ PASS 2026-11-16 (G3/G4/G5 approve
+  архитектора); **WP-G6** — 7 дней поля, бенч AC-5, AC-17, `kill -9`,
+  `selftest` из wheel. AC-1…AC-17 — §14.2.
+- **Статус цикла (2026-11-16):** ✅ **G0–G5 PASS**; приёмка —
+  [ACCEPT-20261116-vpn-guard](reports/ACCEPT-20261116-vpn-guard.md).
+  Коммиты: `ubuntuInstaller` — `4bc145e` (G0), `6ead3cc` (G2), `757e2f2` (G1),
+  `a7e7a8f` (G2-фиксы), `b0297d8` (G3), `c84560d` (G4), `b10553a` (G5);
+  `my-first-vds` — ADR-014 `f502985`, AC-16 `69225a7`, DECISIONS
+  `b42d4cc`/`20b52ff`. Осталось: **WP-G6** — 7 дней `vpn-guard.service`
+  на живом ноутбуке (AWG/Reality/XHTTP/Hy2), 24 ч бенч AC-5, AC-17 на чистом
+  десктопе, реальный `kill -9`, `selftest` из установленного wheel.
 - **Ревью (эволюция v1.0 → v2.0):** [ARCH-20261116-vpn-guard-evolution](reports/ARCH-20261116-vpn-guard-evolution.md) —
   стратегическая оценка + предложение v1.1 (ss/netlink, packet-size ratio,
   ленивый sync), v1.2 (`--client-report`) и v2.0 (Smart Failover, только через ADR).
-- **WP-G0 (код готов, не закоммичен, 2026-11-16):**
-  `docs/adr/ADR-014-vpn-guard.md`; клиент —
-  `vpnm/guard/{__init__,events,schema}.py` + `vpnm/guard/schemas/`
-  (7 схем: event/finding/incident/coverage/status/server_verdict/config),
-  `pyproject.toml` (`packages` + package-data), `tests/guard/`
-  (реестр ↔ enum'ы схем, schema_hash, примеры, негативы).
-  Клиентский прогон `pytest -q` — зелёный; wheel проверен —
-  схемы попадают в пакет, `schema_hashes()` работает после установки.
 
 ## Инфраструктура (live-ops, 2026-11-14..16)
 - **asv2 = основной AWG-exit** (213.108.23.119): deploy 2026-11-15 — UFW harden

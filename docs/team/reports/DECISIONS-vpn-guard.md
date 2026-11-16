@@ -115,12 +115,34 @@ vpnm-юнитов без hint). `awg-quick`: `[#] ip link add` → `unit_start`,
 
 ---
 
-## Открытые вопросы к WP-G5
+## D-13. AC-13 — fail-closed на исходных артефактах
 
-1. D-08: `ROOT_CAUSE_PRIORITY` → SPEC §9.2 (правка в `correlate.py`).
-2. D-09: персист кольца G-11 (≤5 записей) в `state.json`.
-3. `--trace`, `rules`, `export`, `selftest`, нотификации, TUI, доки клиента,
-   бенч AC-5.
-4. AC-16 server half: `tests/gateway/test_probing_hf1.py::test_t6_*` дополнен
-   проверкой `st_mtime_ns + sha256` для `probe-watch.json` и `gateway/state.json`
-   (коммит в `my-first-vds`).
+Секрет, найденный в исходных `findings.jsonl`/`coverage.json`, блокирует экспорт
+кодом 2 (`input_export_hits`), а не маскируется. Причина: если секрет прошёл
+входной redact и лёг в артефакт — это инцидент нарушения инварианта §3.1 п.5;
+тихая маскировка скрыла бы баг санитайзера.
+
+## D-14. `suppressed` остаётся в `counters.suppressed`
+
+Не расширять верхний уровень `guard.status/1` новым полем: подавления видны
+в `counters.suppressed`; схема не меняется.
+
+## D-15. WP-G6 — эксплуатационный гейт владельца
+
+Кодовый объём G0–G5 завершён. WP-G6: 7 дней `vpn-guard.service` на живом
+ноутбуке (AWG/Reality/XHTTP/Hy2), 24 ч бенч AC-5 (RSS/CPU/unparsed),
+AC-17 на чистом десктопе, реальный `kill -9`, `selftest` из установленного
+wheel. Только после этого — v1.1 по [ARCH-эволюции](ARCH-20261116-vpn-guard-evolution.md).
+
+---
+
+## Остаток (WP-G6)
+
+1. `vpn guard install` на ноутбуке; 7 дней без падений; `status --json`/`findings`
+   ежедневно.
+2. AC-5: RSS < 80 МБ, CPU < 1%, unparsed < 5% app-строк за 24 ч.
+3. AC-17: три живые проверки sandbox; fallback `compat` при `226/NAMESPACE`.
+4. Реальный `kill -9` → рестарт без дублей и потери курсора/`redaction_hits`.
+5. `vpn guard selftest` из установленного пакета.
+6. По итогам поля — решение о v1.1 (ss/netlink, packet-size ratio, ленивый sync);
+   v2.0 Smart Failover — только отдельным ADR.
