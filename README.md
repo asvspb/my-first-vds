@@ -177,6 +177,14 @@ vds gateway probe-watch ru-cidr update --apply   # Разово обновить
 vds gateway probe-watch config           # конфиг auto-lockdown (default off; on = авто-лок 443 при threat high)
 vds gateway probe-watch remove --apply   # Демонтаж nft-таблицы vds_probe + юнитов (dry-run по умолчанию)
 
+vds logs status                     # Состояние конвейера логов (ADR-012)
+vds logs install --apply            # Таймеры vds-logs-sample/daily (dry-run по умолчанию)
+vds logs sample --apply             # Сэмпл journald/счётчиков (телеметрия; dry-run по умолчанию)
+vds logs analyze --live --since 24h # Разбор сэмплов/вердиктов probe-watch
+vds logs report --apply             # Ежедневный отчёт (reports/, 0600); --last — последний
+vds logs capture start|status|stop  # Ручной capture-бандл (pcap опционально)
+vds logs remove --apply             # Демонтаж таймеров/данных лог-конвейера (dry-run)
+
 vds xray install                    # Установить Xray VLESS Reality (TCP 443)
 vds xray install --sni www.cloudflare.com   # Сайт-маска (по умолчанию www.google.com)
 vds xray add-client phone           # Клиент + share-link vless://...
@@ -284,6 +292,8 @@ Gateway-таймеры (ставятся по явной команде, не п
 | `vds-probe-watch.timer` | дельта счётчиков зондирования tcp/443 + threat-level | `vds gateway probe-watch install --apply` |
 | `vds-probe-rucidr.timer` | обновление RU-CIDR-агрегата из ipdeny | `vds gateway probe-watch ru-cidr install --apply` |
 | `vds-relay-cidr.timer` | RU-CIDR на релее (еженедельно) | `vds relay init --apply` (ADR-007) |
+| `vds-logs-sample.timer` (`vds-logs-sample.service.tpl`/`vds-logs-sample.timer.tpl`) | 5-минутный сэмпл телеметрии (journald/счётчики, ADR-012) | `vds logs install --apply` |
+| `vds-logs-daily.timer` (`vds-logs-daily.service.tpl`/`vds-logs-daily.timer.tpl`) | ежедневный отчёт/ротация лог-конвейера (ADR-012) | `vds logs install --apply` |
 
 Таймеры ZeroTier (архив) активируются **только** при явной установке
 `vds zerotier install` (опциональный сценарий):

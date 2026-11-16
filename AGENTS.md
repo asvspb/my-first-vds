@@ -46,10 +46,12 @@ src/
 ├── acme/                # ACME/LE: issue (HTTP-01) + deploy-hook для Hysteria2
 ├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание), probing (probe-watch: телеметрия+threat-level+auto-lockdown, SPEC probe-response), probing_rucidr (RU-CIDR)
 ├── sysinfo/             # dashboard
+├── logs/                # log-forensics (ADR-012): install, collect (sample), report/analyze, capture
 └── system/              # setup, cleanup, ufw (harden/ssh-port — SPEC-20261116)
 systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg(-nat)/
                          # vds-relay-{exit,nat,policy,cidr}.service.tpl; vds-gateway-health / vds-probe-watch /
-                         # vds-probe-rucidr .service+.timer.tpl; sysctl/99-vds-gateway.conf.tpl
+                         # vds-probe-rucidr / vds-logs-sample / vds-logs-daily .service+.timer.tpl
+                         # (vds-logs-sample.service.tpl и др.); sysctl/99-vds-gateway.conf.tpl
 tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/, amneziawg/, acme/, relay/
 docs/                    # TEAM.md, DEPLOY.md, DEPLOY-RU-RELAY.md, VPN-PROTOCOLS.md, CDN-FRONTS.md,
                          # CENSORSHIP-ROADMAP.md, CENSORSHIP-PATTERNS.md, MIGRATE-VDS.md, adr/, team/
