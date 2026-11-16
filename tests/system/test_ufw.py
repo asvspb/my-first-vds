@@ -179,6 +179,15 @@ GATEWAY_SPECS = {
 }
 
 
+def test_hop_ports_hyphen_from_state_is_normalized_to_colon() -> None:
+    """state хранит mport-форму `20000-20500`; UFW принимает только `:`."""
+    st = _gateway_state()
+    st.protocols["hysteria2"]["hop_ports"] = "20000-20500"
+    specs, _ = ufw.profile_service_specs(st, "gateway")
+    assert "20000:20500/udp" in specs
+    assert "20000-20500/udp" not in specs
+
+
 def _wire(fake: FakeUfw, monkeypatch: pytest.MonkeyPatch) -> FakeUfw:
     monkeypatch.setattr(ufw, "run_list", fake.run)
     monkeypatch.setattr(ufw, "command_exists", lambda name: name in ("ufw", "ss", "sshd"))

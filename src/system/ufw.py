@@ -388,8 +388,10 @@ def profile_service_specs(state: GatewayState, profile: str) -> tuple[list[str],
             specs.append(spec)
     hop = (protocols.get("hysteria2") or {}).get("hop_ports")
     if hop:
+        # state хранит "-" (share-link mport), UFW требует ":" в диапазоне.
+        hop_spec = str(hop).strip().replace("-", ":")
         # одно правило на весь диапазон, напр. "20000:20500/udp" (SPEC §9)
-        specs.append(hop if "/" in hop else f"{hop}/udp")
+        specs.append(hop_spec if "/" in hop_spec else f"{hop_spec}/udp")
     return specs, cascade_443
 
 

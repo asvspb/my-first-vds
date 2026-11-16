@@ -66,7 +66,7 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 | `python -m src.main --help` | Справка CLI |
 | `python -m src.main` | TUI-меню |
 | `python -m src.main sysinfo` | Dashboard |
-| `vds system ufw harden --profile gateway/relay/exit-cascade` | Идемпотентный UFW hardening (SPEC-20261116; dry-run по умолчанию, `--apply`, `--undo`) |
+| `vds system ufw harden --profile gateway/relay/exit-cascade` | Идемпотентный UFW hardening (SPEC-20261116; dry-run по умолчанию, `--apply`, `--undo`; hop-диапазон из state нормализуется `-`→`:`) |
 | `vds system ufw ssh-port --to 49222 [--finalize]` | Двухфазный перенос SSH-порта (22 закрывается только `--finalize`) |
 | `python -m compileall -q src` | Синтаксическая проверка |
 | `pytest -q` | Юнит-тесты (`tests/`, без root/сети/docker) |

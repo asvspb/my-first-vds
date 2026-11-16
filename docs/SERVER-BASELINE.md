@@ -70,7 +70,7 @@
 | Docker | нет | ⚠️ `server-setup` (не нужен без ZTNET) | `vds zerotier install` |
 | BBR + UDP-буферы | да | ✅ `hysteria2 install` (sysctl.d) | `vds hysteria2 install` |
 | `ip_forward` + MASQUERADE | да | ✅ `amneziawg install` | `vds amneziawg install` |
-| hop-цепочка + UFW-диапазон | да | ✅ `hysteria2 add-hop-ports --apply` | — |
+| hop-цепочка + UFW-диапазон | да | ✅ `hysteria2 add-hop-ports --apply` (UFW: `20000-20500` → `20000:20500`) | — |
 | obfs-инстанс | да | ✅ `hysteria2 add-obfs` | — |
 | XHTTP / CDN | да | ✅ `xray add-transport` / `add-cdn` | — |
 | certbot + таймер | да | ✅ `acme issue` | — |
