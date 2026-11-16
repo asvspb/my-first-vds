@@ -106,6 +106,9 @@
   системным PATH — юниты рендерятся с venv, `systemctl --failed` = 0.
 - **RU-relay: код готов (WP-1..5 по SPEC/ADR-007), релей НЕ куплен** —
   развёртывание отложено до покупки VDS; WP-6 (харднинг) в спеке.
+  **Ранбук обновлён 2026-11-17:** тариф LandVPS RU-1 (KVM, 1 ГБ/20 ГБ,
+  1 месяц до года, swap при 0.75 ГБ), 5-мин gate §0.3 через **asv2
+  (213.108.23.119:51825)**, anti-DDoS UDP-проверка; asv1-IP удалён из команд.
 - **probe-watch v3** (SPEC-20261116-probe-response): threat-level quiet/elevated/high,
   ru-cidr install, lock-443 TTL/undo/hop-guard, auto-lockdown off (default).
 - **И44:** AWG/relay генераторы клиентов без дефолтного `PersistentKeepalive`
