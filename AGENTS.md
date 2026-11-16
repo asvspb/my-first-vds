@@ -72,6 +72,11 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 | `pytest -q` | Юнит-тесты (`tests/`, без root/сети/docker) |
 | `bash install.sh` | Установка (root, на сервере) |
 
+> Миграция XHTTP после смены IP узла (DNS ещё на старом адресе):
+> `vds xray add-transport xhttp --domain <домен> --mode port --skip-domain-check --apply --yes`
+> — E1 отключается только для этого случая, сертификат/SNI не меняются;
+> CDN-инбаунд (ws/2053) сохраняется, `path` не ротируется.
+
 ## 5. Конвенции кода
 
 1. **Модули**: `src/<category>/<module>.py`; регистрация команды в `src/main.py` с
