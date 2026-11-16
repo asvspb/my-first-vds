@@ -306,7 +306,7 @@ Gateway-таймеры (ставятся по явной команде, не п
 | `vds-probe-rucidr.timer` | обновление RU-CIDR-агрегата из ipdeny | `vds gateway probe-watch ru-cidr install --apply` |
 | `vds-relay-cidr.timer` | RU-CIDR на релее (еженедельно) | `vds relay init --apply` (ADR-007) |
 | `vds-logs-sample.timer` (`vds-logs-sample.service.tpl`/`vds-logs-sample.timer.tpl`) | 5-минутный сэмпл телеметрии (journald/счётчики, ADR-012); `ReadWritePaths=/var/lib/vds /var/run` (runtime-lock) | `vds logs install --apply` |
-| `vds-logs-daily.timer` (`vds-logs-daily.service.tpl`/`vds-logs-daily.timer.tpl`) | ежедневный отчёт/ротация лог-конвейера (ADR-012) | `vds logs install --apply` |
+| `vds-logs-daily.timer` (`vds-logs-daily.service.tpl`/`vds-logs-daily.timer.tpl`) | ежедневный отчёт/ротация лог-конвейера (ADR-012); `ReadWritePaths=/var/lib/vds /var/run` (runtime-lock) | `vds logs install --apply` |
 
 Таймеры ZeroTier (архив) активируются **только** при явной установке
 `vds zerotier install` (опциональный сценарий):

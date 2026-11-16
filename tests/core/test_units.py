@@ -40,6 +40,39 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     return recorded
 
 
+class TestResolvePython:
+    """HF-3: `{python}` для юнитов — venv → sys.executable → PATH."""
+
+    def test_prefers_install_dir_venv(self, tmp_path: Path) -> None:
+        venv_bin = tmp_path / "venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        venv_py = venv_bin / "python3"
+        venv_py.write_text("#!/bin/sh\n", encoding="utf-8")
+        venv_py.chmod(0o755)
+        assert units.resolve_python(str(tmp_path)) == str(venv_py)
+
+    def test_uses_install_dir_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        venv_bin = tmp_path / "venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        venv_py = venv_bin / "python3"
+        venv_py.write_text("#!/bin/sh\n", encoding="utf-8")
+        venv_py.chmod(0o755)
+        monkeypatch.setenv("INSTALL_DIR", str(tmp_path))
+        assert units.resolve_python() == str(venv_py)
+
+    def test_falls_back_to_sys_executable(self, tmp_path: Path) -> None:
+        import sys
+
+        assert units.resolve_python(str(tmp_path)) == sys.executable
+
+    def test_last_resort_is_path_python(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(units.sys, "executable", "")
+        monkeypatch.setattr(units.shutil, "which", lambda _name: "/opt/x/python3")
+        assert units.resolve_python(str(tmp_path)) == "/opt/x/python3"
+
+
 class TestInstallUnit:
     def test_renders_and_installs(
         self,

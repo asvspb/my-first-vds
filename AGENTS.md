@@ -51,7 +51,7 @@ src/
 systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg(-nat)/
                          # vds-relay-{exit,nat,policy,cidr}.service.tpl; vds-gateway-health / vds-probe-watch /
                          # vds-probe-rucidr / vds-logs-sample / vds-logs-daily .service+.timer.tpl
-                         # (vds-logs-sample: ReadWritePaths /var/lib/vds + /var/run для FileLock);
+                         # (vds-logs-sample/daily: ReadWritePaths /var/lib/vds + /var/run для FileLock);
                          # sysctl/99-vds-gateway.conf.tpl
 tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/, amneziawg/, acme/, relay/
 docs/                    # TEAM.md, DEPLOY.md, DEPLOY-RU-RELAY.md, VPN-PROTOCOLS.md, CDN-FRONTS.md,

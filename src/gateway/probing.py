@@ -55,7 +55,6 @@ import ipaddress
 import json
 import os
 import re
-import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1930,9 +1929,11 @@ def cmd_explain(run: RunFn = run_list) -> int:
 
 def _unit_ctx() -> dict[str, str]:
     """Контекст рендера systemd-шаблонов (паттерн relay/init.py)."""
+    from src.core.units import resolve_python
+
     repo_dir = Path(__file__).resolve().parents[2]
     return {
-        "python": shutil.which("python3") or "/usr/bin/python3",
+        "python": resolve_python(),
         "repo_dir": str(repo_dir),
         "install_dir": os.environ.get("INSTALL_DIR", "/opt/my-vds"),
         "nft_file": str(PROBE_NFT_FILE),

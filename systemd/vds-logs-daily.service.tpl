@@ -18,6 +18,6 @@ TimeoutStartSec=600
 NoNewPrivileges=yes
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYSLOG CAP_DAC_READ_SEARCH
 ProtectSystem=strict
-ReadWritePaths=/var/lib/vds
+ReadWritePaths=/var/lib/vds /var/run
 ProtectHome=yes
 PrivateTmp=yes

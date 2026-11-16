@@ -9,6 +9,8 @@
 """
 
 import os
+import shutil
+import sys
 from pathlib import Path
 
 from src.core.lock import FileLock
@@ -23,6 +25,23 @@ LOCK_FILE = "/var/run/vds-units.lock"
 
 def _unit_path(name: str, root: str) -> Path:
     return Path(root) / "etc" / "systemd" / "system" / name
+
+
+def resolve_python(install_dir: str | None = None) -> str:
+    """Интерпретатор для `{python}` в systemd-шаблонах.
+
+    Порядок: venv внутри INSTALL_DIR → текущий `sys.executable` → PATH.
+    Причина: `sudo vds … install` запускает CLI из venv, но `PATH` под sudo
+    не содержит venv, поэтому `shutil.which("python3")` возвращал системный
+    интерпретатор без зависимостей (живой дефект asv2 2026-11-16).
+    """
+    base = Path(install_dir or os.environ.get("INSTALL_DIR", "/opt/my-vds"))
+    venv_py = base / "venv" / "bin" / "python3"
+    if venv_py.is_file() and os.access(venv_py, os.X_OK):
+        return str(venv_py)
+    if sys.executable and Path(sys.executable).is_file():
+        return sys.executable
+    return shutil.which("python3") or "/usr/bin/python3"
 
 
 def install_unit(

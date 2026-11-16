@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import secrets as pysecrets
+from pathlib import Path
 from typing import Optional
 
 from src.core.logger import console
@@ -21,10 +22,10 @@ from src.logs import paths as logs_paths
 
 def _unit_ctx() -> dict[str, str]:
     """Контекст рендера systemd-шаблонов (паттерн probing._unit_ctx)."""
-    import shutil
+    from src.core.units import resolve_python
 
     return {
-        "python": shutil.which("python3") or "/usr/bin/python3",
+        "python": resolve_python(),
         "repo_dir": str(logs_paths.REPO_DIR),
         "install_dir": os.environ.get("INSTALL_DIR", "/opt/my-vds"),
     }

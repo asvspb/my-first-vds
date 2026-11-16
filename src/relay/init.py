@@ -46,7 +46,7 @@ from src.core.logger import console
 from src.core.netcheck import port_free, port_owner, public_ip
 from src.core.secrets import write_secret_atomic
 from src.core.shell import run_list
-from src.core.units import install_unit
+from src.core.units import install_unit, resolve_python
 from src.gateway.store import load_state, save_state
 from src.relay.config import RelayArgs, build_plan, render_relay_server_conf, sanitize_exit_conf
 from src.relay.paths import (
@@ -346,7 +346,7 @@ def _install_policy_and_cidr() -> None:
     if not start.ok:
         raise RelayInitError(f"{RELAY_POLICY_UNIT}: {start.stderr.strip() or start.stdout.strip()}")
 
-    python = shutil.which("python3") or "/usr/bin/python3"
+    python = resolve_python()
     repo_dir = Path(__file__).resolve().parents[2]
     if not install_unit(
         "vds-relay-cidr.service.tpl",
