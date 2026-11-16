@@ -184,7 +184,9 @@ xray/hysteria2 (access-log/loglevel — отдельное решение вла
   nft-файл, если таблицы нет.
 - **`remove --apply`** — демонтаж таблицы и юнитов (идемпотентно).
 Таймер `vds-probe-watch.timer` — часовой тик watch; журнал
-`journalctl -u vds-probe-watch.service`.
+`journalctl -u vds-probe-watch.service`. Юнит рендерится с
+`resolve_python()` (`venv` внутри `INSTALL_DIR` → `sys.executable` → PATH),
+поэтому `sudo vds … install` не подменяет интерпретатор системным.
 - **Серверная реакция (SPEC-20261116-probe-response, кратко):** вердикты
   окон агрегируются в threat-level `quiet/elevated/high` (high = RU-SUSPECT
   2 окна подряд; BURST-максимум elevated; выход high = 72 окна без новых

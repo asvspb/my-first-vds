@@ -179,6 +179,10 @@ systemctl enable --now vds-relay-cidr.timer
 systemctl list-timers vds-relay-cidr.timer
 ```
 
+Юнит `vds-relay-cidr.service` рендерится с `resolve_python()`: venv внутри
+`INSTALL_DIR` имеет приоритет над системным `python3`, поэтому `vds relay init`
+не оставит таймер без зависимостей даже под `sudo` с чистым `PATH`.
+
 ### 8. MTU (зафиксировано)
 
 - awg0 **MTU 1280** (двойная инкапсуляция client→relay→asv1) — в
