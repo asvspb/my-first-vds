@@ -16,6 +16,13 @@ CDN (SPEC-20261110, ADR-006): при `cdn_enabled` добавляется тре
 vless+ws+tls на CDN_ORIGIN_PORT_DEFAULT (TCP 2053) с LE-сертификатом
 cdn-домена (все интерфейсы, за Cloudflare proxy). Без cdn-полей рендер
 байт-в-байт прежний (золотой снапшот-тест).
+
+GR-25 (SPEC-20261116-xhttp-xmux-padding §2.1): `xhttpSettings` XHTTP-инблэнда
+содержит `mode: auto` (принимаются stream-one/stream-up/packet-up) и
+`xPaddingBytes: "100-1000"` (случайная длина служебного padding'а — размывает
+гистограмму размеров пакетов для SPLT/ML-классификаторов). Оба поля —
+серверная сторона; share-link не меняется (старые клиенты только с `path`
+продолжают подключаться).
 """
 
 import json
@@ -37,6 +44,11 @@ XHTTP_MODES = ("fallback", "port")
 # поле-дефолт XrayConfigParams. Новые add-transport получают рандомный путь
 # (core.secrets.gen_secret_path, SPEC-20261116-surface-hardening §2.1).
 XHTTP_PATH = "/xhttp"
+# GR-25: серверные параметры анти-ML профилирования XHTTP (SPEC §2.1).
+# XHTTP_STREAM_MODE — режим передачи в xhttpSettings (НЕ путать с
+# XHTTP_MODES выше — это listen-режим инблэнда: fallback/port).
+XHTTP_STREAM_MODE = "auto"
+XHTTP_PADDING_BYTES = "100-1000"
 
 CDN_DEFAULT_PORT = CDN_ORIGIN_PORT_DEFAULT
 CDN_DEFAULT_WS_PATH = CDN_WS_PATH
@@ -90,11 +102,21 @@ class XrayConfigParams:
 
 
 def _xhttp_inbound(params: XrayConfigParams) -> dict:
-    """Второй инблэнд vless+xhttp+tls (ADR-003); слушать loopback или все."""
+    """Второй инблэнд vless+xhttp+tls (ADR-003); слушать loopback или все.
+
+    xhttpSettings (GR-25, SPEC §2.1): path-секрет + `mode: auto` (сервер
+    принимает stream-one/stream-up/packet-up) + `xPaddingBytes: 100-1000`
+    (случайная длина служебного padding'а на каждый фрейм). Обратная
+    совместимость: клиент, знающий только `path`, продолжает работать.
+    """
     stream: dict = {
         "network": "xhttp",
         "security": "tls",
-        "xhttpSettings": {"path": params.xhttp_path},
+        "xhttpSettings": {
+            "path": params.xhttp_path,
+            "mode": XHTTP_STREAM_MODE,
+            "xPaddingBytes": XHTTP_PADDING_BYTES,
+        },
         "tlsSettings": {
             "certificates": [
                 {

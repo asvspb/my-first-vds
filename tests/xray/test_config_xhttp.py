@@ -153,13 +153,18 @@ class TestXHTTPInbound:
         assert cert["keyFile"] == KEY
 
     def test_xhttp_settings_path_fixed_and_deterministic(self) -> None:
-        # Дельта WP-3: фиксированный path=/xhttp в xhttpSettings, без
-        # параметризации; два рендера — байт-в-байт одинаковы.
+        # Дельта WP-3: фиксированный path=/xhttp в xhttpSettings; GR-25
+        # (SPEC-20261116-xhttp-xmux-padding §2.1): mode=auto + xPaddingBytes
+        # "100-1000". Два рендера — байт-в-байт одинаковы.
         first = render_config(_xhttp_params())
         second = render_config(_xhttp_params())
         assert first == second
         stream = json.loads(first)["inbounds"][1]["streamSettings"]
-        assert stream["xhttpSettings"] == {"path": "/xhttp"}
+        assert stream["xhttpSettings"] == {
+            "path": "/xhttp",
+            "mode": "auto",
+            "xPaddingBytes": "100-1000",
+        }
 
     def test_no_xhttp_settings_without_xhttp(self) -> None:
         parsed = json.loads(render_config(_params()))

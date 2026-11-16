@@ -226,6 +226,9 @@ def _xhttp_fields(current: dict) -> dict | None:
                 # наследуется из живого config.json при любом CDN-перерендере,
                 # иначе рандомный путь молча сбрасывался бы на литерал /xhttp
                 # и расходился с выданными ссылками (баг кросс-рендера).
+                # Остальные поля xhttpSettings (mode=auto, xPaddingBytes,
+                # GR-25) — константы render_config (config._xhttp_inbound),
+                # пере-рендер их воспроизводит, терять нечего (T-XM2).
                 "path": path,
                 "cert_path": str(certificates[0]["certificateFile"]),
                 "key_path": str(certificates[0]["keyFile"]),

@@ -94,13 +94,34 @@ vless://<uuid>@<ip>:443?security=reality&sni=www.google.com&fp=chrome&pbk=<publi
   "network": "xhttp",
   "security": "tls",
   "tlsSettings": { "certificates": [{ "certificateFile": "...", "keyFile": "..." }] },
-  "xhttpSettings": { "mode": "auto", "path": "/upload" }
+  "xhttpSettings": {
+    "path": "/<случайный-путь>",
+    "mode": "auto",
+    "xPaddingBytes": "100-1000"
+  }
 }
 ```
 
 Маскировка под GET/POST-запросы; можно проксировать через CDN — сервер не светит
 свой IP. Нужны домен + Let's Encrypt. Режим `auto` чередует packet-up/stream-up,
 ломая трафик-анализ.
+
+Серверные параметры анти-ML профилирования (GR-25,
+[SPEC-20261116-xhttp-xmux-padding](team/specs/SPEC-20261116-xhttp-xmux-padding.md);
+рендер — `src/xray/config.py::_xhttp_inbound`, Xray-core ≥ 26.1.23 по
+[ADR-010](adr/ADR-010-xray-core-upgrade-26.md)):
+
+- `mode: "auto"` — сервер принимает все режимы передачи (`stream-one`,
+  `stream-up`, `packet-up`), выбор остаётся за клиентом;
+- `xPaddingBytes: "100-1000"` — длина служебного padding'а в ответах
+  рандомизируется в окне 100–1000 байт на каждый фрейм: гистограмма размеров
+  пакетов (SPLT-анализ) размывается, классификатор не выделяет профиль Xray;
+- путь (`path`) — секрет из `state.json` (0600), перерендер CDN/клиентов его
+  не сбрасывает;
+- клиентская сторона (ротация сокетов `xmux`, тот же `xPaddingBytes`) живёт в
+  `ubuntuInstaller` (`vpnm/xclient.py`); серверный share-link не меняется:
+  `vless://…&path=<path>&type=xhttp` — старые клиенты (только `path`)
+  подключаются как раньше (§4 спеки).
 
 ## 2.3. Hysteria2
 

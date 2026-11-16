@@ -141,6 +141,12 @@ vds xray use-domain --domain example.com
   - `--mode port` — XHTTP на публичном порту **8443** (рекомендуется при DPI-давлении);
   - `--mode fallback` — SNI-разделение за Reality на 443;
   - `--apply` — применить (по умолчанию dry-run), `--yes` — без интерактивного подтверждения.
+  - инблэнд рендерится с `xhttpSettings: {mode: "auto", xPaddingBytes: "100-1000"}`
+    (GR-25): сервер принимает stream-one/stream-up/packet-up и рандомизирует
+    длину служебного padding'а — размывает размеры пакетов для DPI/ML.
+    Минимальная версия Xray — **26.1.23** (ADR-010); `xray -test` в apply-гейте
+    обязан вернуть OK, иначе конфиг откатывается из бэкапа. Старые клиенты
+    (только `path`) продолжают подключаться — share-link не изменился.
 - `use-domain` — адрес Reality share-links заменяется с IP на домен.
 
 ### 4. Клиенты
