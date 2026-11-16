@@ -103,3 +103,16 @@ class TestInstallFilesystem:
         assert _write_journal(state, path) is True
         assert _read_journal(path) == state
         assert _read_journal(tmp_path / "missing.json") == {}
+
+    def test_sample_unit_allows_runtime_lock(self):
+        """`logs sample` берёт `/var/run/vds-logs.lock`; при
+        ProtectSystem=strict каталог обязан быть в ReadWritePaths, иначе
+        FileLock падает EROFS (живой дефект asv2 2026-11-16)."""
+        from pathlib import Path
+
+        tpl = Path(__file__).resolve().parents[2] / "systemd" / "vds-logs-sample.service.tpl"
+        line = next(
+            line for line in tpl.read_text(encoding="utf-8").splitlines()
+            if line.startswith("ReadWritePaths=")
+        )
+        assert "/var/run" in line.split()

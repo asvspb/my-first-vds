@@ -16,9 +16,9 @@ CPUWeight=10
 MemoryMax=64M
 TimeoutStartSec=120
 NoNewPrivileges=yes
-# root-чтение nft/journal/proc; запись только в /var/lib/vds
+# root-чтение nft/journal/proc; запись только в /var/lib/vds + runtime-lock
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYSLOG CAP_DAC_READ_SEARCH
 ProtectSystem=strict
-ReadWritePaths=/var/lib/vds
+ReadWritePaths=/var/lib/vds /var/run
 ProtectHome=yes
 PrivateTmp=yes

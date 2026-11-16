@@ -323,6 +323,8 @@ origin) — сканер этих портов виден в new_ru_ips; `RU-PRO
 слепы (только объёмный `udp_443`). Быстрый контур: тег
 `[warning] [probe] FAST-CONTOUR: N probers/5min` в
 `journalctl -u vds-logs-sample` при всплеске (≥ 10 уникальных IP/5 мин) —
+юнит sample работает с `ProtectSystem=strict`; `ReadWritePaths=/var/lib/vds
+/var/run`, иначе `FileLock(/var/run/vds-logs.lock)` падает EROFS.
 телеметрия без авто-действий.
 **Откат:** рассинхрон снапшота со счётчиками ядра → переинициализация базовой
 линии: `vds gateway probe-watch install --apply` (переустанавливает таблицу —
