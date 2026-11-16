@@ -171,6 +171,8 @@ vds gateway healthcheck --install-timer  # Таймер vds-gateway-health (ка
 vds gateway probe-watch install --apply  # Монитор зондирования tcp/{443,8443,2053} (nft + таймер, dry-run по умолчанию)
 vds gateway probe-watch watch            # Дельта счётчиков + вердикт + threat-level (read-only)
 vds gateway probe-watch watch --json     # + контракт: threat_level/threat_reason/lockdown/ru_syn_new (+ аддитивно syn_*_extra, extra_ports)
+# RU-PROBE-SUSPECT гейтится суммой syn_valid + syn_valid_extra (443/8443/2053);
+# PROBE-BURST по-прежнему калибруется только по 443
 vds gateway probe-watch explain          # Карта покрытия: что меряется, что слепо (access-log/UDP-порты/IPv6)
 vds gateway probe-watch ru-cidr install --apply  # RU-CIDR без релея: включает RU-PROBE-SUSPECT (+таймер)
 vds gateway probe-watch ru-cidr update --apply   # Разово обновить RU-CIDR из ipdeny (root; иначе — таймер)

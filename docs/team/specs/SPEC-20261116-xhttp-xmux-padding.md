@@ -1,8 +1,8 @@
-# SPEC-20261116-xhttp-xmux-padding — GR-22: анти-ML профилирование XHTTP (`xPaddingBytes` + `xmux` ротация сокетов)
+# SPEC-20261116-xhttp-xmux-padding — GR-25: анти-ML профилирование XHTTP (`xPaddingBytes` + `xmux` ротация сокетов)
 
 > **Статус:** draft → G1/G2
 > **Источник:** [ARCH-20261116-tspu-blindspots](../reports/ARCH-20261116-tspu-blindspots.md),
-> [GROWTH-POINTS.md](../../GROWTH-POINTS.md) (GR-22, P1).
+> [GROWTH-POINTS.md](../../GROWTH-POINTS.md) (GR-25, P1).
 > **Затрагиваемые репозитории:** `my-first-vds` (`src/xray/config.py`,
 > `src/xray/clients.py`) + `ubuntuInstaller` (`scripts/vpn-manager/vpnm/xclient.py`,
 > `vpnm/bins.py`).
