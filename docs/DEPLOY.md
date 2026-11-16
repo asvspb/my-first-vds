@@ -91,8 +91,9 @@ warning, остальное ставится. Занятый чужим проц
 1. `vds gateway init --apply --domain … --email … --protocols reality,hysteria2,obfs,hop,xhttp,cdn,awg`
    → юниты `vds-xray` / `vds-hysteria2` / `vds-hysteria2-obfs` / `vds-hysteria2-hop` /
    `vds-amneziawg` active; порты 443/tcp, 443/udp, 8443/tcp, 2053/tcp, 51825/udp,
-   51826/udp (+ hop-диапазон) слушаются; `vds gateway links --include-obfs`
-   непустой; `vds-gateway-health.timer` активен.
+   51826/udp (+ hop-диапазон) слушаются (2053/tcp — только для CIDR
+   Cloudflare); пути XHTTP/CDN-WS случайные (state.json); `vds gateway links
+   --include-obfs` непустой; `vds-gateway-health.timer` активен.
 2. Повторный тот же вызов — ни одной мутации, «изменений не требуется», exit 0.
 3. Без `--domain`: acme/cdn пропущены с понятным warning, reality/hy2/awg работают.
 4. Занятый порт (`python -m http.server 8443`) → init падает до установки,

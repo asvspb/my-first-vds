@@ -279,8 +279,12 @@ add-client`). Существующие конфиги не переписыва�
 > VLESS+WS+TLS (origin 2053, ADR-006), Hysteria2 (UDP 443, self-signed +
 > LE/ACME HTTP-01 по домену, ADR-004), port hopping (ADR-008), obfs salamander,
 > AmneziaWG (ADR-005, §2.5), ACME + use-domain, `gateway init` (fresh-install),
-> probe-watch v3 (threat-level/RU-CIDR, SPEC-20261116-probe-response),
-> UFW-hardening (ADR-011). Состояние — `src/gateway/store.py`
+> probe-watch v3 (threat-level/RU-CIDR + verified_session_ips/anti-Self-DoS,
+> SPEC-20261116-probe-response §11.1), UFW-hardening (ADR-011). Пути XHTTP и
+> CDN-WS — случайные при install (секрет в state.json; живые установки
+> наследуют текущий, ротация `--regenerate-path --apply` → сразу
+> `vpn profile pull`); 2053/tcp открыт только для CIDR Cloudflare
+> (SPEC-20261116-surface-hardening). Состояние — `src/gateway/store.py`
 > (`$INSTALL_DIR/gateway/state.json`, 0600).
 > Нереализованное: подписки, SNI-мультиплексор, dashboard-карточки.
 > См. [SPEC-20261107-gateway-mvp](team/specs/SPEC-20261107-gateway-mvp.md),

@@ -180,7 +180,7 @@ Hy2, `8443/tcp` XHTTP(LE), `2053/tcp` CF-WS CDN, `51825/udp` AWG (пиры жи�
 | 51825/udp | AmneziaWG | ✔ (install уже открыл) | — | ✔ |
 | 51826/udp | obfs salamander | ✔ | — | ✔ |
 | 8443/tcp | XHTTP | ✔ | — | ✔ |
-| 2053/tcp | CDN origin (CF) | ✔ | — | ✔ |
+| 2053/tcp | CDN origin (CF) | ✔ (только CIDR Cloudflare, SPEC-20261116-surface-hardening) | — | ✔ |
 | 80/tcp | ACME HTTP-01 | ✔ | — | ✔ |
 | 20000:20500/udp | hop (если включён) | ✔ | — | ✔ |
 | FORWARD / ip_forward | маршрутизация | ACCEPT + проверка | ACCEPT + проверка | ACCEPT + проверка |
