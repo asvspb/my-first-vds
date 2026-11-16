@@ -149,5 +149,6 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 
 `vds-owner` · `vds-analyst` · `vds-architect` · `vds-coder` · `vds-debugger` ·
 `vds-tester` · `vds-docs` · `vds-orchestrator` · метагент `vds-agent-smith` · скаут
-`vds-youtube-scout` (всего 10). Определения — `.zcode/agents/`,
+`vds-youtube-scout` (всего 10). Определения — `.zcode/agents/` (канон) и
+генерируемое зеркало `.opencode/agents/` (`tools/export_opencode_agents.py`),
 процесс и гейты — `docs/TEAM.md`.

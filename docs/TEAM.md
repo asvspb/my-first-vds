@@ -38,6 +38,13 @@
 
 **Модели:** `vds-architect`, `vds-tester`, `vds-agent-smith` — `glm-5.3` · `vds-debugger` — `deepseek-flash` · остальные — `glm-5.3-flash`. `thoughtLevel: high` — у `vds-agent-smith`, у остальных `low`. Смена модели — только в frontmatter агента (`.zcode/agents/*.md`).
 
+**OpenCode-зеркало ролей.** Для OpenCode те же 10 ролей продублированы в
+`.opencode/agents/vds-*.md` — это **генерируемые** файлы, источник истины
+остаётся в `.zcode/agents/`. Модель в зеркале не фиксируется (наследуется от
+сессии), а `mode` и `permissions` задаются в экспортёре. Пересборка —
+`python3 tools/export_opencode_agents.py --write`; проверка рассинхрона
+(`--check`) входит в G3/G4 наравне с `docsync audit`.
+
 ---
 
 ## 3. Поток и гейты

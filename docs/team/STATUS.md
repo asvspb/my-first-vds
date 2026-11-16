@@ -62,6 +62,9 @@
 - **Дальше:** WP-G0 (ADR-014 + схемы + `packages`) → WP-G1 ∥ WP-G2 →
   WP-G3 (правила) → WP-G4 (корреляция + server verdict) → WP-G5 →
   WP-G6 (7 дней поля). AC-1…AC-17 — §14.2.
+- **Ревью (эволюция v1.0 → v2.0):** [ARCH-20261116-vpn-guard-evolution](reports/ARCH-20261116-vpn-guard-evolution.md) —
+  стратегическая оценка + предложение v1.1 (ss/netlink, packet-size ratio,
+  ленивый sync), v1.2 (`--client-report`) и v2.0 (Smart Failover, только через ADR).
 - **WP-G0 (код готов, не закоммичен, 2026-11-16):**
   `docs/adr/ADR-014-vpn-guard.md`; клиент —
   `vpnm/guard/{__init__,events,schema}.py` + `vpnm/guard/schemas/`

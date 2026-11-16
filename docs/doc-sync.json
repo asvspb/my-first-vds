@@ -84,7 +84,7 @@
     },
     {
       "id": "agents",
-      "match": [".zcode/agents/**"],
+      "match": [".zcode/agents/**", ".opencode/agents/**"],
       "require": ["docs/TEAM.md", "AGENTS.md", "README.md"],
       "consider": [],
       "why": "реестр ролей и моделей"
