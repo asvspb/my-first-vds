@@ -13,3 +13,11 @@ venv/
 *.log
 zerotier_dump.txt
 upload-ssh-cert.sh
+
+# Log-forensics артефакты (ADR-012): дампы/телеметрия не в git;
+# /var/lib/vds/{telemetry,forensics} — runtime-сервер, в репо отсутствует.
+*.pcap
+*.ndjson
+bundles/
+captures/
+telemetry/

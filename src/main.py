@@ -34,6 +34,16 @@ system_app = typer.Typer(help="Системные утилиты: очистка
 ufw_app = typer.Typer(
     help="UFW hardening (SPEC-20261116): dry-run по умолчанию, --apply для изменений"
 )
+logs_app = typer.Typer(
+    help=(
+        "Log-forensics (SPEC-20261116-log-forensics, ADR-012): телеметрия 5 мин, "
+        "правила T-01..T-17, baseline, bounded pcap; dry-run по умолчанию"
+    )
+)
+logs_capture_app = typer.Typer(
+    help="Bounded pcap-захват tcp/443 (metadata-only, TTL 7 дней, §8.1)"
+)
+logs_app.add_typer(logs_capture_app, name="capture")
 app.add_typer(zerotier_app, name="zerotier")
 app.add_typer(wireguard_app, name="wireguard")
 app.add_typer(coturn_app, name="coturn")
@@ -47,6 +57,7 @@ app.add_typer(system_app, name="system")
 system_app.add_typer(ufw_app, name="ufw")
 gateway_app.add_typer(probe_watch_app, name="probe-watch")
 probe_watch_app.add_typer(probe_rucidr_app, name="ru-cidr")
+app.add_typer(logs_app, name="logs")
 
 @app.callback(invoke_without_command=True)
 def main_menu(ctx: typer.Context):
@@ -1577,6 +1588,168 @@ def ufw_lock443(
         console.print(f"[error][ufw] {exc}[/error]")
         raise typer.Exit(1)
     raise typer.Exit(code)
+
+
+# ---------------------------------------------------------------------------
+# logs (SPEC-20261116-log-forensics, ADR-012) — импорты ленивые внутри команд
+# ---------------------------------------------------------------------------
+
+def _require_root_logs(action: str) -> None:
+    import os
+
+    from src.core.logger import console
+
+    if os.geteuid() != 0:
+        console.print(f"[error][logs] {action} требует root (sudo).[/error]")
+        raise typer.Exit(1)
+
+
+@logs_app.command("status")
+def logs_status():
+    """Состояние модуля: каталоги, таймеры, последний сэмпл, disk_pct, capture.
+
+    Примеры:
+      vds logs status
+    """
+    from src.logs.install import cmd_status
+
+    raise typer.Exit(cmd_status())
+
+
+@logs_app.command("sample")
+def logs_sample(
+    apply: bool = typer.Option(False, "--apply", help="Записать сэмпл (по умолчанию dry-run)"),
+):
+    """Разово собрать 5-мин Event (nft/ss/nstat/awg/units/journal + probe-watch
+    read-only дельта) и дописать в telemetry NDJSON (disk-cap 90%).
+
+    Примеры:
+      sudo vds logs sample          # dry-run: план источников
+      sudo vds logs sample --apply  # записать сэмпл
+    """
+    if apply:
+        _require_root_logs("sample --apply")
+    from src.logs.collect import cmd_sample
+
+    raise typer.Exit(cmd_sample(apply=apply))
+
+
+@logs_app.command("analyze")
+def logs_analyze(
+    live: bool = typer.Option(False, "--live", help="Анализ по telemetry за --since"),
+    since: str = typer.Option("24h", "--since", help="Окно анализа: Nh (max 168h)"),
+    json_out: bool = typer.Option(False, "--json", help="Машиночитаемый JSON (§7.9)"),
+):
+    """Анализ телеметрии правилами T-01..T-17 (read-only, без root, без реакций
+    R-9). Exit: 0 — ok, 1 — findings ≥ medium, 2 — ошибка.
+
+    Примеры:
+      vds logs analyze --live --since 24h
+      vds logs analyze --live --since 2h --json
+    """
+    import re as _re
+
+    from src.core.logger import console
+    from src.logs.report import cmd_analyze
+
+    match = _re.fullmatch(r"(\d+)\s*h", since.strip())
+    if not match:
+        console.print(f"[error][logs] --since: ожидался Nh, получено {since!r}[/error]")
+        raise typer.Exit(2)
+    hours = int(match.group(1))
+    if hours <= 0 or hours > 168:
+        console.print(f"[error][logs] --since: N в диапазоне 1..168, получено {hours}[/error]")
+        raise typer.Exit(2)
+    if not live:
+        console.print("[info][logs] Укажите --live (анализ по телеметрии; bundle-режим — WP-3).[/info]")
+        raise typer.Exit(2)
+    raise typer.Exit(cmd_analyze(live=live, since_hours=hours, json_out=json_out))
+
+
+@logs_app.command("report")
+def logs_report(
+    apply: bool = typer.Option(False, "--apply", help="Записать daily-отчёт (reports/, 0600)"),
+    last: bool = typer.Option(False, "--last", help="Показать последний сохранённый отчёт"),
+):
+    """Daily-отчёт (вердикт + findings + coverage) — вызывает daily-таймер 04:15.
+
+    Примеры:
+      vds logs report --last          # последний отчёт
+      sudo vds logs report --apply    # собрать и записать сейчас
+    """
+    if apply:
+        _require_root_logs("report --apply")
+    from src.logs.report import cmd_report
+
+    raise typer.Exit(cmd_report(apply=apply, last=last))
+
+
+@logs_capture_app.command("start")
+def logs_capture_start(
+    duration: int = typer.Option(1, "--duration", help="Часы захвата (default 1h, max 4h)"),
+    max_mb: int = typer.Option(50, "--max-mb", help="Объём кольца MB (default 50; -C=max_mb//5, -W 5)"),
+    apply: bool = typer.Option(False, "--apply", help="Запустить tcpdump (по умолчанию dry-run)"),
+):
+    """Bounded pcap-захват tcp/443 (§8.1): IPv4 BPF, -s 1600, -G 3600, -W 5,
+    metadata-only, TTL 7 дней, путь /var/lib/vds/forensics/captures/.
+
+    Примеры:
+      sudo vds logs capture start --duration 1h --max-mb 50          # dry-run: BPF/лимиты
+      sudo vds logs capture start --duration 1h --max-mb 50 --apply
+    """
+    _require_root_logs("capture start")
+    from src.logs.capture import cmd_capture_start
+
+    raise typer.Exit(cmd_capture_start(duration_h=duration, max_mb=max_mb, apply=apply))
+
+
+@logs_capture_app.command("status")
+def logs_capture_status():
+    """Состояние захвата: pidfile+comm, файлы кольца, суммарный объём."""
+    from src.logs.capture import cmd_capture_status
+
+    raise typer.Exit(cmd_capture_status())
+
+
+@logs_capture_app.command("stop")
+def logs_capture_stop(
+    apply: bool = typer.Option(False, "--apply", help="SIGTERM (по умолчанию dry-run)"),
+):
+    """Останов захвата: kill ТОЛЬКО PID из pidfile после comm==tcpdump
+    (AGENTS §6: не по порту/имени)."""
+    _require_root_logs("capture stop --apply")
+    from src.logs.capture import cmd_capture_stop
+
+    raise typer.Exit(cmd_capture_stop(apply=apply))
+
+
+@logs_app.command("install")
+def logs_install(
+    apply: bool = typer.Option(False, "--apply", help="Исполнить (по умолчанию dry-run; opt-in OQ-2)"),
+):
+    """Установить log-forensics (root): каталоги, hmac.key, rules.json,
+    таймеры vds-logs-sample (5 мин) и vds-logs-daily (04:15). Идемпотентно;
+    undo-журнал для remove.
+
+    Примеры:
+      sudo vds logs install          # dry-run: план
+      sudo vds logs install --apply
+    """
+    _require_root_logs("install --apply")
+    from src.logs.install import cmd_install
+
+    raise typer.Exit(cmd_install(apply=apply))
+
+
+@logs_app.command("remove")
+def logs_remove(
+    apply: bool = typer.Option(False, "--apply", help="Исполнить (по умолчанию dry-run)"),
+):
+    """Демонтаж таймеров/юнитов по undo-журналу (артефакты сохраняются)."""
+    _require_root_logs("remove --apply")
+    from src.logs.install import cmd_remove
+
+    raise typer.Exit(cmd_remove(apply=apply))
 
 
 if __name__ == "__main__":

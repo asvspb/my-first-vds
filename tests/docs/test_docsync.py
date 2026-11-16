@@ -225,12 +225,14 @@ def test_escape_fictional_debt_ref_fails() -> None:
 
 def test_extract_commands_real_main_py() -> None:
     cmds = ds.extract_leaf_commands(REPO / "src" / "main.py")
-    # 67 @command-декораторов + probe-watch как invoke_without_command-leaf
-    assert len(cmds) == 68
+    # 76 @command-декораторов (в т.ч. 6 logs + 3 logs capture,
+    # SPEC-20261116-log-forensics/ADR-012) + probe-watch iwc-leaf
+    assert len(cmds) == 77
     assert len(set(cmds)) == len(cmds)
     assert "vds sysinfo" in cmds and "vds cleanup" in cmds and "vds server-setup" in cmds
     assert "vds gateway probe-watch" in cmds  # iwc-leaf
     assert "vds gateway probe-watch ru-cidr update" in cmds  # вложенность 3 уровня
+    assert "vds logs sample" in cmds and "vds logs capture start" in cmds  # logs (ADR-012)
     allowlist = json.loads((REPO / "docs" / "doc-sync.json").read_text())["reverse"]["legacy_commands_allowlist"]
     assert set(allowlist) <= set(cmds)  # allowlist не протух
 
