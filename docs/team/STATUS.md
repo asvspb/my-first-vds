@@ -234,9 +234,13 @@
   25 пунктов (GR-01…GR-25) с фактами, действиями и AC.
 - **GR-25 (XHTTP padding/xmux) — код готов 2026-11-16:** сервер `7af391b`
   (`mode:auto` + `xPaddingBytes:"100-1000"`, T-XM1/T-XM2), клиент `1807945`
-  (`xPaddingBytes` + `xmux`-ротация, Xray 26.1.23, T-XM4/T-XM5). Осталось:
-  миграция живого XHTTP на asv1 (early-return без пере-рендера) + T-XM6
-  (2–4 сокета, ротация 3–5 мин). Долг: SHA256 `.dgst` в `vpnm/bins.py`.
+  (`xPaddingBytes` + `xmux`-ротация, Xray 26.1.23, T-XM4/T-XM5), миграция
+  существующего XHTTP + сохранение CDN-инбаунда — `9e43590`. Осталось:
+  раскатка на asv1 и T-XM6 (2–4 сокета, ротация 3–5 мин). Долг:
+  SHA256 `.dgst` в `vpnm/bins.py`.
+- **asv1 недоступен с ноутбука 2026-11-16:** `ping 103.45.247.172` — 100%
+  loss, TCP 443/49222 — timeout. Миграция GR-25 на asv1 и живая T-XM6
+  заблокированы доступа к узлу (проверить питание/панель/whitelist).
 - **Цикл CDN-usability — G4 CLOSED 2026-11-13:**
   [SPEC-20261113-cdn-usability](specs/SPEC-20261113-cdn-usability.md),
   отчёт [TEST-20261113-cdn-mux](reports/TEST-20261113-cdn-mux.md) §9.
