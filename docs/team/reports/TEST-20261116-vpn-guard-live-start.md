@@ -112,18 +112,23 @@ $ vpn guard sync --host root@asv2 --timeout 20
 
 1. **`vpn guard status` не показывает блок `server_verdict`** (только
    `sources` → `[ok] verdict`). Схема `guard.status/1` поля не содержит;
-   sync при этом успешен. Зафиксировать как UX-кандидат v1.1 (не блокер).
+   sync при этом успешен. Зафиксировано как UX-кандидат v1.1
+   ([ARCH-эволюция §6](ARCH-20261116-vpn-guard-evolution.md)): строка
+   `server: verdict=… threat=… (fresh, age=…)` без изменения схемы.
 2. `app_signal=blind` при простое — ожидаемо: app-события Xray/Hy2 пишутся
    при старте/соединениях, окно `--since=-2m` пустое. Проверить при активном
    трафике.
-3. `journal_group=false` (пользователь не в `systemd-journal`): S2
-   (`dnsmasq`, `vpnm-awg-split@*`) остаётся `blind`; для S2 включить группу
-   или `sources.system_journal=true` после выдачи прав. Сейчас AWG виден
-   через sysfs (AC-15 не зависит от S2).
+3. `journal_group=false` был при install; после `usermod -aG systemd-journal`
+   и `sources.system_journal=true` в `guard.json` источник
+   **`[ok] journal:system`**, `dns` больше не `denied` (сигнал `dns`
+   остаётся `blind` до первых DNS-событий). S2 (`dnsmasq`,
+   `vpn-awg-split@*`) теперь наблюдаем без sudo в рантайме.
 4. `linger=false`: guard живёт в user-session; после logout останавливается.
    Для 7-дневного непрерывного наблюдения держать сессию/включить linger
    осознанно.
-5. 7-дневное наблюдение стартовало **2026-11-16 20:52 MSK**; ежедневно
+5. `speed_ring_restored:4` — D-09 работает на живом state: кольцо G-11
+   пережило рестарт guard.
+6. 7-дневное наблюдение стартовало **2026-11-16 20:52 MSK**; ежедневно
    снимать `vpn guard status --json`, `vpn guard findings`, память/CPU юнита.
 
 ## 6. Итог
