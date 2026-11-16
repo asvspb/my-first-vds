@@ -323,3 +323,23 @@ exit "$__zcode_status"
 `relay add-client` — рендер без дефолтного 25 (0 или персональное простое
 20–35с на клиента). Серверная часть SPEC не меняется; всё — клиентские
 и генераторные правки.
+
+## 15. Карта покрытия зондирования после W1-1 (SPEC-20261116-probe-coverage)
+
+Реализация W1-1 меняет наблюдаемую поверхность probe-watch; вердиктная логика
+этого SPEC не меняется. Итоговая карта (живая копия — `probe-watch explain`):
+
+| Сигнал | Покрытие | Механизм |
+|---|---|---|
+| TCP 443 (Reality) | ✅ полное | `syn_valid`/`syn_bare` (база PROBE-BURST) + `probers4` |
+| TCP 8443 (XHTTP), TCP 2053 (CDN origin) | ✅ probers4 + объём | `syn_valid_extra`/`syn_bare_extra` (аддитивно, телеметрия); сканер этих портов → `probers4` → `new_ru_ips` → RU-PROBE-SUSPECT |
+| UDP 443 (QUIC/Hy2), UDP 51826 (AWG) | ❌ слепы в probers4 | только объёмный счётчик `udp_443` + verified-conntrack (HF-1); per-element UDP — вне скоупа v1 (QUIC-клиенты дали бы ложные срабатывания) |
+| IPv6-зонды | ❌ non-goal v1 | — |
+| Серии ТСПУ 2–15 с | ⚠️ телеметрия | быстрый контур `fast_contour_check` (5-мин сэмплер vds-logs-sample): тег FAST-CONTOUR в journal при ≥ 10 уникальных probers/5 мин; АВТО-ДЕЙСТВИЙ НЕТ — lockdown остаётся исключительной прерогативой часового probe-watch (§4.2, §10) |
+
+Инварианты сохранены: JSON-контракт `watch --json` расширен только
+аддитивно (`syn_valid_extra`, `syn_bare_extra`, `extra_ports: [8443, 2053]`)
+— guard sync старой версией клиента работает без ошибок; PROBE-BURST-пороги
+считаются только по 443; `watch --json` без `--record` не мутирует snapshot
+(быстрый контур пишет verified-IP в сайдкар `/var/lib/vds/probe-fast-cache.json`,
+часовой watch вливает их при record).

@@ -314,6 +314,13 @@ loglevel — логи демона слепы к пробам. Единстве�
 (`syn_valid`) от новых RU-IP.
 **Проверка:** `vds gateway probe-watch` (дельты за час);
 `systemctl status vds-probe-watch.timer` → `active (waiting)`.
+W1-1 (SPEC-20261116-probe-coverage): `probers4` и аддитивные
+`syn_valid_extra`/`syn_bare_extra` покрывают и 8443 (XHTTP) / 2053 (CDN
+origin) — сканер этих портов виден в new_ru_ips; UDP-порты в probers4
+слепы (только объёмный `udp_443`). Быстрый контур: тег
+`[warning] [probe] FAST-CONTOUR: N probers/5min` в
+`journalctl -u vds-logs-sample` при всплеске (≥ 10 уникальных IP/5 мин) —
+телеметрия без авто-действий.
 **Откат:** рассинхрон снапшота со счётчиками ядра → переинициализация базовой
 линии: `vds gateway probe-watch install --apply` (переустанавливает таблицу —
 счётчики и снапшот с нуля; идемпотентно).

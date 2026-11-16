@@ -103,7 +103,7 @@ CDN-транспорт — отдельный origin-инблэнд на TCP 205
 | Транспорт | Xray (Reality/XHTTP/CDN), Hysteria2 (+obfs/hop), AWG | ✅ работает на asv1 |
 | Мультиплексирование | Xray fallbacks (SNI), отдельные порты | ✅ |
 | Оркестрация | `src/gateway/` (state, links, blockcheck, init) | ✅; `gateway init` реализован (GR-16), hub-подписки — нет (W5) |
-| Наблюдаемость | `src/sysinfo/`, `status`-команды, healthcheck-таймер, probe-watch | ✅ health (W1: `vds-gateway-health.timer`) + probe-watch v3; метрики/alerts — нет (W5) |
+| Наблюдаемость | `src/sysinfo/`, `status`-команды, healthcheck-таймер, probe-watch | ✅ health (W1: `vds-gateway-health.timer`) + probe-watch v3 (W1-1 SPEC-probe-coverage: probers4 на tcp/{443,8443,2053} + 5-мин FAST-CONTOUR-тег в сэмплере); метрики/alerts — нет (W5) |
 | Дистрибуция | share-links, `profile pull` (ssh) | ⚠️ QR/подписки — вручную (W3) |
 | Клиент | `vpnm` схемы proxy/cdn/private/awg | ⚠️ failover вручную (W5) |
 

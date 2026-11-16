@@ -1,6 +1,7 @@
 # SPEC-20261116-probe-coverage — W1-1: probe-watch на всех боевых TCP-портах + быстрый контур детекта серий ТСПУ
 
 > **Статус:** draft → G1/G2 (внешний архитектор Gemini Argon, через пуш).
+> W1-1 реализован (2026-11-16, WP W1-1; приёмка-живое — §5.2/5.3 владельцем).
 > **Источник:** [ARCH-20261116-tspu-blindspots](../reports/ARCH-20261116-tspu-blindspots.md) §3
 > (слепота probe-watch ко всему кроме 443; реакция 1–2 ч против серий ТСПУ 2–15 с);
 > продолжение [SPEC-20261116-surface-hardening](SPEC-20261116-surface-hardening.md)

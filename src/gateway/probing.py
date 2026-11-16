@@ -2,13 +2,16 @@
 + серверная реакция SPEC-20261116-probe-response (threat-level, auto-lockdown).
 
 Ранний сигнал перед TSPU-блокировкой: TSPU перед блоком обычно зондирует
-порт протокола. `vds gateway probe-watch` измеряет tcp/443-зондирование без
+порт протокола. `vds gateway probe-watch` измеряет зондирование боевых
+TCP-портов {443, 8443, 2053} (W1-1, SPEC-20261116-probe-coverage) без
 изменения конфигов xray/hysteria2 (loglevel/access-log — вне WP):
 
 - nft-таблица `inet vds_probe` (install --apply): счётчики syn_bare (все SYNs
   на 443) и syn_valid (SYNs с пакетом длиннее минимальных 40 б — клиентский
   SYN всегда несёт TCP-опции; голый SYN-сканер (masscan/zmap) — ровно 40),
-  set probers4 — src-IP зондирований с per-element counter и timeout 1h;
+  аддитивные syn_valid_extra/syn_bare_extra (суммарно 8443+2053, W1-1),
+  set probers4 — src-IP зондирований (tcp {443, 8443, 2053}) с per-element
+  counter и timeout 1h;
 - `watch` (read-only): дельта счётчиков против снапшота
   /var/lib/vds/probe-watch.json (атомарная запись 0600, FileLock) +
   journal-сигнатуры (см. JOURNAL_PATTERNS — только реальные сигнатуры,
@@ -20,6 +23,12 @@
   через /proc/net/nf_conntrack по [ASSURED]+bytes) исключаются из new_ru_ips
   вместе с AWG/allow-ips; кэш verified-IP в снапшоте с TTL 24 ч (аффинность
   между тиками — клиент закрыл ноутбук до тика таймера);
+- быстрый контур (W1-1, SPEC-20261116-probe-coverage §2): fast_contour_check
+  — хук 5-мин сэмплера vds-logs-sample; дельта probers4 за окно сэмпла,
+  при >= FAST_CONTOUR_PROBERS уникальных IP — только journal-тег
+  FAST-CONTOUR (авто-действий НЕТ); verified-IP пишутся в сайдкар-кэш
+  /var/lib/vds/probe-fast-cache.json (0600), часовой watch вливает его в
+  own_ips_cache при record (короткие сессии между тиками не теряются);
 - RU-классификация IP: если есть агрегат /etc/vds-relay/ru-cidrs.txt
   (пишет relay-cidr или `probe-watch ru-cidr install`), помечает «[RU]»;
   иначе geo: unknown — честно;
@@ -78,6 +87,12 @@ XRAY_UNIT = "vds-xray.service"
 HYSTERIA2_UNIT = "vds-hysteria2.service"
 
 WATCH_PORT = 443
+# SPEC-20261116-probe-coverage W1-1: probers4 и extra-счётчики покрывают
+# ВСЕ боевые TCP-порты (Reality 443 + XHTTP 8443 + CDN origin 2053).
+# PROBE-BURST-калибровка (syn_valid/syn_bare) остаётся на 443; 8443/2053 —
+# аддитивные счётчики syn_valid_extra/syn_bare_extra + тот же set probers4.
+EXTRA_TCP_PORTS: tuple[int, ...] = (8443, 2053)
+PROBER_TCP_PORTS: tuple[int, ...] = (WATCH_PORT, *EXTRA_TCP_PORTS)
 # Минимальный IPv4 SYN: 20 (IP) + 20 (TCP) = 40 б. Клиентский SYN всегда
 # длиннее (TCP-опции MSS/SACK/timestamps; TLS-in-SYN у проб — ещё больше).
 MIN_CLIENT_SYN_LEN = 40
@@ -100,6 +115,16 @@ VERIFIED_UDP_PORTS: tuple[int, ...] = (443, 51826)  # Hy2 443/udp + hop
 CONNTRACK_BYTES_MIN = 32768     # bytes_orig+bytes_reply при nf_conntrack_acct=1
 NF_CONNTRACK_PROC = Path("/proc/net/nf_conntrack")
 OWN_IPS_CACHE_TTL_H = 24        # аффинность verified-IP между тиками watch
+
+# --- быстрый контур детекта серий ТСПУ (SPEC-20261116-probe-coverage §2) ---
+# Хук в 5-мин сэмплере vds-logs-sample (ADR-012), НЕ новый демон и НЕ новая
+# реакция: только телеметрия-тег в journal, авто-lockdown остаётся
+# прерогативой часового probe-watch. Кэш сайдкара — ОТДЕЛЬНЫЙ файл; снапшот
+# probe-watch.json быстрый контур не пишет никогда (инвариант ADR-014:
+# watch --json без --record не мутирует snapshot).
+FAST_CONTOUR_PROBERS = 10       # уникальных probers/5 мин для тега (потом конфиг)
+FAST_CACHE_PATH = Path("/var/lib/vds/probe-fast-cache.json")
+FAST_LOCK_FILE = "/var/run/vds-probe-fast.lock"
 
 # --- threat-level машина (SPEC-20261116-probe-response §2, §9.A, §11) ---
 THREAT_QUIET = "quiet"
@@ -179,18 +204,28 @@ def render_nft(per_element_counter: bool = True) -> str:
     сбрасываются, что для монитора нештатно только при переустановке).
     """
     set_counter = "        counter\n" if per_element_counter else ""
+    # W1-1: один named set на все боевые TCP-порты; фильтр ip length > 40 —
+    # в probers4 идут только «клиентоподобные» SYN (с TCP-опциями/payload),
+    # голый masscan-шум в set не попадает (объём шума виден по счётчикам).
+    prober_ports = ", ".join(str(p) for p in PROBER_TCP_PORTS)
     prober_rule = (
-        f"tcp dport {WATCH_PORT} tcp flags & (fin|syn|rst|ack) == syn "
-        f"update @{PROBERS_SET} {{ ip saddr }}"
+        f"tcp dport {{ {prober_ports} }} tcp flags & (fin|syn|rst|ack) == syn "
+        f"ip length > {MIN_CLIENT_SYN_LEN} update @{PROBERS_SET} {{ ip saddr }}"
     )
+    # Правила для 443 — БАЙТ-В-БАЙТ прежние (калибровка PROBE-BURST и
+    # история порогов не ломаются); extra-счётчики — по тому же принципу
+    # (syn_bare_extra, как и syn_bare, БЕЗ ip-length-фильтра: bare+valid).
+    extra_ports = ", ".join(str(p) for p in EXTRA_TCP_PORTS)
     return (
         "#!/usr/sbin/nft -f\n"
         "# Managed by `vds gateway probe-watch install` — DO NOT EDIT.\n"
-        "# Монитор активного зондирования tcp/443 + udp/443 (IPv4, non-goal v6).\n"
+        "# Монитор активного зондирования tcp/{443,8443,2053} + udp/443 (IPv4, non-goal v6).\n"
         "table inet " + NFT_TABLE + " {\n"
         f"    counter syn_bare {{ }}\n"
         f"    counter syn_valid {{ }}\n"
         f"    counter udp_443 {{ }}\n"
+        f"    counter syn_valid_extra {{ }}\n"
+        f"    counter syn_bare_extra {{ }}\n"
         f"    set {PROBERS_SET} {{\n"
         "        type ipv4_addr\n"
         "        flags dynamic, timeout\n"
@@ -205,6 +240,10 @@ def render_nft(per_element_counter: bool = True) -> str:
         f"ip length > {MIN_CLIENT_SYN_LEN} counter name \"syn_valid\"\n"
         f"        tcp dport {WATCH_PORT} tcp flags & (fin|syn|rst|ack) == syn "
         f"counter name \"syn_bare\"\n"
+        f"        tcp dport {{ {extra_ports} }} tcp flags & (fin|syn|rst|ack) == syn "
+        f"ip length > {MIN_CLIENT_SYN_LEN} counter name \"syn_valid_extra\"\n"
+        f"        tcp dport {{ {extra_ports} }} tcp flags & (fin|syn|rst|ack) == syn "
+        f"counter name \"syn_bare_extra\"\n"
         f"        udp dport {WATCH_PORT} counter name \"udp_443\"\n"
         "    }\n"
         "}\n"
@@ -244,6 +283,9 @@ class NftState:
     syn_bare: int = 0
     syn_valid: int = 0
     udp_443: int = 0
+    # W1-1 (аддитивно): 8443+2053 суммарно; в старых таблицах (до W1-1) — 0.
+    syn_valid_extra: int = 0
+    syn_bare_extra: int = 0
     probers: dict[str, int] = field(default_factory=dict)  # ip -> packets
     per_element_counters: bool = False
 
@@ -265,6 +307,10 @@ def parse_nft_table(text: str) -> NftState:
             state.syn_valid = packets
         elif name == "udp_443":
             state.udp_443 = packets
+        elif name == "syn_valid_extra":
+            state.syn_valid_extra = packets
+        elif name == "syn_bare_extra":
+            state.syn_bare_extra = packets
     block = _ELEMENTS_BLOCK_RE.search(text)
     if block:
         for item in _ELEMENT_RE.finditer(block.group(1)):
@@ -303,6 +349,8 @@ def _empty_snapshot() -> dict[str, object]:
         "syn_bare": 0,
         "syn_valid": 0,
         "udp_443": 0,
+        "syn_valid_extra": 0,
+        "syn_bare_extra": 0,
         "probers": {},
         "threat": {},
         "config": {},
@@ -337,6 +385,8 @@ def load_snapshot(path: Path = SNAPSHOT_PATH) -> dict[str, object]:
         "syn_bare": int(data.get("syn_bare", 0) or 0),
         "syn_valid": int(data.get("syn_valid", 0) or 0),
         "udp_443": int(data.get("udp_443", 0) or 0),
+        "syn_valid_extra": int(data.get("syn_valid_extra", 0) or 0),
+        "syn_bare_extra": int(data.get("syn_bare_extra", 0) or 0),
         "probers": {str(k): int(v or 0) for k, v in probers.items()},
         "threat": threat if isinstance(threat, dict) else {},
         "config": config if isinstance(config, dict) else {},
@@ -379,6 +429,8 @@ def save_snapshot(
         "syn_bare": current.syn_bare,
         "syn_valid": current.syn_valid,
         "udp_443": current.udp_443,
+        "syn_valid_extra": current.syn_valid_extra,
+        "syn_bare_extra": current.syn_bare_extra,
         "probers": current.probers,
     }
     if extra:
@@ -388,7 +440,11 @@ def save_snapshot(
 
 @dataclass
 class Delta:
-    """Дельта счётчиков за окно (текущее минус снапшот)."""
+    """Дельта счётчиков за окно (текущее минус снапшот).
+
+    syn_valid_extra/syn_bare_extra — аддитивная телеметрия 8443+2053
+    (W1-1): в вердиктах НЕ участвуют (PROBE-BURST-калибровка — только 443).
+    """
 
     syn_bare: int
     syn_valid: int
@@ -396,6 +452,8 @@ class Delta:
     bare_no_payload: int
     ratio_no_payload: Optional[float]
     unique_probers: int
+    syn_valid_extra: int = 0
+    syn_bare_extra: int = 0
     top: list[tuple[str, int]] = field(default_factory=list)  # (ip, delta)
 
 
@@ -426,6 +484,12 @@ def compute_delta(current: NftState, snapshot: dict[str, object]) -> Delta:
     delta_bare = _win(current.syn_bare, int(snapshot.get("syn_bare", 0)))
     delta_valid = _win(current.syn_valid, int(snapshot.get("syn_valid", 0)))
     delta_udp = _win(current.udp_443, int(snapshot.get("udp_443", 0)))
+    delta_valid_extra = _win(
+        current.syn_valid_extra, int(snapshot.get("syn_valid_extra", 0))
+    )
+    delta_bare_extra = _win(
+        current.syn_bare_extra, int(snapshot.get("syn_bare_extra", 0))
+    )
     bare_no_payload = max(0, delta_bare - delta_valid)
     ratio = bare_no_payload / delta_bare if delta_bare > 0 else None
 
@@ -451,6 +515,8 @@ def compute_delta(current: NftState, snapshot: dict[str, object]) -> Delta:
         bare_no_payload=bare_no_payload,
         ratio_no_payload=ratio,
         unique_probers=unique,
+        syn_valid_extra=delta_valid_extra,
+        syn_bare_extra=delta_bare_extra,
         top=top,
     )
 
@@ -956,6 +1022,147 @@ def merge_own_ips_cache(
     return [[ip, merged[ip]] for ip in sorted(merged)]
 
 
+def merge_cache_entries(
+    a: list[list[str]], b: list[list[str]]
+) -> list[list[str]]:
+    """Объединение двух кэшей [[ip, last_seen_iso], ...] по ip с max(last_seen).
+
+    ISO-метки лексикографически сортируемы (timespec=seconds) — сравнение
+    строк корректно. Битые записи отфильтрованы ранее (own_ips_cache_entries);
+    здесь на всякий случай пропускаются не-пары. Детерминизм — сортировка IP.
+    """
+    merged: dict[str, str] = {}
+    for ip, ts in list(a) + list(b):
+        if ip not in merged or ts > merged[ip]:
+            merged[ip] = ts
+    return [[ip, merged[ip]] for ip in sorted(merged)]
+
+
+# ---------------------------------------------------------------------------
+# Быстрый контур детекта серий ТСПУ (SPEC-20261116-probe-coverage §2)
+# ---------------------------------------------------------------------------
+
+
+def read_fast_cache(path: Optional[Path] = None) -> dict[str, object]:
+    """Сайдкар-кэш сэмплера (read-only); отсутствует/бит — пустой dict."""
+    path = path or FAST_CACHE_PATH
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def fast_cache_verified_entries(
+    path: Optional[Path] = None,
+) -> list[list[str]]:
+    """verified-записи [[ip, last_seen], ...] из сайдкар-кэша сэмплера."""
+    return own_ips_cache_entries(read_fast_cache(path))
+
+
+@dataclass
+class FastContourResult:
+    """Итог одного 5-мин прогона быстрого контура.
+
+    skipped=True — nft-таблицы нет (probe-watch не установлен) — тихий скип
+    без записи кэша и тега. alert=True — всплеск >= FAST_CONTOUR_PROBERS
+    уникальных probers за окно сэмпла (тег уже напечатан в journal/stdout).
+    """
+
+    skipped: bool = False
+    probers_window: int = 0
+    alert: bool = False
+    cache_written: bool = False
+
+
+def fast_contour_check(
+    run: RunFn = run_list,
+    cache_path: Optional[Path] = None,
+    lock_file: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> FastContourResult:
+    """Один тик быстрого контура (вызывается сэмплером vds-logs-sample, 5 мин).
+
+    Лёгкое nft-чтение (list_nft_table) + verified_session_ips с тем же
+    инвариантом HF-1 (TCP ss по 443/8443/2053 + UDP conntrack). Пишет ТОЛЬКО
+    сайдкар-кэш сэмплера {FAST_CACHE_PATH} (0600, атомарно, FileLock): базу
+    per-IP счётчиков probers4 для 5-мин дельты и verified-IP (ip, last_seen,
+    TTL 24 ч) — их подхватывает часовой cmd_watch (объединение при record).
+    Снапшот probe-watch.json НЕ пишется никогда (инвариант ADR-014).
+
+    АВТО-ДЕЙСТВИЙ НЕТ: при >= FAST_CONTOUR_PROBERS уникальных probers за
+    окно — только тег `[warning] [probe] FAST-CONTOUR: N probers/5min` в
+    journal/stdout сэмплера (для `vds logs`); lockdown — исключительная
+    прерогатива часового probe-watch с его гейтами.
+
+    Дельта probers: per-element счётчики — IP с положительной дельтой против
+    кэша; фолбэк (счётчиков нет) — новые IP в set (timeout 1h ≈ окно часа,
+    консервативная оценка). Ошибки чтения/записи — тихая деградация (тег в
+    console), не исключение: сбой сэмплера не должен ронять сбор телеметрии.
+    """
+    from src.core.lock import FileLock, LockError
+
+    cache_path = cache_path or FAST_CACHE_PATH
+    lock_file = lock_file or FAST_LOCK_FILE
+    current = list_nft_table(run)
+    if current is None:
+        return FastContourResult(skipped=True)  # нет таблицы — тихий скип
+
+    stamp = now or datetime.now()
+    verified_tcp = read_verified_session_ips(run=run)
+    verified_udp, _ct = read_conntrack_verified()
+    verified = verified_tcp | verified_udp
+
+    try:
+        with FileLock(lock_file):
+            cache = read_fast_cache(cache_path)
+            raw_prev = cache.get("probers")
+            prev_probers: dict[str, int] = (
+                {str(k): int(v) for k, v in dict(raw_prev).items()}
+                if isinstance(raw_prev, dict)
+                else {}
+            )
+            if current.per_element_counters:
+                window_ips = [
+                    ip
+                    for ip, packets in current.probers.items()
+                    if (packets if packets < prev_probers.get(ip, 0)
+                        else packets - prev_probers.get(ip, 0)) > 0
+                ]
+            else:
+                # Фолбэк: счётчиков на IP нет — «новые в окне» = новые элементы
+                # set (timeout 1h) против прошлой базы кэша.
+                window_ips = [ip for ip in current.probers if ip not in prev_probers]
+            entries = merge_own_ips_cache(
+                own_ips_cache_entries(cache), verified, stamp
+            )
+            payload: dict[str, object] = {
+                "version": 1,
+                "ts": stamp.isoformat(timespec="seconds"),
+                "probers": dict(current.probers),
+                "own_ips_cache": entries,
+            }
+            cache_written = write_snapshot_payload(payload, cache_path)
+    except LockError:
+        console.print(
+            "[warning][probe] FAST-CONTOUR: параллельный прогон — тик пропущен.[/warning]"
+        )
+        return FastContourResult(probers_window=0, alert=False, cache_written=False)
+
+    result = FastContourResult(
+        probers_window=len(window_ips),
+        alert=len(window_ips) >= FAST_CONTOUR_PROBERS,
+        cache_written=cache_written,
+    )
+    if result.alert:
+        console.print(
+            f"[warning][probe] FAST-CONTOUR: {result.probers_window} "
+            f"probers/5min (порог {FAST_CONTOUR_PROBERS}) — телеметрия, "
+            "авто-действий нет (lockdown — только часовой probe-watch).[/warning]"
+        )
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Journal-сигнатуры
 # ---------------------------------------------------------------------------
@@ -1133,6 +1340,12 @@ class WatchReport:
             "syn_bare": self.delta.syn_bare,
             "syn_valid": self.delta.syn_valid,
             "udp_443": self.delta.udp_443,
+            # W1-1 (аддитивно, SPEC-20261116-probe-coverage §1.3): телеметрия
+            # 8443+2053; старые ключи и их семантика НЕ меняются — guard sync
+            # старой версией клиента работает без ошибок.
+            "syn_valid_extra": self.delta.syn_valid_extra,
+            "syn_bare_extra": self.delta.syn_bare_extra,
+            "extra_ports": list(EXTRA_TCP_PORTS),
             "bare_no_payload": self.delta.bare_no_payload,
             "ratio_no_payload": self.delta.ratio_no_payload,
             "unique_probers": self.delta.unique_probers,
@@ -1506,6 +1719,37 @@ def build_explain(
                     "не поддерживается этим ядром — unique_probers по составу set (≈1ч)",
                 )
             )
+        # W1-1 (SPEC-20261116-probe-coverage §1.5): честная карта портов.
+        rows.append(
+            ExplainRow(
+                "охват TCP-портов (probers4 + счётчики)",
+                "ok",
+                f"probers4 собирает SYN (ip length > {MIN_CLIENT_SYN_LEN}) с "
+                f"tcp/{{443, 8443, 2053}} одним set — сканер XHTTP/CDN виден в "
+                "new_ru_ips → RU-PROBE-SUSPECT; syn_valid/syn_bare (база "
+                "PROBE-BURST) — по-прежнему ТОЛЬКО 443; 8443+2053 — аддитивные "
+                "syn_valid_extra/syn_bare_extra (телеметрия watch --json)",
+            )
+        )
+        rows.append(
+            ExplainRow(
+                "UDP-порты (443 QUIC / 51826 AWG)",
+                "missing",
+                "слепы на уровне probers4 (QUIC-клиенты дали бы ложные срабатывания): "
+                "UDP виден только объёмным счётчиком udp_443 и verified-conntrack; "
+                "per-element UDP-счётчики — вне скоупа v1",
+            )
+        )
+        rows.append(
+            ExplainRow(
+                "быстрый контур (5-мин, vds-logs-sample)",
+                "ok",
+                f"fast_contour_check: >= {FAST_CONTOUR_PROBERS} уникальных probers/5 мин "
+                f"→ тег FAST-CONTOUR в journal; verified-IP пишутся в сайдкар-кэш "
+                f"{FAST_CACHE_PATH} (TTL 24 ч), часовой watch подхватывает при record; "
+                "АВТО-ДЕЙСТВИЙ НЕТ (lockdown — только часовой probe-watch)",
+            )
+        )
     else:
         rows.append(
             ExplainRow(
@@ -1649,7 +1893,8 @@ def build_explain(
         ExplainRow(
             "IPv6-пробы",
             "missing",
-            "non-goal v1: наблюдение только tcp/443 IPv4 (v6-зондирование не меряется)",
+            "non-goal v1: наблюдение только tcp/{443, 8443, 2053} IPv4 "
+            "(v6-зондирование не меряется)",
         )
     )
 
@@ -1737,7 +1982,7 @@ def cmd_install(apply: bool = False) -> int:
     if not apply:
         console.print("[info][probe] DRY-RUN план install:[/info]")
         console.print(f"[info][probe]   1. nft-файл {PROBE_NFT_FILE} (0644) + `nft -f` (таблица inet {NFT_TABLE})[/info]")
-        console.print(f"[info][probe]   2. счётчики syn_bare/syn_valid/udp_443, set {PROBERS_SET} (flags dynamic,timeout, size 65535, timeout {SET_TIMEOUT}, per-element counter; при отказе ядра — fallback без счётчиков на IP)[/info]")
+        console.print(f"[info][probe]   2. счётчики syn_bare/syn_valid/udp_443 + syn_valid_extra/syn_bare_extra (8443+2053), set {PROBERS_SET} на tcp {{443, 8443, 2053}} (flags dynamic,timeout, size 65535, timeout {SET_TIMEOUT}, per-element counter; при отказе ядра — fallback без счётчиков на IP)[/info]")
         console.print(f"[info][probe]   3. юниты {PROBE_WATCH_UNIT} + {PROBE_WATCH_TIMER} из systemd-шаблонов (часовой тик watch)[/info]")
         console.print("[info][probe] Запустите с --apply для исполнения.[/info]")
         return 0
@@ -1882,6 +2127,7 @@ def cmd_watch(
     run: RunFn = run_list,
     state_path: Optional[str] = None,
     now: Optional[datetime] = None,
+    fast_cache_path: Optional[Path] = None,
 ) -> int:
     """watch: отчёт за окно; read-only по умолчанию.
 
@@ -1893,6 +2139,13 @@ def cmd_watch(
     --record ничего не пишет и реакций не триггерит: свежие verified-IP
     объединяются с кэшем ТОЛЬКО в памяти для текущего отчёта (стык с
     vpn guard ADR-014/M1: файл не мутируется).
+
+    W1-1 (SPEC-20261116-probe-coverage §2): own_ips_cache читается ИЗ
+    снапшота, И из сайдкар-кэша сэмплера (fast_cache_path; verified-IP с
+    5-мин тиков — короткие сессии между часовыми тиками не теряются),
+    объединение по ip с max(last_seen). При record=True объединённый кэш
+    вливается в snapshot["own_ips_cache"] (с чисткой TTL 24 ч); при
+    record=False — только в памяти для отчёта, оба файла не мутируются.
     """
     snapshot_path = snapshot_path or SNAPSHOT_PATH
     from src.core.lock import FileLock, LockError
@@ -1904,12 +2157,18 @@ def cmd_watch(
     verified_tcp = read_verified_session_ips(run=run)
     verified_udp, ct_available = read_conntrack_verified()
     verified = verified_tcp | verified_udp
-    cache_entries = own_ips_cache_entries(snapshot)
+    snapshot_cache = own_ips_cache_entries(snapshot)
+    # W1-1: сайдкар-кэш сэмплера (5-мин verified) поверх кэша снапшота.
+    cache_entries = merge_cache_entries(
+        snapshot_cache, fast_cache_verified_entries(fast_cache_path)
+    )
     if record:
         # Тик (root): свежие endpoint-IP пиров; сбой awg → кэш снапшота (§11)
         endpoints = read_awg_endpoints(run)
         awg_ips = endpoints if endpoints else cached_own_ips(snapshot)
         stamp = now_fn()
+        # merge чистит TTL (протухшие из обоих источников удаляются) и
+        # обновляет last_seen свежих verified; fast-кэш вливается сюда.
         new_cache = merge_own_ips_cache(cache_entries, verified, stamp)
         own_ips = sorted(
             {*awg_ips, *active_cache_ips(new_cache, stamp)}  # verified уже в кэше
@@ -1920,7 +2179,8 @@ def cmd_watch(
         }
     else:
         awg_ips = cached_own_ips(snapshot)
-        # В памяти только: свежие verified не пишутся на диск (AC-16/M1-стык)
+        # В памяти только: свежие verified и fast-кэш не пишутся на диск
+        # (AC-16/M1-стык; инвариант ADR-014 — snapshot не мутируется).
         own_ips = sorted(
             {
                 *awg_ips,
@@ -1929,7 +2189,7 @@ def cmd_watch(
             }
         )
         own_cache = dict(snapshot.get("own_ips") or {})
-        new_cache = cache_entries
+        new_cache = snapshot_cache  # без record снапшот не трогаем
     sources = [
         f"tcp/ss: {len(verified_tcp)} IP",
         (

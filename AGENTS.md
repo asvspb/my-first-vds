@@ -44,7 +44,7 @@ src/
 ├── amneziawg/           # AmneziaWG (UDP 51825): install, clients, status, remove
 ├── relay/               # RU-relay (ADR-007): init, status, clients, cidr (AWG udp/443 + Reality tcp/443 + policy-routing до asv1)
 ├── acme/                # ACME/LE: issue (HTTP-01) + deploy-hook для Hysteria2
-├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание), probing (probe-watch: телеметрия+threat-level+auto-lockdown+verified_session_ips anti Self-DoS, SPEC probe-response), probing_rucidr (RU-CIDR)
+├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание), probing (probe-watch: телеметрия+threat-level+auto-lockdown+verified_session_ips anti Self-DoS, SPEC probe-response; probers4 на tcp/{443,8443,2053} + быстрый контур fast_contour_check в 5-мин сэмплере vds-logs-sample, SPEC probe-coverage W1-1), probing_rucidr (RU-CIDR)
 ├── sysinfo/             # dashboard
 ├── logs/                # log-forensics (ADR-012): install, collect (sample), report/analyze, capture
 └── system/              # setup, cleanup, ufw (harden/ssh-port — SPEC-20261116; CDN-порт — CF-CIDR-набор)

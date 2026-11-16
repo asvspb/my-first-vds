@@ -379,6 +379,20 @@ def _probe_verdict_readonly(
     return probe, cov
 
 
+def _fast_contour_hook(run: RunFn) -> None:
+    """Быстрый контур детекта серий ТСПУ (SPEC-20261116-probe-coverage §2).
+
+    Ленивый импорт (logs не тянет gateway на старте); nft-таблицы нет —
+    fast_contour_check возвращает тихий скип (probe-watch не установлен —
+    это норма, не ошибка coverage). Пишет только сайдкар-кэш сэмплера
+    /var/lib/vds/probe-fast-cache.json; снапшот probe-watch.json не
+    мутируется никогда (граница M1/ADR-014 сохранена).
+    """
+    from src.gateway.probing import fast_contour_check
+
+    fast_contour_check(run=run)
+
+
 def _lockdown_active() -> bool:
     """Активен ли lock-443 (§5.4: лок ослепляет syn_valid). Read-only."""
     try:
@@ -427,6 +441,10 @@ def collect_event(
 
     probe, cov = _probe_verdict_readonly(nft_state, snapshot_path)
     coverage["probe"] = cov
+
+    # W1-1: быстрый контур (5-мин дельта probers4 + verified-IP в сайдкар) —
+    # после read-only вердикта, отдельным хуком (пишет только свой кэш).
+    _fast_contour_hook(run)
 
     lockdown = {"active": _lockdown_active()}
 

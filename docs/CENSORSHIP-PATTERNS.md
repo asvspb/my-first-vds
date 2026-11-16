@@ -131,8 +131,14 @@ xray/hysteria2 (access-log/loglevel — отдельное решение вла
   `syn_bare` — все SYNs на tcp/443; `syn_valid` — SYNs, чей IP-пакет длиннее
   минимальных 40 б (клиентский SYN всегда несёт TCP-опции MSS/SACK; голый
   SYN-сканер masscan/zmap — ровно 40). Отношение bare-no-payload к bare —
-  доля «глупых» зондирований. Set `probers4` (timeout 1h, per-element
-  counter) — уникальные пробующие IP со счётчиками; при ядре без counter в
+  доля «глупых» зондирований. W1-1 (SPEC-20261116-probe-coverage): set
+  `probers4` (timeout 1h, per-element counter) собирает SYN с
+  `tcp/{443, 8443, 2053}` одним правилом (`ip length > 40`) — сканер
+  XHTTP/CDN-origin виден в probers4 → new_ru_ips → RU-PROBE-SUSPECT;
+  аддитивные счётчики `syn_valid_extra`/`syn_bare_extra` (суммарно
+  8443+2053, в `watch --json` как `syn_*_extra` + `extra_ports`) —
+  телеметрия; калибровка PROBE-BURST остаётся только по 443. UDP в probers4
+  НЕ входит (QUIC-клиенты → ложные срабатывания). При ядре без counter в
   set-элементе — fallback без счётчиков на IP (explain честно покажет).
 - **`watch [--since 1h] [--threshold 50] [--json]`** (read-only, без
   `--record` ничего не пишет; `--record` — только юнит таймера
@@ -145,6 +151,18 @@ xray/hysteria2 (access-log/loglevel — отдельное решение вла
 - **Счётчик `udp_443`** — объём QUIC к Hysteria2/обфс: QUIC-Initial зонды
   различить от легитимного UDP на nft-уровне нельзя — счётчик даёт объём,
   аномалия = объём/окно.
+- **Быстрый контур детекта серий ТСПУ** (W1-1): `fast_contour_check()` —
+  хук 5-мин сэмплера `vds-logs-sample` (ADR-012; ленивый импорт, нет
+  nft-таблицы — тихий скип). Считает дельту probers4 за окно сэмпла; при
+  ≥ 10 уникальных probers/5 мин (`FAST_CONTOUR_PROBERS`) — только
+  journal-тег `[warning] [probe] FAST-CONTOUR: N probers/5min` для
+  `vds logs`; АВТО-ДЕЙСТВИЙ НЕТ (lockdown — исключительная прерогатива
+  часового probe-watch с его гейтами). Verified-IP (тот же инвариант
+  HF-1: ss 443/8443/2053 + conntrack UDP) пишет в сайдкар-кэш
+  `/var/lib/vds/probe-fast-cache.json` (0600, TTL 24 ч) — часовой watch
+  вливает его в own_ips_cache при `--record` (объединение по ip с
+  max(last_seen)); короткие сессии между часовыми тиками не теряются,
+  а инвариант «watch без --record не мутирует snapshot» сохранён.
 - **Вердикты**: `RU-PROBE-SUSPECT` (приоритет) — новые IP из RU-зоны (не
   из снапшота, не свой IP сервера) с активностью за окно, ≥ 2/окно, при
   delta.syn_valid > 0 (окно из одних masscan-SYN гасит вердикт; probers4
@@ -156,7 +174,9 @@ xray/hysteria2 (access-log/loglevel — отдельное решение вла
   `PROBE-BURST`: unique probers ≥ threshold **или** доля bare-SYN без
   payload ≥ 90% при объёме > 100; иначе `quiet`.
 - **`explain`** (=`probe-watch --explain`): честная карта покрытия — что
-  меряется, что слепо (access-log выключен; IPv6-пробы — non-goal v1).
+  меряется, что слепо (TCP {443, 8443, 2053} покрыты probers4; UDP-порты
+  слепы на уровне probers4 — только объёмный udp_443; access-log выключен;
+  IPv6-пробы — non-goal v1).
   Персистентность после ребута: ExecStartPre юнита сам применяет
   nft-файл, если таблицы нет.
 - **`remove --apply`** — демонтаж таблицы и юнитов (идемпотентно).
@@ -182,7 +202,10 @@ xray/hysteria2 (access-log/loglevel — отдельное решение вла
   авто-режим — opt-in (`config --auto-lockdown on`). RU-CIDR на
   exit-серверах без релея: `probe-watch ru-cidr install --apply`.
   Контракт монитор-поллинга: `watch --json` → `threat_level`,
-  `threat_reason`, `ru_syn_new`, `lockdown{active,since,ttl_until,allow_from}`.
+  `threat_reason`, `ru_syn_new`, `lockdown{active,since,ttl_until,allow_from}`
+  (старые ключи неизменны; W1-1 добавляет аддитивно
+  `syn_valid_extra`/`syn_bare_extra`/`extra_ports` — guard sync старой
+  версией клиента работает без ошибок).
   Полностью — docs/team/specs/SPEC-20261116-probe-response.md и
   SERVER-BASELINE §5.12.
 

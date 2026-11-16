@@ -47,7 +47,7 @@ vds/
 │   ├── vds-amneziawg-nat.service.tpl    # NAT/forwarding AWG (oneshot при загрузке)
 │   ├── vds-gateway-health.service.tpl   # healthcheck gateway (W1 GR-18)
 │   ├── vds-gateway-health.timer.tpl
-│   ├── vds-probe-watch.service.tpl      # монитор зондирования tcp/443 (И33)
+│   ├── vds-probe-watch.service.tpl      # монитор зондирования tcp/{443,8443,2053} (И33+W1-1)
 │   ├── vds-probe-watch.timer.tpl
 │   ├── vds-probe-rucidr.service.tpl     # обновление RU-CIDR-агрегата
 │   ├── vds-probe-rucidr.timer.tpl
@@ -168,10 +168,10 @@ vds gateway links --include-obfs    # + obfs-ссылки hysteria2 (`<name>@obf
 vds gateway blockcheck              # «Блок IP» vs «деградация» vs «локальная проблема»
 vds gateway healthcheck             # Юниты/порты/сертификат (<14 дн. warning, <7 error)
 vds gateway healthcheck --install-timer  # Таймер vds-gateway-health (каждые 5 мин)
-vds gateway probe-watch install --apply  # Монитор зондирования tcp/443 (nft + таймер, dry-run по умолчанию)
+vds gateway probe-watch install --apply  # Монитор зондирования tcp/{443,8443,2053} (nft + таймер, dry-run по умолчанию)
 vds gateway probe-watch watch            # Дельта счётчиков + вердикт + threat-level (read-only)
-vds gateway probe-watch watch --json     # + контракт: threat_level/threat_reason/lockdown/ru_syn_new
-vds gateway probe-watch explain          # Карта покрытия: что меряется, что слепо (access-log/IPv6)
+vds gateway probe-watch watch --json     # + контракт: threat_level/threat_reason/lockdown/ru_syn_new (+ аддитивно syn_*_extra, extra_ports)
+vds gateway probe-watch explain          # Карта покрытия: что меряется, что слепо (access-log/UDP-порты/IPv6)
 vds gateway probe-watch ru-cidr install --apply  # RU-CIDR без релея: включает RU-PROBE-SUSPECT (+таймер)
 vds gateway probe-watch ru-cidr update --apply   # Разово обновить RU-CIDR из ipdeny (root; иначе — таймер)
 vds gateway probe-watch config           # конфиг auto-lockdown (default off; on = авто-лок 443 при threat high)
@@ -179,6 +179,9 @@ vds gateway probe-watch remove --apply   # Демонтаж nft-таблицы v
 # probe-watch исключает своих из probers4 и без AWG: verified_session_ips
 # (ss/conntrack, двусторонний трафик, кэш 24 ч); `--auto-lockdown on`
 # требует непустого allow-списка (allow-ips.txt / --lockdown-allow), иначе exit 1
+# Быстрый контур (W1-1): 5-мин сэмплер vds-logs-sample считает дельту probers4,
+# при >= 10 уникальных probers/5 мин — тег FAST-CONTOUR в journal (телеметрия,
+# без авто-действий); verified-IP — в сайдкар-кэше /var/lib/vds/probe-fast-cache.json
 
 vds logs status                     # Состояние конвейера логов (ADR-012)
 vds logs install --apply            # Таймеры vds-logs-sample/daily (dry-run по умолчанию)
@@ -297,7 +300,7 @@ Gateway-таймеры (ставятся по явной команде, не п
 | Таймер | Назначение | Откуда |
 |--------|-----------|--------|
 | `vds-gateway-health.timer` | healthcheck юнитов/портов/сертификата, rate-limited рестарт упавших (W1 GR-18) | `vds gateway healthcheck --install-timer`, каждые 5 мин |
-| `vds-probe-watch.timer` | дельта счётчиков зондирования tcp/443 + threat-level | `vds gateway probe-watch install --apply` |
+| `vds-probe-watch.timer` | дельта счётчиков зондирования tcp/{443,8443,2053} + threat-level | `vds gateway probe-watch install --apply` |
 | `vds-probe-rucidr.timer` | обновление RU-CIDR-агрегата из ipdeny | `vds gateway probe-watch ru-cidr install --apply` |
 | `vds-relay-cidr.timer` | RU-CIDR на релее (еженедельно) | `vds relay init --apply` (ADR-007) |
 | `vds-logs-sample.timer` (`vds-logs-sample.service.tpl`/`vds-logs-sample.timer.tpl`) | 5-минутный сэмпл телеметрии (journald/счётчики, ADR-012) | `vds logs install --apply` |
