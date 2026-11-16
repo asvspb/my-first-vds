@@ -71,11 +71,14 @@ $ vds gateway probe-watch watch --json | jq …
 
 ## 4. Остаточные хвосты
 
-1. **HF-3 (P1):** юниты теперь используют venv только потому, что install
-   запускался с `PATH=/opt/my-vds/venv/bin`. Нужен `resolve_python()` в
-   `src/core/units.py` + `_unit_ctx` (probing/logs), чтобы повторный install
-   без PATH не ломал юниты. До этого — правило: install-команды запускать с
-   venv в PATH.
+1. **HF-3 — ✅ ЗАКРЫТ (`fb3e8fe`, docs `83dc1cc`):** добавлен
+   `resolve_python()` (`venv` внутри `INSTALL_DIR` → `sys.executable` → PATH)
+   и применён в `probing.py`, `logs/install.py`, `relay/init.py`.
+   Живая проверка на asv2: `probe-watch install --apply` и `logs install
+   --apply` с чистым системным `PATH` отрендерили
+   `ExecStart=/opt/my-vds/venv/bin/python3`; `systemctl --failed` = 0,
+   `logs sample` пишет (18:49:42Z). `vds-logs-daily` тоже получил
+   `ReadWritePaths=/var/lib/vds /var/run`.
 2. **HF-2:** код развёрнут, но XHTML/CDN-инбаунды на asv2 отсутствуют
    (Reality + Hysteria2 + AWG), поэтому рандомные пути/CF-CIDR не
    пере-рендеривались; на asv1 проверить отдельно при следующем деплое.

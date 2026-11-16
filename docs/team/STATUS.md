@@ -89,8 +89,9 @@
   телеметрию, `auto_lockdown=false`. Найден и закрыт EROFS-lock
   (`vds-logs-sample`: `ReadWritePaths=/var/lib/vds /var/run`).
   Отчёт: [DEPLOY-20261116-asv2-wave0-w1](reports/DEPLOY-20261116-asv2-wave0-w1.md).
-  Остаток: **HF-3** (`resolve_python()` в `_unit_ctx`, чтобы install без
-  venv-PATH не ломал юниты).
+  **HF-3 закрыт** (`fb3e8fe`, docs `83dc1cc`): `resolve_python()` =
+  venv → `sys.executable` → PATH; проверено на asv2 install с чистым
+  системным PATH — юниты рендерятся с venv, `systemctl --failed` = 0.
 - **RU-relay: код готов (WP-1..5 по SPEC/ADR-007), релей НЕ куплен** —
   развёртывание отложено до покупки VDS; WP-6 (харднинг) в спеке.
 - **probe-watch v3** (SPEC-20261116-probe-response): threat-level quiet/elevated/high,
