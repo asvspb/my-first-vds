@@ -884,11 +884,19 @@ def xray_add_transport(
     ),
     apply: bool = typer.Option(False, "--apply", help="Применить (по умолчанию dry-run)"),
     yes: bool = typer.Option(False, "--yes", help="Без интерактивного подтверждения"),
+    regenerate_path: bool = typer.Option(
+        False,
+        "--regenerate-path",
+        help="Перевыпустить случайный path XHTTP (ломает выданные ссылки: после --apply сразу `vpn profile pull`)",
+    ),
 ):
     """Добавить XHTTP-транспорт к живому Xray (ADR-003, SPEC WP-3)"""
     from src.xray.install import run_add_transport_xhttp
     raise typer.Exit(
-        run_add_transport_xhttp(transport, domain, mode=mode, apply=apply, yes=yes)
+        run_add_transport_xhttp(
+            transport, domain, mode=mode, apply=apply, yes=yes,
+            regenerate_path=regenerate_path,
+        )
     )
 
 

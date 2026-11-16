@@ -168,7 +168,15 @@ xray/hysteria2 (access-log/loglevel — отдельное решение вла
   RU-IP, decay заморожен при активном локе — лок ослепляет syn_valid;
   состояние в снапшоте, переживает рестарт). Свои клиенты исключаются:
   endpoint-IP активных AWG-пиров (`awg show`, кэш в снапшоте) + серверный
-  IP + whitelist `/etc/vds-probe-watch/allow-ips.txt`. Реакция — только
+  IP + whitelist `/etc/vds-probe-watch/allow-ips.txt` +
+  **verified_session_ips** (anti Self-DoS, HF-1): IP с верифицированными
+  сессиями на 443/8443/2053 — TCP через `ss -tni` (bytes_acked ≥ 16 КБ И
+  bytes_received ≥ 4 КБ; голый ESTABLISHED-бот ТСПУ не проходит), UDP через
+  `/proc/net/nf_conntrack` (`[ASSURED]` + при acct=1 сумма bytes > 32 КБ);
+  кэш 24 ч — клиент, закрывший ноутбук до тика, не выпадает. Клиенты
+  Reality/XHTTP/Hy2 без активного AWG-туннеля НЕ попадают в probers4 как
+  «новые RU-IP». `config --auto-lockdown on` требует непустой allow-list
+  (allow-ips.txt или `--lockdown-allow`) — иначе exit 1. Реакция — только
   сетевая видимость 443 через UFW (`lock-443`), никогда юниты/конфиги
   xray/hy/awg; TTL обязателен (default 48h), downgrade лок не снимает;
   авто-режим — opt-in (`config --auto-lockdown on`). RU-CIDR на

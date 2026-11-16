@@ -50,6 +50,28 @@ SSH_PORT_PENDING_KEY = "ufw-ssh-port"
 UFW_META_KEY = "ufw"
 LEGACY_SSH_PORT = 22
 
+# Официальные IPv4-подсети Cloudflare (https://www.cloudflare.com/ips-v4,
+# 15 CIDR; обновление — правкой кода коммитом, SPEC-20261116-surface-hardening
+# §2.2). CDN-порт Xray (2053/tcp) открывается только для них: origin слушает
+# за CF proxy; v6 — вне скоупа.
+CLOUDFLARE_CIDRS_V4: tuple[str, ...] = (
+    "173.245.48.0/20",
+    "103.21.244.0/22",
+    "103.22.200.0/22",
+    "103.31.4.0/22",
+    "141.101.64.0/18",
+    "108.162.192.0/18",
+    "190.93.240.0/20",
+    "188.114.96.0/20",
+    "197.234.240.0/22",
+    "198.41.128.0/17",
+    "162.158.0.0/15",
+    "104.16.0.0/13",
+    "104.24.0.0/14",
+    "172.64.0.0/13",
+    "131.0.72.0/22",
+)
+
 
 class UfwError(Exception):
     """Ошибка harden/ssh-port: читаемо выводится в CLI, без traceback."""
@@ -92,6 +114,28 @@ class UfwSnapshot:
 
     def has(self, action: str, spec: str, src: str = "any") -> bool:
         return any(r.matches_plan(action, spec, src) for r in self.rules)
+
+
+def cf_cidr_specs(port: str | int) -> list[str]:
+    """from-спеки CF-CIDR-набора для порта CDN (SPEC §2.2). Полный набор —
+    штатное покрытие порта: широкое ``allow <port>/tcp`` не требуется."""
+    return [
+        f"from {cidr} to any port {port} proto tcp"
+        for cidr in CLOUDFLARE_CIDRS_V4
+    ]
+
+
+def snapshot_cf_covered(snapshot: UfwSnapshot, port: str | int) -> bool:
+    """Порт полностью покрыт CF-CIDR-набором (все 15 правил на месте)?"""
+    return all(snapshot.has("allow", spec) for spec in cf_cidr_specs(port))
+
+
+def cdn_port_of(state: GatewayState) -> str | None:
+    """CDN-порт из state.protocols['xray-cdn'] (установлен — иначе None)."""
+    meta = state.protocols.get("xray-cdn") or {}
+    if not meta.get("installed"):
+        return None
+    return str(meta.get("port") or "2053")
 
 
 @dataclass
@@ -441,7 +485,23 @@ def build_plan(
         for spec in specs:
             plan.append(_rule_item("allow", spec, snapshot))
     else:
+        cdn_port = cdn_port_of(state)
         for spec in specs:
+            if cdn_port is not None and spec == f"{cdn_port}/tcp":
+                # CDN-порт — только Cloudflare (SPEC §2.2): CF-CIDR-набор
+                # признаётся штатным покрытием. Миграция: СНАЧАЛА все CIDR,
+                # только после них — удаление широкого правила (живая сессия
+                # через CDN не должна мигнуть); порядок в плане = порядок apply.
+                for from_spec in cf_cidr_specs(cdn_port):
+                    plan.append(_rule_item("allow", from_spec, snapshot))
+                if snapshot.has("allow", spec):
+                    plan.append(PlanItem(
+                        "rule",
+                        f"ufw delete allow {spec} [широкое CDN-правило → CF-CIDR-набор]",
+                        "add",
+                        {"action": "allow", "spec": spec, "delete": True},
+                    ))
+                continue
             plan.append(_rule_item("allow", spec, snapshot))
 
     # 4. forwarding-конфиг (SPEC §1.10.5) + ip_forward-проверка

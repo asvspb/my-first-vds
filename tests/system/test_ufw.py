@@ -269,7 +269,14 @@ class TestBuildPlan:
         plan = ufw.build_plan("gateway", _gateway_state(), snap, ufw.HardeningOpts())
         adds = [p for p in plan if p.action == "add"]
         rule_specs = {p.meta["spec"] for p in adds if p.kind == "rule" and not p.meta.get("delete")}
-        assert GATEWAY_SPECS <= rule_specs
+        # CDN-порт открывается CF-CIDR-набором, не широким правилом (SPEC §2.2)
+        cf_specs = {
+            f"from {cidr} to any port 2053 proto tcp"
+            for cidr in ufw.CLOUDFLARE_CIDRS_V4
+        }
+        assert (GATEWAY_SPECS - {"2053/tcp"}) <= rule_specs
+        assert cf_specs <= rule_specs
+        assert "2053/tcp" not in rule_specs
         assert any(p.is_ssh_rule and p.meta["spec"] == "22/tcp" for p in adds)
         # порядок: ssh-правило раньше enable, enable — последний элемент
         enable_idx = [i for i, p in enumerate(plan) if p.is_enable]
@@ -330,9 +337,14 @@ class TestBuildPlan:
 
     def test_idempotent_second_plan_all_skip(self) -> None:
         st = _gateway_state()
-        specs = GATEWAY_SPECS
+        # CDN-порт в снимке уже покрыт CF-CIDR-набором (не широким правилом —
+        # иначе план содержит миграцию add-CIDR -> delete-wide, SPEC §2.2).
         rule_lines = "\n".join(
-            f"{spec} ALLOW IN Anywhere" for spec in specs if "/udp" in spec or "/tcp" in spec
+            f"{spec} ALLOW IN Anywhere"
+            for spec in GATEWAY_SPECS - {"2053/tcp"}
+            if "/udp" in spec or "/tcp" in spec
+        ) + "\n" + "\n".join(
+            f"2053/tcp ALLOW IN {cidr}" for cidr in ufw.CLOUDFLARE_CIDRS_V4
         )
         snap = ufw.parse_ufw_status(
             "Status: active\nDefault: deny (incoming), allow (outgoing), disabled (routed)\n"
@@ -358,6 +370,101 @@ class TestBuildPlan:
         plan = ufw.build_plan("gateway", st, snap, ufw.HardeningOpts())
         ssh_specs = {p.meta["spec"] for p in plan if p.is_ssh_rule}
         assert ssh_specs == {"49222/tcp"}
+
+
+def _status_text(rule_lines: list[str]) -> str:
+    return (
+        "Status: active\n"
+        "Logging: on (low)\n"
+        "Default: deny (incoming), allow (outgoing), disabled (routed)\n"
+        "\n"
+        "To                         Action      From\n"
+        "--                         ------      ----\n"
+        + "\n".join(rule_lines)
+        + "\n"
+    )
+
+
+class TestCdnCfCidrCoverage:
+    """T10 (SPEC-20261116-surface-hardening §2.2): CF-CIDR-набор — штатное
+    покрытие CDN-порта; широкое allow 2053/tcp не добавляется поверх;
+    снимок с широким правилом мигрирует в CIDR-набор (add -> delete)."""
+
+    def _cf_rule_lines(self) -> list[str]:
+        return [
+            f"2053/tcp                   ALLOW IN    {cidr}"
+            for cidr in ufw.CLOUDFLARE_CIDRS_V4
+        ]
+
+    def test_parser_recognizes_cf_cidr_rules(self) -> None:
+        snap = ufw.parse_ufw_status(_status_text(self._cf_rule_lines()))
+        assert len(snap.unparsed) == 0  # не ломается на 15 CIDR-строках
+        assert ufw.snapshot_cf_covered(snap, "2053")
+        assert snap.has(
+            "allow", f"from {ufw.CLOUDFLARE_CIDRS_V4[0]} to any port 2053 proto tcp"
+        )
+
+    def test_full_cf_set_is_coverage_no_wide_add(self) -> None:
+        snap = ufw.parse_ufw_status(_status_text(self._cf_rule_lines()))
+        plan = ufw.build_plan("gateway", _gateway_state(), snap, ufw.HardeningOpts())
+        rule_adds = [
+            p for p in plan
+            if p.kind == "rule" and p.action == "add" and not p.meta.get("delete")
+        ]
+        wide = [
+            p for p in rule_adds
+            if p.meta.get("spec") == "2053/tcp" and p.meta.get("src", "any") == "any"
+        ]
+        assert wide == []  # широкое allow 2053/tcp не добавляется поверх набора
+        cf_items = [
+            p for p in plan
+            if p.kind == "rule" and str(p.meta.get("spec", "")).startswith(
+                f"from {ufw.CLOUDFLARE_CIDRS_V4[0]}"
+            )
+        ]
+        assert cf_items and all(p.action == "skip" for p in cf_items)
+        # широкого правила в снимке нет — нет и шага удаления
+        assert not any(
+            p.kind == "rule" and p.meta.get("delete") and p.meta.get("spec") == "2053/tcp"
+            for p in plan
+        )
+
+    def test_wide_rule_migrates_to_cf_set_in_order(self) -> None:
+        snap = ufw.parse_ufw_status(_status_text(
+            ["2053/tcp                   ALLOW IN    Anywhere"]
+        ))
+        plan = ufw.build_plan("gateway", _gateway_state(), snap, ufw.HardeningOpts())
+        details = [p for p in plan if p.kind == "rule"]
+        cf_adds = [
+            p for p in details
+            if p.action == "add" and not p.meta.get("delete")
+            and str(p.meta.get("spec", "")).startswith("from ")
+            and "port 2053" in str(p.meta.get("spec", ""))
+        ]
+        assert len(cf_adds) == len(ufw.CLOUDFLARE_CIDRS_V4)
+        deletes = [
+            p for p in details
+            if p.meta.get("delete") and p.meta.get("spec") == "2053/tcp"
+        ]
+        assert len(deletes) == 1
+        # порядок: ВСЕ CIDR-добавления раньше удаления широкого правила
+        last_add = max(plan.index(p) for p in cf_adds)
+        first_delete = min(plan.index(p) for p in deletes)
+        assert last_add < first_delete
+
+    def test_partial_set_adds_only_missing(self) -> None:
+        lines = self._cf_rule_lines()[:7]  # 7 из 15
+        snap = ufw.parse_ufw_status(_status_text(lines))
+        plan = ufw.build_plan("gateway", _gateway_state(), snap, ufw.HardeningOpts())
+        cf_plan_items = [
+            p for p in plan
+            if p.kind == "rule" and str(p.meta.get("spec", "")).startswith("from ")
+            and "port 2053" in str(p.meta.get("spec", ""))
+        ]
+        adds = [p for p in cf_plan_items if p.action == "add"]
+        skips = [p for p in cf_plan_items if p.action == "skip"]
+        assert len(adds) == len(ufw.CLOUDFLARE_CIDRS_V4) - 7
+        assert len(skips) == 7
 
 
 class TestDiffListeners:

@@ -39,15 +39,15 @@ src/
 ├── zerotier/            # install, api, watchdog, reconcile, nat, diagnose, add_network, cleanup
 ├── wireguard/           # install, add-client, remove
 ├── coturn/              # TURN-сервер
-├── xray/                # Reality (443), XHTTP (8443), CDN (2053): adapter, install, clients, config, status, remove
+├── xray/                # Reality (443), XHTTP (8443, path — случайный секрет), CDN (2053, только CF-CIDR): adapter, install, clients, config, status, remove
 ├── hysteria2/           # QUIC (443): adapter, install, clients, config, hop, obfs, status, sysctl, remove
 ├── amneziawg/           # AmneziaWG (UDP 51825): install, clients, status, remove
 ├── relay/               # RU-relay (ADR-007): init, status, clients, cidr (AWG udp/443 + Reality tcp/443 + policy-routing до asv1)
 ├── acme/                # ACME/LE: issue (HTTP-01) + deploy-hook для Hysteria2
-├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание), probing (probe-watch: телеметрия+threat-level+auto-lockdown, SPEC probe-response), probing_rucidr (RU-CIDR)
+├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание), probing (probe-watch: телеметрия+threat-level+auto-lockdown+verified_session_ips anti Self-DoS, SPEC probe-response), probing_rucidr (RU-CIDR)
 ├── sysinfo/             # dashboard
 ├── logs/                # log-forensics (ADR-012): install, collect (sample), report/analyze, capture
-└── system/              # setup, cleanup, ufw (harden/ssh-port — SPEC-20261116)
+└── system/              # setup, cleanup, ufw (harden/ssh-port — SPEC-20261116; CDN-порт — CF-CIDR-набор)
 systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg(-nat)/
                          # vds-relay-{exit,nat,policy,cidr}.service.tpl; vds-gateway-health / vds-probe-watch /
                          # vds-probe-rucidr / vds-logs-sample / vds-logs-daily .service+.timer.tpl

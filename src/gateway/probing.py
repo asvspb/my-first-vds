@@ -757,8 +757,11 @@ _SS_BYTES_ACKED_RE = re.compile(r"\bbytes_acked:(\d+)\b")
 _SS_BYTES_RECEIVED_RE = re.compile(r"\bbytes_received:(\d+)\b")
 _CT_SRC_RE = re.compile(r"\bsrc=(\d{1,3}(?:\.\d{1,3}){3})\b")
 _CT_DPORT_RE = re.compile(r"\bdport=(\d+)\b")
-_CT_BYTES_ORIG_RE = re.compile(r"\bbytes_orig=(\d+)\b")
-_CT_BYTES_REPLY_RE = re.compile(r"\bbytes_reply=(\d+)\b")
+# Реальное ядро Linux в /proc/net/nf_conntrack печатает ДВА кортежа (original
+# и reply) с одинаковым полем bytes= в одной строке: "bytes=12345 ... bytes=0".
+# Суффиксированные формы (bytes_orig=/bytes_reply=) встречаются в выводе
+# утилиты conntrack — поддерживаем обе (регресс-фикс ревью HF-1).
+_CT_BYTES_RE = re.compile(r"\bbytes(?:_orig|_reply)?=(\d+)\b")
 
 
 def _normalize_client_ip(host: str) -> Optional[str]:
@@ -869,16 +872,15 @@ def parse_conntrack_udp(
             continue
         if "[ASSURED]" not in line:
             continue
-        bytes_orig = _CT_BYTES_ORIG_RE.search(line)
-        bytes_reply = _CT_BYTES_REPLY_RE.search(line)
-        if bytes_orig is not None and bytes_reply is not None:
-            if (
-                int(bytes_orig.group(1)) + int(bytes_reply.group(1))
-                <= CONNTRACK_BYTES_MIN
-            ):
+        byte_values = _CT_BYTES_RE.findall(line)
+        if len(byte_values) >= 2:
+            # Ядро: bytes=<orig> ... bytes=<reply> (два кортежа в строке);
+            # conntrack(8): bytes_orig=<n> bytes_reply=<n>. Сравниваем с порогом
+            # сумму первых двух значений (orig+reply).
+            if int(byte_values[0]) + int(byte_values[1]) <= CONNTRACK_BYTES_MIN:
                 continue
-        elif bytes_orig is not None or bytes_reply is not None:
-            continue  # только одно поле — кривая строка, fail-closed
+        elif len(byte_values) == 1:
+            continue  # кривая строка (одно поле) — fail-closed
         ip = _normalize_client_ip(src.group(1))
         if ip is not None:
             verified.add(ip)

@@ -176,6 +176,9 @@ vds gateway probe-watch ru-cidr install --apply  # RU-CIDR без релея: в
 vds gateway probe-watch ru-cidr update --apply   # Разово обновить RU-CIDR из ipdeny (root; иначе — таймер)
 vds gateway probe-watch config           # конфиг auto-lockdown (default off; on = авто-лок 443 при threat high)
 vds gateway probe-watch remove --apply   # Демонтаж nft-таблицы vds_probe + юнитов (dry-run по умолчанию)
+# probe-watch исключает своих из probers4 и без AWG: verified_session_ips
+# (ss/conntrack, двусторонний трафик, кэш 24 ч); `--auto-lockdown on`
+# требует непустого allow-списка (allow-ips.txt / --lockdown-allow), иначе exit 1
 
 vds logs status                     # Состояние конвейера логов (ADR-012)
 vds logs install --apply            # Таймеры vds-logs-sample/daily (dry-run по умолчанию)
@@ -190,10 +193,13 @@ vds logs remove --apply             # Демонтаж таймеров/данн
 vds xray install                    # Установить Xray VLESS Reality (TCP 443)
 vds xray install --sni www.cloudflare.com   # Сайт-маска (по умолчанию www.google.com)
 vds xray add-client phone           # Клиент + share-link vless://...
-vds xray add-transport              # XHTTP-инблэнд за SNI-фолбэком Reality (ADR-003)
+vds xray add-transport              # XHTTP-инблэнд за SNI-фолбэком Reality (ADR-003); путь — случайный
+                                     # секрет (state 0600; миграция не ломает ссылки; ротация — --regenerate-path,
+                                     # после apply сразу `vpn profile pull` на клиентах)
 vds xray remove-transport           # Снять XHTTP (инблэнд + XHTTP-клиенты)
 vds xray use-domain --domain vpn.example.ru   # Reality-ссылки по домену (state.domain)
-vds xray add-cdn --domain cdn.example.ru      # CDN-транспорт VLESS+WS+TLS (ADR-006)
+vds xray add-cdn --domain cdn.example.ru      # CDN-транспорт VLESS+WS+TLS (ADR-006); ws-path — случайный
+                                     # секрет; 2053/tcp открыт только для CIDR Cloudflare (ips-v4)
 vds xray add-cdn-client <name>      # CDN-клиент + ссылка (--front — фронт пула)
 vds xray add-cdn-front <domain>     # Фронт в пул CDN (сертификат в инблэнде)
 vds xray remove-cdn-front <domain>  # Снять фронт из пула (LE-cert остаётся; dry-run)

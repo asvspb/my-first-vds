@@ -37,8 +37,8 @@ from src.acme.install import FULLCHAIN_NAME, PRIVKEY_NAME
 from src.core.lock import FileLock
 from src.core.logger import console
 from src.core.netcheck import port_free, port_owner, public_ip
-from src.core.secrets import gen_uuid, write_secret_atomic
-from src.core.shell import command_exists, run_list
+from src.core.secrets import gen_secret_path, gen_uuid, write_secret_atomic
+from src.core.shell import ShellResult, command_exists, run_list
 from src.gateway.paths import (
     CDN_ORIGIN_PORT_DEFAULT,
     CDN_WS_PATH,
@@ -48,6 +48,7 @@ from src.gateway.paths import (
     XRAY_UNIT,
 )
 from src.gateway.store import GatewayState, StoreError, load_state, save_state
+from src.system.ufw import CLOUDFLARE_CIDRS_V4
 from src.xray.config import XrayConfigParams, render_cdn_share_link, render_config
 
 STATE_KEY = "xray-cdn"
@@ -60,24 +61,10 @@ CLIENT_BACKUP_SUFFIX = ".bak-cdn-update"
 REMOVE_BACKUP_SUFFIX = ".bak-remove-cdn"
 
 # Диапазоны Cloudflare (https://www.cloudflare.com/ips/, зашито константой,
-# обновляется коммитом — SPEC §3 check_prerequisites).
-CLOUDFLARE_NETWORKS_V4 = (
-    "173.245.48.0/20",
-    "103.21.244.0/22",
-    "103.22.200.0/22",
-    "103.31.4.0/22",
-    "141.101.64.0/18",
-    "108.162.192.0/18",
-    "190.93.240.0/20",
-    "188.114.96.0/20",
-    "197.234.240.0/22",
-    "198.41.128.0/17",
-    "162.158.0.0/15",
-    "104.16.0.0/13",
-    "104.24.0.0/14",
-    "172.64.0.0/13",
-    "131.0.72.0/22",
-)
+# обновляется коммитом — SPEC §3 check_prerequisites). Канонический IPv4-набор
+# (15 CIDR) живёт в src/system/ufw.py (CLOUDFLARE_CIDRS_V4) — он же открывает
+# CDN-порт 2053/tcp только для Cloudflare (SPEC-20261116-surface-hardening §2.2).
+CLOUDFLARE_NETWORKS_V4 = CLOUDFLARE_CIDRS_V4
 CLOUDFLARE_NETWORKS_V6 = (
     "2400:cb00::/32",
     "2606:4700::/32",
@@ -225,6 +212,9 @@ def _xhttp_fields(current: dict) -> dict | None:
                 inbound["streamSettings"]["tlsSettings"]["certificates"]
             )
             bind = str(inbound.get("listen", ""))
+            path = str(
+                inbound["streamSettings"]["xhttpSettings"]["path"]
+            )
             return {
                 "client_ids": [
                     c["id"] for c in inbound["settings"].get("clients", [])
@@ -232,6 +222,11 @@ def _xhttp_fields(current: dict) -> dict | None:
                 "port": int(inbound["port"]),
                 "bind": bind,
                 "mode": "fallback" if bind else "port",
+                # path — секрет (SPEC-20261116-surface-hardening §2.1):
+                # наследуется из живого config.json при любом CDN-перерендере,
+                # иначе рандомный путь молча сбрасывался бы на литерал /xhttp
+                # и расходился с выданными ссылками (баг кросс-рендера).
+                "path": path,
                 "cert_path": str(certificates[0]["certificateFile"]),
                 "key_path": str(certificates[0]["keyFile"]),
             }
@@ -280,6 +275,7 @@ def _render_with_cdn(
                 "xhttp_enabled": True,
                 "xhttp_client_ids": list(xhttp["client_ids"]),
                 "xhttp_mode": str(xhttp["mode"]),
+                "xhttp_path": str(xhttp["path"]),
                 "xhttp_port": int(xhttp["port"]),
                 "xhttp_bind": str(xhttp["bind"]),
                 "cert_path": str(xhttp["cert_path"]),
@@ -651,26 +647,70 @@ def _gate_and_restart(backup_path: Path) -> None:
         )
 
 
+def _cf_port_specs(port: int) -> list[str]:
+    """from-спеки CF-CIDR-набора для CDN-порта (SPEC §2.2)."""
+    return [
+        f"from {cidr} to any port {port} proto tcp"
+        for cidr in CLOUDFLARE_NETWORKS_V4
+    ]
+
+
+def _ufw_idempotent_ok(result: ShellResult) -> bool:
+    """ufw-возврат «правило уже есть» — успех (SPEC §1.3 паттерн)."""
+    if result.ok:
+        return True
+    out = (result.stdout + result.stderr).lower()
+    return "skipping adding" in out or "rule added" in out
+
+
 def _ufw_allow(port: int) -> None:
+    """Открыть CDN-порт только для Cloudflare (SPEC-20261116 §2.2).
+
+    Порядок миграции обязателен (живая сессия через CDN не должна мигнуть):
+    СНАЧАЛА все 15 `allow from <cf_cidr> to any port <port> proto tcp`, и
+    только после успешного добавления — `ufw delete allow <port>/tcp`.
+    Неудача добавления — откат (снять уже добавленные CIDR), широкое правило
+    НЕ трогаем.
+    """
     if not command_exists("ufw"):
         return
-    result = run_list(["ufw", "allow", f"{port}/tcp"], timeout=15)
-    if not result.ok:
-        raise CdnError(
-            f"ufw allow {port}/tcp не удался: "
-            f"{result.stderr.strip() or result.stdout.strip()}"
-        )
+    added: list[str] = []
+    for spec in _cf_port_specs(port):
+        result = run_list(["ufw", "allow"] + spec.split(), timeout=15)
+        if not _ufw_idempotent_ok(result):
+            for done in added:
+                run_list(["ufw", "delete", "allow"] + done.split(), timeout=15)
+            raise CdnError(
+                f"ufw allow {spec} не удался (CF-CIDR-набор откачен, широкое "
+                f"правило {port}/tcp не тронуто): "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        added.append(spec)
+    # Все CIDR на месте — снимаем широкое allow (страрые установки).
+    run_list(["ufw", "delete", "allow", f"{port}/tcp"], timeout=15)
 
 
 def _ufw_delete(port: int) -> None:
+    """Симметрично удалить CF-CIDR-набор + широкое правило CDN-порта."""
     if not command_exists("ufw"):
         return
+    for spec in _cf_port_specs(port):
+        result = run_list(["ufw", "delete", "allow"] + spec.split(), timeout=15)
+        if not result.ok:
+            out = (result.stdout + result.stderr).lower()
+            if "could not" not in out and "not found" not in out:
+                raise CdnError(
+                    f"ufw delete allow {spec} не удался: "
+                    f"{result.stderr.strip() or result.stdout.strip()}"
+                )
     result = run_list(["ufw", "delete", "allow", f"{port}/tcp"], timeout=15)
     if not result.ok:
-        raise CdnError(
-            f"ufw delete allow {port}/tcp не удался: "
-            f"{result.stderr.strip() or result.stdout.strip()}"
-        )
+        out = (result.stdout + result.stderr).lower()
+        if "could not" not in out and "not found" not in out:
+            raise CdnError(
+                f"ufw delete allow {port}/tcp не удался: "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
 
 
 def _cdn_meta(state_path: str | None) -> tuple[dict, GatewayState]:
@@ -780,9 +820,10 @@ def install_cdn(params: CdnParams, state_path: str | None = None) -> int:
             return 1
 
     verb = "перенастроен" if reconfigure else "установлен"
+    # ws-path — секрет: не печатаем (только state.json 0600 и share-link).
     console.print(
         f"[success][xray-cdn] CDN-транспорт {verb}: {params.domain}:"
-        f"{params.port} (ws {params.ws_path}), UFW allow {params.port}/tcp, "
+        f"{params.port} (ws path в state), UFW: CF-CIDR -> {params.port}/tcp, "
         f"{XRAY_UNIT} перезапущен.[/success]"
     )
     console.print(
@@ -795,11 +836,25 @@ def install_cdn(params: CdnParams, state_path: str | None = None) -> int:
 
 
 def add_cdn(domain: str, port: int = CDN_ORIGIN_PORT_DEFAULT, state_path: str | None = None) -> int:
-    """Точка входа `vds xray add-cdn` (root-check здесь). 0 — успех."""
+    """Точка входа `vds xray add-cdn` (root-check здесь). 0 — успех.
+
+    ws-path — секрет (SPEC-20261116-surface-hardening §2.1): генерируется
+    случайно ТОЛЬКО если в state ещё нет path; существующий наследуется
+    (повторный add-cdn идемпотентен, выданные CDN-ссылки не ломаются).
+    """
     if os.geteuid() != 0:
         console.print("[error][xray-cdn] Требуется root (запустите через sudo).[/error]")
         return 1
-    return install_cdn(CdnParams(domain=domain, port=port), state_path)
+    try:
+        state = load_state(state_path)
+    except StoreError as exc:
+        console.print(f"[error][xray-cdn] {exc}[/error]")
+        return 1
+    meta = state.protocols.get(STATE_KEY) or {}
+    ws_path = str(meta.get("path") or "").strip() or gen_secret_path()
+    return install_cdn(
+        CdnParams(domain=domain, port=port, ws_path=ws_path), state_path
+    )
 
 
 def add_cdn_client(
@@ -1020,7 +1075,7 @@ def remove_cdn(
         if cdn_clients:
             plan.append(f"CDN-клиенты из state: {', '.join(cdn_clients)}")
         plan.append("запись protocols['xray-cdn'] из store")
-    plan.append(f"UFW delete allow {port}/tcp")
+    plan.append(f"UFW delete: CF-CIDR-набор + широкое allow {port}/tcp")
 
     if not config_actions and not meta:
         console.print("[info][xray-cdn] CDN не установлен — нечего снимать.[/info]")

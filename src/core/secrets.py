@@ -24,6 +24,19 @@ def gen_password(length: int = 24) -> str:
     return "".join(secrets.choice(_ALPHABET) for _ in range(length))
 
 
+def gen_secret_path(nmin: int = 16, nmax: int = 24) -> str:
+    """Случайный http-path-секрет: "/" + 16..24 hex-символов
+    (криптографический ГСЧ; SPEC-20261116-surface-hardening §2.1).
+
+    Путь XHTTP/CDN-WS — элемент недемаскировки: значение не логируется,
+    живёт в state.json (0600) и share-link.
+    """
+    if nmin < 1 or nmax < nmin:
+        raise ValueError("require 1 <= nmin <= nmax")
+    length = nmin + secrets.randbelow(nmax - nmin + 1)
+    return "/" + secrets.token_hex((length + 1) // 2)[:length]
+
+
 def write_secret_atomic(path: str, data: str, mode: int = 0o600) -> bool:
     """Атомарно записать строку в файл с правами `mode`.
 

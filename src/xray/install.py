@@ -32,7 +32,7 @@ from src.acme.install import FULLCHAIN_NAME, PRIVKEY_NAME
 from src.core.lock import FileLock
 from src.core.logger import console
 from src.core.netcheck import port_free, port_owner, public_ip
-from src.core.secrets import write_secret_atomic
+from src.core.secrets import gen_secret_path, write_secret_atomic
 from src.core.shell import run_list
 from src.core.units import install_unit, unit_active
 from src.gateway.paths import (
@@ -395,14 +395,23 @@ def _xhttp_precheck(domain: str, mode: str, config_path: Path) -> tuple[dict, Pa
 
 
 def _render_xhttp_config(
-    current: dict, domain: str, mode: str, xhttp_uuids: list[str]
+    current: dict,
+    domain: str,
+    mode: str,
+    xhttp_uuids: list[str],
+    xhttp_path: str | None = None,
 ) -> str:
     """Отрендерить конфиг с XHTTP из текущего config.json + state-meta.
 
     Reality-поля (realitySettings, клиенты inbound#0) берутся из текущего
     конфига байт-в-байт-эквивалентно (те же значения), fallbacks/инблэнд —
-    детерминированный рендер render_config.
+    детерминированный рендер render_config. xhttp_path — путь-секрет из
+    state (extra.path); None — наследуется из живого конфига (миграция),
+    рандомный путь не сбрасывается перерендером
+    (SPEC-20261116-surface-hardening §2.1).
     """
+    if xhttp_path is None:
+        xhttp_path = _existing_xhttp_path(current) or XHTTP_PATH
     try:
         inbound = current["inbounds"][0]
         reality = inbound["streamSettings"]["realitySettings"]
@@ -420,6 +429,7 @@ def _render_xhttp_config(
             key_path=str(_le_cert_paths(domain)[1]),
             xhttp_client_ids=xhttp_uuids,
             xhttp_mode=mode,
+            xhttp_path=xhttp_path,
         )
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         raise InstallError(
@@ -428,11 +438,49 @@ def _render_xhttp_config(
     return render_config(params)
 
 
+def _existing_xhttp_path(current: dict) -> str | None:
+    """Путь xhttp-инбаунда живого config.json (миграция без перевыпуска
+    ссылок); нет инбаунда/пути — None."""
+    for inbound in current.get("inbounds", []):
+        if inbound.get("streamSettings", {}).get("network") != "xhttp":
+            continue
+        try:
+            path = str(
+                inbound["streamSettings"]["xhttpSettings"]["path"]
+            ).strip()
+        except (KeyError, TypeError, ValueError):
+            return None
+        return path or None
+    return None
+
+
+def _resolve_xhttp_path(
+    current: dict, state_meta: dict, regenerate: bool
+) -> str:
+    """Путь XHTTP: regenerate -> новый секрет; иначе extra.path из state ->
+    путь живого config.json (миграция) -> рандомный (новая установка).
+
+    Путь — секрет: только в state.json (0600) и share-link.
+    """
+    if regenerate:
+        return gen_secret_path()
+    meta_path = str(
+        ((state_meta.get("extra") or {}).get("path") or "")
+    ).strip()
+    if meta_path:
+        return meta_path
+    existing = _existing_xhttp_path(current)
+    if existing:
+        return existing
+    return gen_secret_path()
+
+
 def add_transport_xhttp(
     domain: str,
     mode: str = "fallback",
     state_path: str | None = None,
     apply: bool = False,
+    regenerate_path: bool = False,
 ) -> dict:
     """Добавить XHTTP к живому Xray (SPEC WP-3, ADR-003).
 
@@ -440,13 +488,16 @@ def add_transport_xhttp(
     (существующий `.bak-pre-xhttp` не перезаписывается) -> рендер -> запись
     0600 -> `xray -test` (fail: откат из бэкапа, E8) -> restart vds-xray
     (fail: откат) -> state.protocols["xhttp"]. Идемпотентно (E4).
+
+    Path — секрет (SPEC-20261116-surface-hardening §2.1): генерируется один
+    раз (extra.path в state); повторные запуски наследуют существующий путь
+    (config.json/state), ссылки не ломаются. regenerate_path=True — осознанная
+    ротация: после --apply немедленно `vpn profile pull` на всех клиентах.
     """
     current, backup_path = _xhttp_precheck(domain, mode, XRAY_CONFIG_PATH)
 
-    if any(
-        ib.get("streamSettings", {}).get("network") == "xhttp"
-        for ib in current.get("inbounds", [])
-    ):
+    already = _existing_xhttp_path(current) is not None
+    if already and not regenerate_path:
         return {
             "already_enabled": True,
             "dry_run": not apply,
@@ -464,19 +515,24 @@ def add_transport_xhttp(
         if c.protocol == "xray" and c.extra.get("transport") == "xhttp" and c.uuid
     ]
 
+    xhttp_path = _resolve_xhttp_path(
+        current, dict(state.protocols.get("xhttp") or {}), regenerate_path
+    )
+
     plan = {
         "domain": domain,
         "mode": mode,
-        "path": XHTTP_PATH,
+        "path": xhttp_path,
         "config_path": str(XRAY_CONFIG_PATH),
         "backup_path": str(backup_path),
         "internal_port": XHTTP_INTERNAL_PORT,
         "xhttp_clients": len(xhttp_uuids),
+        "regenerate_path": regenerate_path,
     }
     if not apply:
         return dict(plan, dry_run=True)
 
-    rendered = _render_xhttp_config(current, domain, mode, xhttp_uuids)
+    rendered = _render_xhttp_config(current, domain, mode, xhttp_uuids, xhttp_path)
     with FileLock(LOCK_FILE):
         if XRAY_CONFIG_PATH.is_file() and not backup_path.exists():
             shutil.copy2(XRAY_CONFIG_PATH, backup_path)
@@ -516,7 +572,7 @@ def add_transport_xhttp(
             "port": XHTTP_INTERNAL_PORT,
             "mode": mode,
             "domain": domain,
-            "extra": {"path": XHTTP_PATH},
+            "extra": {"path": xhttp_path},
         }
         save_state(state, state_path)
 
@@ -530,6 +586,7 @@ def run_add_transport_xhttp(
     apply: bool = False,
     yes: bool = False,
     state_path: str | None = None,
+    regenerate_path: bool = False,
 ) -> int:
     """Точка входа `vds xray add-transport xhttp`. 0 — успех (в т.ч. dry-run)."""
     if os.geteuid() != 0:
@@ -541,6 +598,15 @@ def run_add_transport_xhttp(
             "(поддерживается: xhttp).[/error]"
         )
         return 1
+
+    if regenerate_path:
+        console.print(
+            "[warning][xray] --regenerate-path: путь XHTTP будет перевыпущен — "
+            "ВСЕ выданные XHTTP-ссылки станут недействительны. Сразу после "
+            "--apply выполните `vpn profile pull` на каждом клиенте (тихая смена "
+            "пути рвёт резервные каналы; SPEC-20261116-surface-hardening §2.1)."
+            "[/warning]"
+        )
 
     if apply and not yes:
         import questionary
@@ -554,7 +620,13 @@ def run_add_transport_xhttp(
             return 1
 
     try:
-        info = add_transport_xhttp(domain, mode=mode, state_path=state_path, apply=apply)
+        info = add_transport_xhttp(
+            domain,
+            mode=mode,
+            state_path=state_path,
+            apply=apply,
+            regenerate_path=regenerate_path,
+        )
     except (InstallError, StoreError) as exc:
         console.print(f"[error][xray] {exc}[/error]")
         return 1

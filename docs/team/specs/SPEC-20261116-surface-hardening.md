@@ -205,7 +205,11 @@ config.json client_ids/mode/port/bind/cert_path/key_path, но **не path**;
 1. T1–T11 зелёные; полный `pytest -q` без регрессий.
 2. Живая проверка на asv2 (после G-гейтов, отдельным шагом владельца):
    подключение с двух RU-IP без AWG → `watch` не выдаёт RU-PROBE-SUSPECT;
-   `nft list set inet vds_probe probers4` не содержит IP владельца.
+   `nft list set inet vds_probe probers4` не содержит IP владельца;
+   включить accounting вручную (шаблон подхватится только при переустановке
+   sysctl-профиля): `sudo sysctl -w net.netfilter.nf_conntrack_acct=1`
+   (+ `sysctl --system` после обновления 99-vds-gateway.conf) — до этого
+   conntrack-источник работает на фолбэке `[ASSURED]`.
 3. `vds xray cdn setup` повторно — path стабилен, `ufw status` показывает
    CF-CIDR вместо широкого 2053, `vds system ufw audit` зелёный.
 4. Auto-lockdown включается только с заполненным allow-списком.

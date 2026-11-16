@@ -205,6 +205,35 @@ class TestDualStackAndConntrack:
         )
         assert probing.parse_conntrack_udp(line) == set()
 
+    def test_t12_conntrack_real_kernel_two_bytes_fields(self) -> None:
+        # Реальный формат /proc/net/nf_conntrack (ядро Linux): ДВА кортежа
+        # (original + reply) с одинаковым полем bytes= без суффиксов —
+        # регресс-фикс ревью HF-1 (старые регулярки ждали bytes_orig=/bytes_reply=
+        # и молча проваливались в [ASSURED]-фолбэк, теряя порог 32768).
+        line = (
+            "ipv4 2 udp 17 180 src=203.0.113.20 dst=198.51.100.1 sport=52010 "
+            "dport=443 src=198.51.100.1 dst=203.0.113.20 sport=443 dport=52010 "
+            "[ASSURED] mark=0 use=2 bytes=20000 bytes=40000"
+        )
+        assert probing.parse_conntrack_udp(line) == {"203.0.113.20"}
+
+    def test_t12_conntrack_real_kernel_bytes_below_threshold(self) -> None:
+        line = (
+            "ipv4 2 udp 17 180 src=203.0.113.21 dst=198.51.100.1 sport=52011 "
+            "dport=443 src=198.51.100.1 dst=203.0.113.21 sport=443 dport=52011 "
+            "[ASSURED] mark=0 use=2 bytes=10000 bytes=10000"
+        )
+        assert probing.parse_conntrack_udp(line) == set()  # 20000 <= 32768
+
+    def test_t12_conntrack_real_kernel_single_bytes_field_fail_closed(self) -> None:
+        # Один bytes= (кривая строка) — fail-closed, не фолбэк на [ASSURED].
+        line = (
+            "ipv4 2 udp 17 180 src=203.0.113.22 dst=198.51.100.1 sport=52012 "
+            "dport=443 src=198.51.100.1 dst=203.0.113.22 sport=443 dport=52012 "
+            "[ASSURED] mark=0 use=2 bytes=99999"
+        )
+        assert probing.parse_conntrack_udp(line) == set()
+
     def test_conntrack_file_absent_quiet_degradation(self, tmp_path: Path) -> None:
         ips, available = probing.read_conntrack_verified(tmp_path / "absent")
         assert ips == set() and available is False

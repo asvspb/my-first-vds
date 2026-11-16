@@ -6,6 +6,7 @@
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -113,13 +114,17 @@ class TestAddTransportXHTTP:
         from src.gateway.store import load_state
 
         meta = load_state(state_path).protocols["xhttp"]
-        assert meta == {
-            "installed": True,
-            "port": 8443,
-            "mode": "fallback",
-            "domain": DOMAIN,
-            "extra": {"path": "/xhttp"},
-        }
+        # path — рандомный секрет (SPEC-20261116-surface-hardening §2.1):
+        # "/" + 16..24 hex; тот же путь — в config.json (кросс-рендер).
+        assert re.fullmatch(r"/[0-9a-f]{16,24}", meta["extra"]["path"])
+        assert (
+            config["inbounds"][1]["streamSettings"]["xhttpSettings"]["path"]
+            == meta["extra"]["path"]
+        )
+        assert meta["installed"] is True
+        assert meta["port"] == 8443
+        assert meta["mode"] == "fallback"
+        assert meta["domain"] == DOMAIN
         assert (xray_env / "config.json.bak-pre-xhttp").is_file()
 
     def test_idempotent_second_apply(self, xray_env: Path) -> None:
@@ -295,10 +300,15 @@ class TestXHTTPShareLink:
             "xhttp-dev", transport="xhttp", state_path=state_path
         )
         assert result["transport"] == "xhttp"
+        # path в ссылке — из state extra.path (рандомный секрет), не литерал
+        from src.gateway.store import load_state
+
+        state_path_value = load_state(state_path).protocols["xhttp"]["extra"]["path"]
+        assert state_path_value != "/xhttp"
         assert result["share_link"] == (
             f"vless://{result['uuid']}@{DOMAIN}:443"
             f"?security=tls&network=xhttp&sni={DOMAIN}&fp=chrome"
-            f"&path=/xhttp&type=xhttp#xhttp-dev"
+            f"&path={state_path_value}&type=xhttp#xhttp-dev"
         )
         config = json.loads((xray_env / "config.json").read_text(encoding="utf-8"))
         xhttp_clients = config["inbounds"][1]["settings"]["clients"]
@@ -310,7 +320,7 @@ class TestXHTTPShareLink:
         state_path = str(xray_env / "state.json")
         install.add_transport_xhttp(DOMAIN, state_path=state_path, apply=True)
         meta = load_state(state_path).protocols["xhttp"]
-        assert meta["extra"] == {"path": "/xhttp"}
+        assert re.fullmatch(r"/[0-9a-f]{16,24}", meta["extra"]["path"])
 
     def test_add_client_xhttp_without_transport_refuses(self, xray_env: Path) -> None:
         state_path = str(xray_env / "state.json")

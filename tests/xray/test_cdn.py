@@ -215,7 +215,12 @@ class TestInstallCdn:
         assert argvs == [
             expected_test,
             f"systemctl restart {cdn.XRAY_UNIT}",
-            "ufw allow 2053/tcp",
+        ] + [
+            f"ufw allow from {cidr} to any port 2053 proto tcp"
+            for cidr in cdn.CLOUDFLARE_NETWORKS_V4
+        ] + [
+            # после успешного CF-набора снимаем широкое правило (миграция)
+            "ufw delete allow 2053/tcp",
         ]
 
         config = json.loads(cdn.XRAY_CONFIG_PATH.read_text(encoding="utf-8"))
@@ -589,6 +594,10 @@ class TestRemoveCdn:
         assert argvs == [
             f"{cdn.XRAY_BIN_PATH} run -test -config {cdn.XRAY_CONFIG_PATH}",
             f"systemctl restart {cdn.XRAY_UNIT}",
+        ] + [
+            f"ufw delete allow from {cidr} to any port 2053 proto tcp"
+            for cidr in cdn.CLOUDFLARE_NETWORKS_V4
+        ] + [
             "ufw delete allow 2053/tcp",
         ]
 

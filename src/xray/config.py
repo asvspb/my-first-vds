@@ -33,8 +33,9 @@ DEFAULT_SNI = "www.google.com"
 DEFAULT_PORT = 443
 FLOW = "xtls-rprx-vision"
 XHTTP_MODES = ("fallback", "port")
-# Фиксированный path XHTTP (дельта WP-3, вердикт архитектора 2026-11-09):
-# без параметризации в этом цикле; смена — коммитом + state (extra.path).
+# Дефолтный path XHTTP: только для существующих установок при миграции и как
+# поле-дефолт XrayConfigParams. Новые add-transport получают рандомный путь
+# (core.secrets.gen_secret_path, SPEC-20261116-surface-hardening §2.1).
 XHTTP_PATH = "/xhttp"
 
 CDN_DEFAULT_PORT = CDN_ORIGIN_PORT_DEFAULT
@@ -68,6 +69,11 @@ class XrayConfigParams:
     key_path: str = ""
     xhttp_client_ids: list[str] = field(default_factory=list)
     xhttp_mode: str = "fallback"
+    # Путь XHTTP — секрет (SPEC-20261116-surface-hardening §2.1): рандомизируется
+    # при add-transport, наследуется из state/config.json при перерендере.
+    # Литерал XHTTP_PATH — дефолт для существующих установок (миграция без
+    # ломки выданных ссылок).
+    xhttp_path: str = XHTTP_PATH
     xhttp_port: int = XHTTP_INTERNAL_PORT
     xhttp_bind: str = XRAY_HTTP_BIND
     cdn_enabled: bool = False
@@ -88,7 +94,7 @@ def _xhttp_inbound(params: XrayConfigParams) -> dict:
     stream: dict = {
         "network": "xhttp",
         "security": "tls",
-        "xhttpSettings": {"path": XHTTP_PATH},
+        "xhttpSettings": {"path": params.xhttp_path},
         "tlsSettings": {
             "certificates": [
                 {
