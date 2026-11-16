@@ -722,6 +722,37 @@ class TestSshPortPhaseA:
         rc = ufw.run_ssh_port(49222, finalize=False, apply=True, state_path=state_path)
         assert rc == 1
         assert "ufw-ssh-port" not in load_state(state_path).protocols
+        # HF-SSH: откат сам поднимает демон, а не просит руками
+        assert ["systemctl", "restart", "ssh"] in fake.calls
+        assert ["systemctl", "start", "ssh"] in fake.calls
+
+    def test_phase_a_socket_failure_restarts_socket_automatically(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Пост-мортем asv1: если ssh.socket упал, откат обязан его поднять."""
+        fake = _wire(FakeUfw(ss_lines=[], ssh_socket=True), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        save_state(_gateway_state(), state_path)
+        rc = ufw.run_ssh_port(49222, finalize=False, apply=True, state_path=state_path)
+        assert rc == 1
+        restarts = [c for c in fake.calls if c == ["systemctl", "restart", "ssh.socket"]]
+        assert len(restarts) >= 2  # первичный + откатный
+        assert ["systemctl", "start", "ssh"] in fake.calls
+        assert not ufw.UFW_SOCKET_DROPIN.exists()
+
+    def test_phase_a_socket_dropin_is_0644(
+        self, fake_paths: Path, root: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """systemd требует 0644 для unit drop-in; 0600 даёт world-inaccessible."""
+        fake = _wire(FakeUfw(
+            ss_lines=['LISTEN 0 128 0.0.0.0:49222 0.0.0.0:* users:(("sshd",pid=9))'],
+            ssh_socket=True,
+        ), monkeypatch)
+        state_path = str(fake_paths / "state.json")
+        save_state(_gateway_state(), state_path)
+        rc = ufw.run_ssh_port(49222, finalize=False, apply=True, state_path=state_path)
+        assert rc == 0
+        assert (ufw.UFW_SOCKET_DROPIN.stat().st_mode & 0o777) == 0o644
 
     def test_transfer_and_finalize_not_combinable(self, fake_paths: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _wire(FakeUfw(), monkeypatch)

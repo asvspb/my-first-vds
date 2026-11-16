@@ -141,7 +141,7 @@ vds wireguard install        # Установить WireGuard VPN
 vds server-setup             # Мастер первичной настройки (легаси — для файрвола используйте ufw harden)
 vds cleanup                  # Очистка системы (логи, кэши, Docker)
 vds system ufw harden --profile gateway       # UFW hardening (dry-run; --apply применить; hop 20000-20500 → 20000:20500)
-vds system ufw ssh-port --to 49222 --apply    # двухфазный перенос SSH (22 закрывает --finalize)
+vds system ufw ssh-port --to 49222 --apply    # двухфазный перенос SSH (22 закрывает --finalize; при сбое Фазы A демон поднимается авто)
 vds system ufw status                         # сводка UFW + pending-перенос
 vds system ufw lock-443 --reason "RU-PROBE-SUSPECT" --apply   # изоляция 443 (TTL 48h; AWG/CDN/ssh живы)
 vds system ufw lock-443 --allow-from 203.0.113.10 --ttl 24h --apply  # 443 только для своих

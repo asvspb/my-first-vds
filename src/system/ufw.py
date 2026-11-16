@@ -972,8 +972,14 @@ def render_socket_dropin(port: int, keep_22: bool = True) -> str:
     return f"[Socket]\nListenStream=\n{lines}\n"
 
 
-def _write_0600(path: Path, content: str, backup_dir: Path) -> Optional[str]:
-    """Атомарная запись 0600 + бэкап прежнего содержимого; возвращает путь бэкапа или None."""
+def _write_0600(
+    path: Path, content: str, backup_dir: Path, mode: int = 0o600
+) -> Optional[str]:
+    """Атомарная запись (по умолчанию 0600) + бэкап прежнего содержимого.
+
+    Unit drop-in-ы systemd обязаны быть 0644: 0600 даёт предупреждение
+    «world-inaccessible» и может привести к отказу юнита.
+    """
     backup_dir.mkdir(parents=True, exist_ok=True)
     backup_path: Optional[Path] = None
     if path.is_file():
@@ -984,7 +990,7 @@ def _write_0600(path: Path, content: str, backup_dir: Path) -> Optional[str]:
             return backup_path.as_posix() if backup_path else None  # идемпотентно
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(content)
@@ -1117,7 +1123,7 @@ def _ssh_finalize(state: GatewayState, apply: bool, state_path: Optional[str], l
             res = run_list(["sshd", "-t"], timeout=10)
             _check(res, "sshd -t (финальный конфиг)")
             if ssh_socket_active():
-                _write_0600(UFW_SOCKET_DROPIN, render_socket_dropin(port, keep_22=False), backup_dir)
+                _write_0600(UFW_SOCKET_DROPIN, render_socket_dropin(port, keep_22=False), backup_dir, mode=0o644)
                 for args in (["systemctl", "daemon-reload"], ["systemctl", "restart", "ssh.socket"]):
                     r = run_list(args, timeout=20)
                     _check(r, " ".join(args))
@@ -1134,7 +1140,7 @@ def _ssh_finalize(state: GatewayState, apply: bool, state_path: Optional[str], l
             try:
                 _write_0600(UFW_SSHD_CONF, render_sshd_port_conf(port, keep_22=True), backup_dir)
                 if ssh_socket_active():
-                    _write_0600(UFW_SOCKET_DROPIN, render_socket_dropin(port, keep_22=True), backup_dir)
+                    _write_0600(UFW_SOCKET_DROPIN, render_socket_dropin(port, keep_22=True), backup_dir, mode=0o644)
                     run_list(["systemctl", "daemon-reload"], timeout=20)
                     run_list(["systemctl", "restart", "ssh.socket"], timeout=20)
                 else:
@@ -1222,6 +1228,9 @@ def _ssh_phase_a(state: GatewayState, port: int, apply: bool, state_path: Option
         return 0
 
     with FileLock(lock_path):
+        # Фиксируем режим ДО restart: после падения ssh.socket is-active уже
+        # вернёт False, и откат выберет не тот юнит (пост-мортем asv1).
+        was_socket = ssh_socket_active()
         backup_dir = Path(state_path or STATE_PATH).parent / "ufw-ssh-backups"
         sshd_backup: Optional[str] = None
         sshd_had_backup = False
@@ -1253,9 +1262,10 @@ def _ssh_phase_a(state: GatewayState, port: int, apply: bool, state_path: Option
 
             # 3) Ubuntu 24.04 socket-activation ветвление (SPEC §1.7.3);
             #    drop-in dual-listen: ListenStream= 22 и N
-            if ssh_socket_active():
+            if was_socket:
                 socket_backup = _write_0600(
-                    UFW_SOCKET_DROPIN, render_socket_dropin(port, keep_22=True), backup_dir
+                    UFW_SOCKET_DROPIN, render_socket_dropin(port, keep_22=True),
+                    backup_dir, mode=0o644,
                 )
                 socket_had_backup = socket_backup is not None
                 for args in (
@@ -1282,7 +1292,7 @@ def _ssh_phase_a(state: GatewayState, port: int, apply: bool, state_path: Option
                 "legacy_22_still_open": True,
                 "dual_listen": True,
                 "sshd_conf_backup": sshd_backup or "",
-                "socket_dropin": UFW_SOCKET_DROPIN.as_posix() if ssh_socket_active() else "",
+                "socket_dropin": UFW_SOCKET_DROPIN.as_posix() if was_socket else "",
                 "ts": _now_iso(),
             }
             save_state(state, state_path)
@@ -1291,10 +1301,27 @@ def _ssh_phase_a(state: GatewayState, port: int, apply: bool, state_path: Option
             if apply:
                 _restore(UFW_SSHD_CONF, sshd_backup, sshd_had_backup)
                 _restore(UFW_SOCKET_DROPIN, socket_backup, socket_had_backup)
-                console.print(
-                    "[info][ufw-ssh] Конфиги восстановлены из бэкапов; выполните "
-                    f"`systemctl restart ssh{'.socket' if ssh_socket_active() else ''}` вручную.[/info]"
-                )
+                # HF-SSH (пост-мортем asv1): откат обязан сам поднять демон.
+                # Иначе после падения ssh.socket узел остаётся без 22/49222
+                # и текущая сессия — последняя.
+                run_list(["systemctl", "daemon-reload"], timeout=20)
+                if was_socket:
+                    run_list(["systemctl", "restart", "ssh.socket"], timeout=20)
+                else:
+                    run_list(["systemctl", "restart", "ssh"], timeout=20)
+                if not port_listening(LEGACY_SSH_PORT):
+                    run_list(["systemctl", "start", "ssh"], timeout=20)
+                if port_listening(LEGACY_SSH_PORT):
+                    console.print(
+                        "[success][ufw-ssh] Конфиги восстановлены; ssh на 22 "
+                        "поднят автоматически.[/success]"
+                    )
+                else:
+                    console.print(
+                        "[error][ufw-ssh] Конфиги восстановлены, но 22 не слушается — "
+                        "нужен консольный доступ: systemctl restart ssh.service "
+                        "(или ssh.socket).[/error]"
+                    )
             return 1
 
     console.print(

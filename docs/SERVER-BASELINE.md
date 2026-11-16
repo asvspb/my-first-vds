@@ -225,7 +225,10 @@ destination-unreachable / time-exceeded / parameter-problem / icmp type 3 code 4
    (**dual-listen: Port 22 + Port 49222**, вход по 22 гарантированно жив даже при
    режущем 49222 провайдер-файрволе) → `sshd -t` → ssh.socket drop-in (Ubuntu
    24.04: `ListenStream=` сброс + 22 + 49222) или `restart ssh` → ss-чек →
-   pending-маркер → команда останавливается.
+   pending-маркер → команда останавливается. Drop-in systemd пишется **0644**
+   (0600 → «world-inaccessible»). При любом сбое Фазы A откат **сам** делает
+   `daemon-reload` + `restart ssh.socket`/`ssh` + fallback `start ssh`, а не
+   просит руками (пост-мортем asv1: иначе узел терял и 22, и 49222).
 2. Владелец проверяет вход на 49222 **со ВТОРОГО терминала** (пока 22 жив, откат
    безопасен; при режущем 49222 облачном файрволе хостера — открыть порт в панели).
 3. **Фаза B:** `sudo vds system ufw ssh-port --finalize --apply` — порядок:

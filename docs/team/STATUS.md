@@ -83,6 +83,10 @@
   gateway-профиль (ADR-011), SSH → 49222, /48 IPv6, LE `asv2.asvpersonal.ru`
   (Hy2 secure, без insecure=1). **asv1 удалён 2026-11-16** — настройка
   пропущена, единственный боевой exit — asv2.
+- **asv2: состав транспортов (2026-11-16):** оставить Reality 443/tcp +
+  Hysteria2 443/udp + AmneziaWG 51825/udp; XHTTP :8443 и CDN :2053 не
+  поднимать до GR-07 Self-Steal — иначе Cross_Port_Cert_Conflict на
+  единственном боевом узле.
 - **asv2: Wave 0 + W1-1 выкачены 2026-11-16** (`4fb1956`): HF-1 verified
   sessions, HF-2 (код; xhttp/cdn на asv2 нет), W1-1 probers4
   `{443,8443,2053}` + extra-счётчики. Юниты пере-рендерены с venv;
