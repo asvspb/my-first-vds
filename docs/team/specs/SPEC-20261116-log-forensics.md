@@ -229,7 +229,7 @@ TCP-443 TLS-payload при живом UDP-443 (§5.9). Без временных
 | journal: `sshd` | `journalctl -u ssh` | failed/invalid (шум для контекста) | ≤50k |
 | nft | `nft -j list table inet vds_probe` | счётчики/сеты | один JSON |
 | nft ruleset | `nft -j list ruleset` | счётчики правил UFW/relay/nat | один JSON |
-| probe-watch | **НЕ вызывать `watch`** (ревью M1: он мутирует снапшот+threat и съедает дельту окна таймера → может сорвать RU-SUSPECT-гистерезис). Collect читает `/var/lib/vds/probe-watch.json` + `nft -j list table inet vds_probe` и считает дельту in-process чистым `compute_delta(current, snapshot)` БЕЗ save_snapshot/update_threat; в bundle: вердикт последнего тика + поле `computed_by: logs-collect (read-only)` | один JSON |
+| probe-watch | **НЕ вызывать `watch`** (ревью M1: он мутирует снапшот+threat и съедает дельту окна таймера → может сорвать RU-SUSPECT-гистерезис). Collect читает `/var/lib/vds/probe-watch.json` + `nft -j list table inet vds_probe` и считает дельту in-process чистым `compute_delta(current, snapshot)` БЕЗ save_snapshot/update_threat; в bundle: вердикт последнего тика + поле `computed_by: logs-collect (read-only)` | вердикт/threat/lockdown | один JSON |
 | snapshot | `/var/lib/vds/probe-watch.json` | история baseline/threat | один JSON |
 | ss | `ss -Htn state established '( sport = :443 )'`, `ss -s` | ESTAB/SYN-RECV/очереди | мгновенно |
 | nstat | `nstat -asz` (обязательно `-s`/`--no-update`: без него nstat СБРАСЫВАЕТ базовую линию в /tmp/.nstat.u0 и sample/collect обнуляют дельты друг друга; альтернатива — читать /proc/net/snmp+/proc/net/netstat напрямую) | TcpExt/Udp/Ip кумулятивные счётчики с бута | один дамп |
@@ -303,7 +303,8 @@ TCP-443 TLS-payload при живом UDP-443 (§5.9). Без временных
   "window_s": 300,
   "nft": {"syn_bare": 812, "syn_valid": 37, "udp_443": 10422,
           "probers": 19, "probers_ru": 2, "per_element": true},
-  "ss": {"estab_443": 4, "synrecv_443": 0}, "awg": {"peers_fresh_lt180s": 1}  # estab_51825 НЕ СУЩЕСТВУЕТ: 51825=UDP, у WG-сокета состояние UNCONN; активность AWG = свежесть latest-handshakes (<180с)
+  "ss": {"estab_443": 4, "synrecv_443": 0},
+  "awg": {"peers_fresh_lt180s": 1},
   "net": {"eth0": {"rx_b": 81234567, "tx_b": 90123456,
                     "rx_d": 0, "tx_d": 0, "rx_e": 0, "tx_e": 0}},
   "nstat": {"TcpRetransSegs": 12, "TcpOutSegs": 98000,
@@ -317,6 +318,10 @@ TCP-443 TLS-payload при живом UDP-443 (§5.9). Без временных
   "threat": "quiet"
 }
 ```
+
+**Примечание:** `estab_51825` не существует — 51825/UDP, у WG-сокета
+состояние `UNCONN`; активность AWG измеряется свежестью
+`latest-handshakes` (<180 с), а не `ss`-состоянием.
 
 Счётчики nft — **кумулятивные** значения; анализатор считает дельты между
 соседними сэмплами (как `compute_delta` в `probing`), отрицательная дельта
@@ -466,6 +471,12 @@ T-16 при cold-start baseline не срабатывает (все шаблон
 Пороги — константы `src/logs/rules.py`; override —
 `/etc/vds-forensics/rules.json` (JSON, валидируется схемой, `rules_hash`
 печатается в отчёте). Менять пороги «на ходу» без версии нельзя.
+
+**Аддитивное расширение (proposal, G2):** packet-level правила
+**T-18…T-23** (RST-инъекция, silent ClientHello drop, соседние порты,
+UDP response blackhole, Send-Q freeze, L3-бан) и поле `stage` —
+[SPEC-20261116-survivability](SPEC-20261116-survivability.md) §4.
+T-01…T-17 не пересматриваются.
 
 ### 7.6. Корреляция, уверенность, вердикт
 
@@ -851,8 +862,9 @@ exit+relay в один отчёт — non-goal v1: разные vantage и ча�
 | WP-2 | Сэмплер и телеметрия: парсеры nft/ss/nstat/ip/systemctl, store/rotation, юниты | `sample.py`, `paths.py`, `systemd/vds-logs-*`, `tests/logs/` | WP-1 | sample 5 мин, ротация 7 дней, reboot-гейт; дельты/reset |
 | WP-3 | Анализ: normalize/templates, enrich, rules T-01…T-17, baseline, correlate, report JSON/MD | `normalize.py`, `enrich.py`, `rules.py`, `baseline.py`, `correlate.py`, `report.py`, `tests/logs/` | WP-1, WP-2 | golden-тест детерминизма; все правила positive/negative; AC-1/AC-4 |
 | WP-4 | Pcap: bounded capture, stdlib-парсер, tshark-адаптер, T-07/T-08 | `pcap.py`, `systemd/` (если нужно), `tests/logs/` | WP-2 | авто-стоп, pidfile-guard, синтетический pcap, metadata-only |
-| WP-2+ | расширяет paths.py/tests/logs, НЕ меняя контракта WP-1 (ревью G2) |
 | WP-5 | Документация/интеграция: `docs/LOG-FORENSICS.md`, ADR-012, правки SERVER-BASELINE §5.13/§5.8, DEPLOY/MIGRATE, README/AGENTS, CENSORSHIP-PATTERNS, doc-sync-правило | docs | WP-1…WP-4 | приёмка на asv2 §12.3; `docsync audit` (если принят) зелёный |
+
+**WP-2+** (ревью G2): расширяет `paths.py`/`tests/logs`, не меняя контракта WP-1.
 
 Границы: WP-1/2 не меняют анализ; WP-3 не трогает сбор; WP-4 изолирован;
 WP-5 не меняет код runtime.

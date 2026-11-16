@@ -25,6 +25,9 @@
 - **Технические поправки:** `TcpInRsts` в nstat нет (есть `TcpEstabResets`/
   `TcpExtEmbryonicRsts`/`TcpOutRsts`); `syn_valid` не видит ClientHello;
   Δt<15 мс — сильная улика, абсолютным делает RTT-floor + TTL/TSopt/seq.
+- **Ревью:** [ARCH-20261116-tspu-blindspots](reports/ARCH-20261116-tspu-blindspots.md) —
+  8 слепых пятен глазами инженера ТСПУ (вход для intake; P0-кандидаты:
+  Self-DoS в probe-watch, демаскировка 8443/2053, конфликт SNI/LE).
 - **Дальше:** G2 → WP-S1/S2 (детект+stage) → WP-S3 (surface audit) →
   WP-S4 (canary); SPA (WP-S5) — только после приёмки probe-response v1.
 
@@ -54,7 +57,8 @@
   создаётся в WP-G0.
 - **Доклад для G2-аудитории:**
   [BRIEF-20261116-vpn-guard](reports/BRIEF-20261116-vpn-guard.md) — 13 слайдов,
-  тезисы, риски и 6 вопросов к архитектору/техлиду.
+  тезисы, риски и 6 вопросов к архитектору/техлиду. Промпт напарника
+  (архитектор+техлид+ревьюер): [PROMPT-20261116-vpn-guard-arch-lead](reports/PROMPT-20261116-vpn-guard-arch-lead.md).
 - **Дальше:** WP-G0 (ADR-014 + схемы + `packages`) → WP-G1 ∥ WP-G2 →
   WP-G3 (правила) → WP-G4 (корреляция + server verdict) → WP-G5 →
   WP-G6 (7 дней поля). AC-1…AC-17 — §14.2.
