@@ -7,8 +7,8 @@
 > SSH 49222), `RELAY_DOMAIN` = `relay.asvpersonal.ru`, `RU_SNI` — RU-сайт
 > same-DC хостера. **asv1 (103.45.247.172) удалён 2026-11-16 — exit только asv2.**
 >
-> **Статус (2026-11-17): релей РАЗВЁРНУТ** — LandVPS `vm354051`
-> (`185.80.91.135`, AS216334, Москва), Ubuntu 22.04.5, 0.75 ГБ + 1 ГБ swap.
+> **Статус (2026-11-17, второй прогон): релей РАЗВЁРНУТ** — LandVPS `vm354051`
+> (`185.80.91.135`, AS216334, Москва), **Ubuntu 24.04.4**, 0.75 ГБ + 1.5 ГБ swap.
 > Юниты `vds-relay-{awg,exit,nat,policy,cidr}` + `vds-xray` active, UFW
 > профиль relay применён. Gate-приёмка [Фазы 0](team/reports/TEST-20261117-ru-relay-gate.md),
 > раскатка — [DEPLOY-отчёт](team/reports/DEPLOY-20261117-ru-relay-landvps.md).
@@ -101,11 +101,12 @@ ssh asv2 'vds amneziawg remove-client relay-smoke --apply'
 Проверено на чистом Ubuntu 22.04 cloud image. Все пункты уже учтены в коде
 (`HF-REL-1..4`), ручной ранбук ниже — для случая «CLI недоступен».
 
-1. **`iptables` может отсутствовать.** Минимальный образ без `iptables`:
+1. **`iptables` может отсутствовать.** Минимальный образ 22.04 без `iptables`:
    `vds-relay-nat.service` падает с `status=127 / iptables: not found`, и
    релей остаётся без NAT/policy (трафик клиентов уходит напрямую).
    `relay init` теперь доустанавливает пакет сам; при ручном пути —
    `apt-get install -y iptables` ДО `systemctl start vds-relay-nat`.
+   На **24.04** `iptables`/`ufw` стоят из коробки — проверено 2026-11-17.
 2. **`policy-routing` привязан к интерфейсу awg1.** `ip route replace default
    dev awg1 table 100` исчезает при любом `restart vds-relay-exit`
    (ядро удаляет маршрут вместе с link), а oneshot-юнит с

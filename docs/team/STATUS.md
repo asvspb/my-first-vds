@@ -105,7 +105,8 @@
   venv → `sys.executable` → PATH; проверено на asv2 install с чистым
   системным PATH — юниты рендерятся с venv, `systemctl --failed` = 0.
 - **RU-relay: РАЗВЁРНУТ 2026-11-17** — LandVPS `vm354051`
-  (`185.80.91.135`, AS216334, Москва), Ubuntu 22.04.5, 1 ГБ swap;
+  (`185.80.91.135`, AS216334, Москва), **Ubuntu 24.04.4** (переустановка
+  шаблона 2026-11-17, второй прогон — без ошибок), 512 МБ + 1 ГБ swap;
   `vds-relay-{awg,exit,nat,policy,cidr}` + `vds-xray` active, UFW профиль
   relay, RU-CIDR 8664 агрегата. Живые проверки: клиент через релей →
   egress `213.108.23.119` (asv2), RU-сайты direct (ya.ru 0.13 с), фолбэк
@@ -113,9 +114,11 @@
   (iptables на cloud-образе, идемпотентные порты, потеря public_key,
   потеря policy-маршрута при рестарте ноги → `PartOf=`). Отчёт:
   [DEPLOY-20261117-ru-relay-landvps](reports/DEPLOY-20261117-ru-relay-landvps.md).
-  Открыто: DNS `relay.asvpersonal.ru` (A, DNS-only) — владелец; решение
-  ОС 24.04 vs 22.04; смена паролей панели/root; TECHDEBT P20 (remove-client).
-  Reboot-тест PASS: 6/6 юнитов, policy-маршрут и NAT восстанавливаются сами.
+  Открыто: DNS `relay.asvpersonal.ru` (A, DNS-only) — владелец; смена
+  паролей панели/root; TECHDEBT P20 (remove-client). ОС закрыта: 24.04.4.
+  Reboot-тест PASS (дважды — 22.04 и 24.04): 6/6 юнитов, policy-маршрут и
+  NAT восстанавливаются сами. Клиенты перевыпущены (`~/.awg/relay.conf`,
+  профиль `relay-reality`).
   **Ранбук обновлён 2026-11-17:** тариф LandVPS RU-1 (KVM, 1 ГБ/20 ГБ,
   1 месяц до года, swap при 0.75 ГБ), 5-мин gate §0.3 через **asv2
   (213.108.23.119:51825)**, anti-DDoS UDP-проверка; asv1-IP удалён из команд.
