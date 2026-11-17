@@ -447,7 +447,7 @@ tshark -r /var/tmp/tspu_probes.pcap -Y "tls.handshake.type == 1" -V
 недавнего роста `rx` старый handshake — `idle`, не алерт); активный `lock-443`.
 
 **Проверка:** `sudo vds alert status` (каналы/юниты/coverage, `--json` без
-секретов); `sudo vds alert test [--channel smtp]` — реальная отправка без
+секретов; без root — урезанный вид, `alert.env` 0600 не читается); `sudo vds alert test [--channel smtp]` — реальная отправка без
 записи state; `journalctl -u vds-alert-watch` — теги `ALERT-SENT / ALERT-FAILED /
 ALERT-SKIP`. Ручной тик — только `sudo vds alert watch --no-send`.
 

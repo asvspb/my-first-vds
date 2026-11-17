@@ -204,6 +204,7 @@ vds alert install --channel smtp --apply   # только почта (telegram �
 vds alert test                      # Тестовое сообщение во все активные каналы (root)
 vds alert test --channel smtp       # Проверить именно почту (App Password)
 vds alert status                    # Каналы/юниты/coverage; --json — без секретов
+                                   #   без root — урезанно: alert.env 0600 не читается
 vds alert watch --no-send           # Один тик без отправки и без записи state (отладка)
 vds alert remove --apply            # Снять юниты (alert.env сохраняется; --purge — удалить)
 # Секреты сторожа живут только в /etc/vds/alert.env (0600); в юнит не попадают.
