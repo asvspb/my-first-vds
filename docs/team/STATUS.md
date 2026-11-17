@@ -124,6 +124,8 @@
   релей, `vpn start relay` гасит vpnm-*/AWG-split/xsplit), `vpn down` не
   трогает `vpn-guard.service`; режим в `vpnm.mode/1` (`mode.json`), guard
   читает его как подсказку, `activity.json` остаётся probe-маркером.
+  Живой preflight на ноутбуке: без `sudo -n` `vpn start relay` → exit 1,
+  прямой контур (`asv2-reality` + `@laptop`) не изменён.
   **Ранбук обновлён 2026-11-17:** тариф LandVPS RU-1 (KVM, 1 ГБ/20 ГБ,
   1 месяц до года, swap при 0.75 ГБ), 5-мин gate §0.3 через **asv2
   (213.108.23.119:51825)**, anti-DDoS UDP-проверка; asv1-IP удалён из команд.
