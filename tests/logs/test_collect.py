@@ -145,3 +145,32 @@ class TestDiskCap:
         lines = path.read_text().splitlines()
         assert len(lines) == 1
         assert json.loads(lines[0])["res"]["disk_pct"] == 41
+
+
+class TestAlertWatchVisibility:
+    """WP-6 SPEC-20261117-alert-watch: сторож виден в конвейере ADR-012."""
+
+    def test_alert_unit_in_watch_units(self):
+        from src.alert.paths import ALERT_UNIT
+        from src.logs.collect import WATCH_UNITS
+
+        assert ALERT_UNIT in WATCH_UNITS
+
+    def test_alert_unit_collected_and_in_bundle_excerpt(self, monkeypatch, tmp_path):
+        from src.alert.paths import ALERT_UNIT
+        from src.logs.collect import collect_event
+
+        snap = tmp_path / "probe-watch.json"
+        snap.write_text(json.dumps({"version": 2, "ts": "2026-11-16T11:00:00"}), encoding="utf-8")
+
+        run = FakeRunner({
+            ("systemctl", "show", ALERT_UNIT): _res("active\n"),
+            ("journalctl",): _res("ALERT-SENT smtp heartbeat\n"),
+            ("hostname",): _res("asv2\n"),
+        })
+        event, _coverage = collect_event(
+            run=run, now=NOW, snapshot_path=snap, journal_excerpt=True
+        )
+        assert event["units"][ALERT_UNIT]["state"] == "active"
+        assert "journal_excerpt" in event
+        assert ALERT_UNIT in event["journal_excerpt"]

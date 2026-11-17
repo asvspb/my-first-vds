@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from src.alert.paths import ALERT_UNIT
 from src.core.logger import console
 from src.core.shell import ShellResult, run_list
 from src.logs import paths as logs_paths
@@ -59,6 +60,9 @@ WATCH_UNITS = (
     "vds-hysteria2-hop.service",
     "vds-amneziawg.service",
     "vds-relay-exit.service",
+    # Сторож угрозы (SPEC-20261117-alert-watch WP-6, OQ-9): его состояние и
+    # ALERT-* теги попадают в телеметрию/бандл ADR-012.
+    ALERT_UNIT,
 )
 
 AWG_HANDSHAKE_FRESH_S = 180  # peers_fresh_lt180s (§6.1)
@@ -485,7 +489,7 @@ def collect_event(
     if journal_excerpt:
         excerpts = {
             unit: _collect_redacted_journal_excerpt(run, unit)
-            for unit in ("vds-xray.service", "vds-hysteria2.service")
+            for unit in ("vds-xray.service", "vds-hysteria2.service", ALERT_UNIT)
         }
         kernel = _collect_redacted_journal_excerpt(run, "kernel", lines=10)
         excerpts["kernel"] = kernel
