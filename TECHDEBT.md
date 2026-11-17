@@ -377,3 +377,18 @@ read→modify→replace не сериализован: при совпадени
 `threading.Lock` (или один writer-поток) и добавить тест на lost-update.
 **Критерий:** 4 потока × 100 save → итоговый `cursor.json` содержит
 последний курсор каждого источника, без потерянных обновлений.
+
+## P20 — `vds relay remove-client` отсутствует (2026-11-17)
+
+**Факт.** У AWG-сервера релея есть только `vds relay add-client`; удалить пир
+можно лишь правкой `/etc/amnezia/awg0.conf` + `systemctl restart
+vds-relay-awg` (так удалён тестовый `smoke-asv2` при раскатке LandVPS).
+Для gateway-профиля аналогичная команда есть (`vds amneziawg remove-client`).
+
+**Действие.** Добавить `vds relay remove-client NAME [--apply]` по образцу
+`src/amneziawg/clients.py::remove_client`: убрать `[Peer]`-блок по
+`AllowedIPs` пира, атомарная запись 0600, restart юнита, `--dry-run` по
+умолчанию, запись в state-метаданные клиентов.
+
+**Критерий.** Пиры: добавить → удалить → в конфиге и в `awg show awg0` нет
+пира, остальные не тронуты; повторный `remove` идемпотентен.

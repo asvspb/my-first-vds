@@ -28,8 +28,11 @@ Fail-fast: первая ошибка — печать шага и exit 1; сек
 import ipaddress
 import os
 import random
-import socket
+import re
+import shlex
 import shutil
+import socket
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -75,12 +78,39 @@ class RelayInitError(Exception):
 # Preflight (read-only)
 # ---------------------------------------------------------------------------
 
+#: Целевой порт 443 занят НАШИМ юнитом (Reality tcp / AWG-сервер udp) —
+#: повторный `relay init` должен быть идемпотентным (AGENTS §5.7).
+_OWN_UNIT_BY_PROTO = {"tcp": "vds-xray.service", "udp": "vds-relay-awg.service"}
+
+
+def _own_unit_active(proto: str) -> bool:
+    """Активен ли наш юнит, штатно владеющий 443/<proto>?"""
+    unit = _OWN_UNIT_BY_PROTO.get(proto)
+    if not unit:
+        return False
+    return run_list(["systemctl", "is-active", "--quiet", unit], timeout=10).ok
+
+
 def _check_ports() -> list[dict]:
-    """Порты 443 TCP/UDP свободны? (preflight ДО любых изменений, паттерн E1)."""
+    """Порты 443 TCP/UDP свободны? (preflight ДО любых изменений, паттерн E1).
+
+    Идемпотентность: если 443 уже держит наш собственный юнит (vds-xray для
+    tcp, vds-relay-awg для udp), это не «чужой» конфликт — повторный
+    `relay init --apply` продолжает с незавершённого шага (живой случай
+    LandVPS 2026-11-17: после падения NAT-шага повтор блокировался портом).
+    """
     checks = []
     for proto in ("tcp", "udp"):
         if port_free(RELAY_PORT, proto):
             checks.append({"name": f"порт {RELAY_PORT}/{proto}", "ok": True, "detail": "свободен"})
+        elif _own_unit_active(proto):
+            checks.append(
+                {
+                    "name": f"порт {RELAY_PORT}/{proto}",
+                    "ok": True,
+                    "detail": f"занят нашим {_OWN_UNIT_BY_PROTO[proto]} (повтор init)",
+                }
+            )
         else:
             owner = port_owner(RELAY_PORT, proto)
             checks.append(
@@ -122,7 +152,7 @@ def _check_exit_conf(path: Optional[str]) -> dict:
         return {
             "name": "awg1-конфиг",
             "ok": False,
-            "detail": "не передан --exit-conf: сначала на asv1 выполните "
+            "detail": "не передан --exit-conf: сначала на exit-ноде выполните "
             "`vds amneziawg add-client relay` и заберите .conf",
         }
     try:
@@ -140,7 +170,9 @@ def _check_exit_conf(path: Optional[str]) -> dict:
 def preflight_checks(args: RelayArgs) -> list[dict]:
     """Все read-only проверки; root НЕ проверяется здесь (см. run_init)."""
     checks: list[dict] = []
-    checks.append({"name": "exit-IP", "ok": True, "detail": f"{args.exit_ip}:{args.exit_port} (asv1)"})
+    checks.append(
+        {"name": "exit-IP", "ok": True, "detail": f"{args.exit_ip}:{args.exit_port} (exit-нога)"}
+    )
     checks.extend(_check_ports())
     checks.append(_check_dns(args.domain))
     checks.append(_check_exit_conf(args.exit_conf))
@@ -207,16 +239,103 @@ def _installed_awg_server() -> bool:
     )
 
 
+#: Ключи обфускации AmneziaWG, которые обязаны совпадать у сервера и клиента.
+_AWG_OBF_KEYS = ("Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4")
+
+
+def _awg_meta_from_config(args: RelayArgs) -> dict:
+    """Восстановить метаданные установленного AWG-сервера из его конфига.
+
+    Нужно для идемпотентного повтора: если первый `relay init --apply` упал
+    ПОСЛЕ создания конфига, но ДО `_save_relay_state` (живой случай LandVPS
+    2026-11-17 — NAT-юнит без iptables), state пуст, и `relay add-client`
+    падал с «нет public_key». Читаем конфиг: public_key выводим из
+    PrivateKey через `awg pubkey` (приватный ключ — только в tmp-файле 0600).
+    """
+    text = RELAY_CONFIG_PATH.read_text(encoding="utf-8")
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip()
+
+    private_key = values.get("PrivateKey", "")
+    public_key = ""
+    if private_key:
+        with tempfile.TemporaryDirectory(prefix="vds-awg-") as tmp:
+            priv_file = Path(tmp) / "server-priv.tmp"
+            fd = os.open(priv_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(private_key + "\n")
+            res = run_list(
+                ["sh", "-c", f"awg pubkey < {shlex.quote(str(priv_file))}"],
+                timeout=10,
+            )
+            if not res.ok:
+                raise RelayInitError(
+                    f"awg pubkey: {res.stderr.strip() or res.stdout.strip()}"
+                )
+            public_key = res.output
+
+    address = values.get("Address", "")
+    match = re.search(r"(\d+\.\d+\.\d+\.\d+/\d+)", address)
+    subnet = RELAY_SUBNET
+    if match:
+        try:
+            subnet = str(ipaddress.ip_interface(match.group(1)).network)
+        except ValueError:
+            subnet = RELAY_SUBNET
+
+    obf: dict[str, int] = {}
+    for key in _AWG_OBF_KEYS:
+        raw = values.get(key)
+        if raw is not None and raw.lstrip("-").isdigit():
+            obf[key] = int(raw)
+
+    try:
+        port = int(values.get("ListenPort", RELAY_PORT))
+    except ValueError:
+        port = RELAY_PORT
+    try:
+        mtu = int(values.get("MTU", args.mtu))
+    except ValueError:
+        mtu = args.mtu
+
+    if not public_key:
+        raise RelayInitError(
+            f"{RELAY_CONFIG_PATH}: не удалось определить public_key AWG-сервера"
+        )
+    return {
+        "installed": True,
+        "port": port,
+        "iface": RELAY_IFACE,
+        "subnet": subnet,
+        "mtu": mtu,
+        "public_key": public_key,
+        "obfuscation": obf,
+        "psk_required": True,
+        "recovered_from_config": True,
+    }
+
+
 def _install_awg_server(args: RelayArgs, state_path: Optional[str]) -> dict:
     """Шаг 3: AWG-сервер UDP 443 (подсеть 10.10.0.0/24, MTU 1280)."""
     if _installed_awg_server():
-        state = load_state(state_path)
-        meta = state.protocols.get("relay", {})
+        meta = dict(load_state(state_path).protocols.get("relay", {}))
+        if not meta.get("public_key") and RELAY_CONFIG_PATH.is_file():
+            # Повтор после частичного сбоя: конфиг есть, state пуст/неполон.
+            meta.update(_awg_meta_from_config(args))
+            console.print(
+                "[warning][relay] state.protocols['relay'] без public_key — "
+                "метаданные восстановлены из /etc/amnezia/awg0.conf "
+                "(public_key + обфускация; повтор init идемпотентен).[/warning]"
+            )
         console.print(
             "[success][relay] AWG-сервер уже установлен и активен — конфиг не "
             "переписывается (повторный init идемпотентен).[/success]"
         )
-        return dict(meta)
+        return meta
 
     try:
         _check_kernel_headers()
@@ -283,7 +402,7 @@ def _install_exit_unit() -> bool:
     if not RELAY_EXIT_CONFIG_PATH.is_file():
         console.print(
             "[warning][relay] /etc/amnezia/awg1.conf отсутствует — юнит "
-            f"{RELAY_EXIT_UNIT} не устанавливается (перенесите конфиг с asv1 и "
+            f"{RELAY_EXIT_UNIT} не устанавливается (перенесите конфиг с exit-ноды и "
             "повторите init --apply --exit-conf).[/warning]"
         )
         return False
@@ -300,6 +419,25 @@ def _install_exit_unit() -> bool:
     return True
 
 
+def _ensure_iptables() -> None:
+    """NAT-юнит вызывает `iptables`; на минимальных cloud-шаблонах его нет.
+
+    Живой дефект раскатки LandVPS (2026-11-17, Ubuntu 22.04 cloud image):
+    `vds-relay-nat.service` падал с `status=127 / "iptables: not found"`,
+    хотя ufw/nftables в системе были. Проверяем бинарник и доставляем пакет
+    до старта юнита (идемпотентно).
+    """
+    if shutil.which("iptables") is not None:
+        return
+    console.print("[info][relay] iptables отсутствует — устанавливается (нужен NAT-юниту)…[/info]")
+    res = run_list(["apt-get", "install", "-y", "iptables"], timeout=300)
+    if not res.ok or shutil.which("iptables") is None:
+        raise RelayInitError(
+            "iptables не установлен, MASQUERADE невозможен: "
+            f"{res.stderr.strip() or res.stdout.strip()}"
+        )
+
+
 def _install_nat_unit(wan_if: str) -> None:
     """Шаг 6: MASQUERADE awg0-подсети → awg1 и → eth0 (persist-юнит)."""
     if not install_unit(
@@ -314,7 +452,7 @@ def _install_nat_unit(wan_if: str) -> None:
             f"{RELAY_NAT_UNIT}: {start.stderr.strip() or start.stdout.strip()}"
         )
     console.print(
-        f"[change][relay] MASQUERADE {RELAY_SUBNET} → {RELAY_EXIT_IFACE} (к asv1) и "
+        f"[change][relay] MASQUERADE {RELAY_SUBNET} → {RELAY_EXIT_IFACE} (к exit) и "
         f"→ {wan_if} (RU-direct) активен и персистентен.[/change]"
     )
 
@@ -401,7 +539,7 @@ def run_init(
     args = RelayArgs(exit_ip=exit_ip, domain=domain, sni=sni, exit_conf=exit_conf)
 
     if not args.exit_ip:
-        console.print("[error][relay] Обязателен --exit <asv1-ip>.[/error]")
+        console.print("[error][relay] Обязателен --exit <exit-ip>.[/error]")
         return 1
     try:
         ipaddress.ip_address(args.exit_ip)
@@ -453,6 +591,7 @@ def run_init(
             _ensure_ip_forward_relay()
             _install_exit_unit()
             wan_if = _detect_wan_iface()
+            _ensure_iptables()
             _install_nat_unit(wan_if)
             _install_policy_and_cidr()
             _save_relay_state(args, awg_meta, exit_conf_ok, wan_if, state_path)

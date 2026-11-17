@@ -104,8 +104,17 @@
   **HF-3 закрыт** (`fb3e8fe`, docs `83dc1cc`): `resolve_python()` =
   venv → `sys.executable` → PATH; проверено на asv2 install с чистым
   системным PATH — юниты рендерятся с venv, `systemctl --failed` = 0.
-- **RU-relay: код готов (WP-1..5 по SPEC/ADR-007), релей НЕ куплен** —
-  развёртывание отложено до покупки VDS; WP-6 (харднинг) в спеке.
+- **RU-relay: РАЗВЁРНУТ 2026-11-17** — LandVPS `vm354051`
+  (`185.80.91.135`, AS216334, Москва), Ubuntu 22.04.5, 1 ГБ swap;
+  `vds-relay-{awg,exit,nat,policy,cidr}` + `vds-xray` active, UFW профиль
+  relay, RU-CIDR 8664 агрегата. Живые проверки: клиент через релей →
+  egress `213.108.23.119` (asv2), RU-сайты direct (ya.ru 0.13 с), фолбэк
+  Reality SNI=ya.ru с ноутбука OK. Найдены и закрыты 4 дефекта раскатки
+  (iptables на cloud-образе, идемпотентные порты, потеря public_key,
+  потеря policy-маршрута при рестарте ноги → `PartOf=`). Отчёт:
+  [DEPLOY-20261117-ru-relay-landvps](reports/DEPLOY-20261117-ru-relay-landvps.md).
+  Открыто: DNS `relay.asvpersonal.ru` (A, DNS-only) — владелец; решение
+  ОС 24.04 vs 22.04; смена паролей панели/root; TECHDEBT P20 (remove-client).
   **Ранбук обновлён 2026-11-17:** тариф LandVPS RU-1 (KVM, 1 ГБ/20 ГБ,
   1 месяц до года, swap при 0.75 ГБ), 5-мин gate §0.3 через **asv2
   (213.108.23.119:51825)**, anti-DDoS UDP-проверка; asv1-IP удалён из команд.

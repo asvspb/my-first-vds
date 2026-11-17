@@ -175,6 +175,23 @@ RU VDS, KVM, без ограничений UDP, Москва/Питер (RTT ~10
 | W-strict | только матрица полевой проверки (§Whitelist/Test-plan); без реализации |
 | Домен | `relay.asvpersonal.ru` A-запись **DNS-only/серое облако** (CF-прокси не пропускает UDP и не-HTTP TCP) — обязательный пункт приёмки Фазы 0 |
 
+## Реализация v1 — фактические отклонения (2026-11-17, LandVPS)
+
+Релей развёрнут: `185.80.91.135` (AS216334, Москва), Ubuntu **22.04.5**,
+0.75 ГБ RAM + 1 ГБ swap. Отчёт:
+[reports/DEPLOY-20261117-ru-relay-landvps](../team/reports/DEPLOY-20261117-ru-relay-landvps.md).
+
+| пункт ADR | факт v1 | следствие |
+|---|---|---|
+| ОС Ubuntu 24.04 | **22.04.5** (шаблон хостера) | код совместим (Python 3.10, systemd 249, ssh без socket-активации); решение «переустановить на 24.04» — за владельцем |
+| exit-нога | **asv2 213.108.23.119:51825** (asv1 удалён 2026-11-16) | ссылки на asv1 в ADR — исторический контекст |
+| домен `relay.asvpersonal.ru` | временно `354051.landvps.online` | A-запись CF (DNS-only) — действие владельца; после неё идемпотентный `relay init --domain … --apply` |
+| RU_SNI same-DC | **`ya.ru`** | в той же /24 (`185.80.91.119`) живёт Yandex-фронт (`*.yandex.by`, h2) — плаузибилити «сосед по стойке» |
+| «ufw allow 443/udp в relay init» | в cloud-образе нет ни `ufw`, ни `iptables` | init доустанавливает `iptables`; `ufw` — отдельным шагом `vds system ufw harden --profile relay --apply` |
+| policy-routing «статические маршруты» | fwmark → table 100 `default dev awg1` | маршрут привязан к link: `PartOf=vds-relay-exit.service` в policy-юните, иначе рестарт ноги = молчаливый прямой выход |
+| две инстанции AWG на релее | одна (udp/443) | без изменений |
+| `vds relay remove-client` | не реализован (v1) | удаление пира — правкой `awg0.conf`; TECHDEBT P20 |
+
 ## Альтернативы (рассмотрены и отклонены/отложены)
 
 | альтернатива | вердикт |

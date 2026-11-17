@@ -212,7 +212,7 @@ def add_client(
     )
     console.print(
         f"[info][relay] DNS клиента уходит на релей (AllowedIPs 0.0.0.0/0): "
-        "RU-CIDR идёт напрямую, прочее — через awg1 до asv1 (ADR-007).[/info]"
+        "RU-CIDR идёт напрямую, прочее — через awg1 до exit-ноды (ADR-007).[/info]"
     )
     return {"name": name, "protocol": "relay-awg", "address": address,
             "conf_path": str(conf_path), "endpoint": endpoint}

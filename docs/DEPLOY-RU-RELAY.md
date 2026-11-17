@@ -7,11 +7,14 @@
 > SSH 49222), `RELAY_DOMAIN` = `relay.asvpersonal.ru`, `RU_SNI` — RU-сайт
 > same-DC хостера. **asv1 (103.45.247.172) удалён 2026-11-16 — exit только asv2.**
 >
-> **Статус (2026-11-17): код релея готов и принят (WP-1..5; юниты
-> `vds-relay-{exit,nat,policy,cidr}` из `vds relay init`), сам RU VDS ещё
-> НЕ куплен** — ранбук применяется после закупки и gate-приёмки Фазы 0;
-> WP-6 (харднинг) — по SPEC. Exit-нога — **asv2 213.108.23.119**;
-> asv1 удалён 2026-11-16.
+> **Статус (2026-11-17): релей РАЗВЁРНУТ** — LandVPS `vm354051`
+> (`185.80.91.135`, AS216334, Москва), Ubuntu 22.04.5, 0.75 ГБ + 1 ГБ swap.
+> Юниты `vds-relay-{awg,exit,nat,policy,cidr}` + `vds-xray` active, UFW
+> профиль relay применён. Gate-приёмка [Фазы 0](team/reports/TEST-20261117-ru-relay-gate.md),
+> раскатка — [DEPLOY-отчёт](team/reports/DEPLOY-20261117-ru-relay-landvps.md).
+> Exit-нога — **asv2 213.108.23.119** (asv1 удалён 2026-11-16).
+> Открытые пункты: DNS `relay.asvpersonal.ru` (пока `354051.landvps.online`),
+> решение по ОС 24.04 vs 22.04, смена паролей панели/root.
 
 ## Фаза 0 — закупка и gate-приёмка (до любого развёртывания)
 
@@ -92,6 +95,43 @@ ssh asv2 'vds amneziawg remove-client relay-smoke --apply'
 **Стоп-условие:** handshake не появляется за 2 мин или пакеты идут с дикими
 потерями → **эскалация владельцу**: другой хостер/локация, до покупки года.
 Частая причина — L3/L4 anti-DDoS хостера дропает кастомный UDP AmneziaWG.
+
+## Фаза 2.0 — что выяснилось на живой раскатке (2026-11-17, LandVPS)
+
+Проверено на чистом Ubuntu 22.04 cloud image. Все пункты уже учтены в коде
+(`HF-REL-1..4`), ручной ранбук ниже — для случая «CLI недоступен».
+
+1. **`iptables` может отсутствовать.** Минимальный образ без `iptables`:
+   `vds-relay-nat.service` падает с `status=127 / iptables: not found`, и
+   релей остаётся без NAT/policy (трафик клиентов уходит напрямую).
+   `relay init` теперь доустанавливает пакет сам; при ручном пути —
+   `apt-get install -y iptables` ДО `systemctl start vds-relay-nat`.
+2. **`policy-routing` привязан к интерфейсу awg1.** `ip route replace default
+   dev awg1 table 100` исчезает при любом `restart vds-relay-exit`
+   (ядро удаляет маршрут вместе с link), а oneshot-юнит с
+   `RemainAfterExit=yes` сам не перезапускается → клиенты молча выходят
+   напрямую через RU-IP релея. В шаблоне теперь `PartOf=vds-relay-exit.service`;
+   при ручном пути после каждого рестарта ноги проверяйте
+   `ip route show table 100` и при пустоте — `systemctl restart vds-relay-policy`.
+3. **Повторный `relay init --apply` не блокируется своими портами.** 443,
+   занятый `vds-xray`/`vds-relay-awg`, считается нормой (идемпотентность);
+   чужой владелец — по-прежнему стоп.
+4. **Метаданные AWG-сервера восстанавливаются из конфига.** Если первый
+   `--apply` упал между созданием `/etc/amnezia/awg0.conf` и записью state,
+   повторный init выводит `public_key`/обфускацию из конфига, и
+   `relay add-client` работает (раньше — «нет public_key»).
+5. **`ufw` тоже может отсутствовать** на cloud-образе — `vds system ufw
+   harden --profile relay` сообщит об этом; `apt-get install -y ufw` →
+   повторить. После включения проверьте, что SSH не потерян (правило
+   `limit 22/tcp` ставится до `ufw --force enable`).
+6. **Leg smoke на релее — только с `Table = off`.** Иначе `awg-quick`
+   перехватывает default-route и рвёт SSH к релею (проверено: восстановление
+   через exit-ноду). В `relay init` конфиг awg1 санитизируется автоматически.
+7. **DNS релея.** CF-прокси (оранжевое облако) не пропускает UDP — только
+   DNS-only. Пока A-записи нет, допустим технический домен хостера
+   (`*.landvps.online`); после создания A-записи — повторный идемпотентный
+   `relay init --domain relay.asvpersonal.ru --apply` + перевыпуск клиентских
+   конфигов.
 
 ## Фаза 2 — развёртывание (каждый шаг с проверкой)
 

@@ -3,6 +3,11 @@ Description=VDS RU-relay policy-routing (nft vds_relay + fwmark {mark} -> table 
 Documentation=https://github.com/asvspb/my-first-vds
 After=network-online.target vds-relay-exit.service vds-relay-cidr.service
 Wants=network-online.target
+# Маршрут `default dev awg1 table 100` привязан к интерфейсу: при
+# restart/down vds-relay-exit ядро его удаляет, и зависящая от fwmark
+# политика молча деградирует в прямой выход (живой случай LandVPS
+# 2026-11-17). PartOf перезапускает политику вместе с exit-ногой.
+PartOf=vds-relay-exit.service
 
 [Service]
 Type=oneshot

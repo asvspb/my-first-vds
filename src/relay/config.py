@@ -183,11 +183,11 @@ def build_plan(
     plan.append(
         {
             "step": "awg1-conf",
-            "name": "awg1-конфиг (нога до asv1)",
+            "name": "awg1-конфиг (нога до exit)",
             "detail": (
                 f"sanitize + запись {args.exit_conf} → /etc/amnezia/awg1.conf (Table = off, MTU {RELAY_EXIT_MTU})"
                 if args.exit_conf
-                else "не предоставлен (--exit-conf): перенесите с asv1 "
+                else "не предоставлен (--exit-conf): перенесите с exit-ноды "
                 "(`vds amneziawg add-client relay`) и перезапустите `vds relay init --apply --exit-conf ...`"
             ),
         }
@@ -224,7 +224,8 @@ def build_plan(
         {
             "step": "nat",
             "name": "MASQUERADE (vds-relay-nat)",
-            "detail": f"{RELAY_SUBNET} → awg1 и {RELAY_SUBNET} → eth0, persist-юнит",
+            "detail": f"{RELAY_SUBNET} → awg1 и {RELAY_SUBNET} → eth0, persist-юнит "
+                "(iptables доустанавливается при отсутствии)",
         }
     )
     plan.append(
@@ -257,7 +258,7 @@ def build_plan(
             "step": "verify",
             "name": "проверки (runbook DEPLOY-RU-RELAY)",
             "detail": (
-                "curl --interface awg1 ifconfig.me == asv1-IP; ya.ru мимо awg1; "
+                "curl --interface awg1 ifconfig.me == exit-IP; SNI-домен мимо awg1; "
                 f"awg0 handshake клиентов; endpoint {args.domain or 'relay-домен'}:443"
                 + ("" if exit_conf_ok else "; ВНИМАНИЕ: awg1-конфиг ещё не перенесён — нога не проверяется")
             ),

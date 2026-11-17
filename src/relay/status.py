@@ -1,7 +1,7 @@
 """`vds relay status` — состояние релея (SPEC-20261114-ru-relay FR-3).
 
 Read-only сводка: юниты (awg-сервер, awg1-нога, NAT, policy, CIDR-таймер,
-xray), интерфейсы awg0/awg1, живость ноги до asv1 (handshake-возраст из
+xray), интерфейсы awg0/awg1, живость ноги до exit (handshake-возраст из
 `awg show awg1 latest-handshakes`), nft-таблица и ip rule, размер/возраст
 RU-CIDR-агрегата, прослушивание 443. Парсер awg show — чистая функция
 (src/relay/config.parse_awg_show), тестируется без сети. Секретов в выводе
@@ -37,7 +37,7 @@ from src.gateway.store import load_state
 
 _UNITS = (
     (RELAY_UNIT, "AWG-сервер udp/443 (awg0)"),
-    (RELAY_EXIT_UNIT, "awg1-нога до asv1"),
+    (RELAY_EXIT_UNIT, "awg1-нога до exit"),
     (RELAY_NAT_UNIT, "MASQUERADE (awg1/eth0)"),
     (RELAY_POLICY_UNIT, "policy-routing (nft/fwmark)"),
     (RELAY_CIDR_TIMER, "RU-CIDR таймер"),
@@ -49,7 +49,7 @@ def _iface_up(name: str) -> bool:
 
 
 def _exit_handshake_age() -> Optional[int]:
-    """Возраст (сек) последнего handshake awg1 → asv1; None — нет данных."""
+    """Возраст (сек) последнего handshake awg1 → exit; None — нет данных."""
     if not RELAY_EXIT_CONFIG_PATH.is_file():
         return None
     res = run_list(["awg", "show", RELAY_EXIT_IFACE, "latest-handshakes"], timeout=10)
@@ -132,7 +132,7 @@ def run_status(json_output: bool = False, state_path: Optional[str] = None) -> i
     console.print("[info][relay] ══ RU-relay status (ADR-007) ══[/info]")
     console.print(
         f"[info] Домен:[/info] {snapshot['domain'] or '—'}   "
-        f"[info]Exit (asv1):[/info] {snapshot['exit_ip'] or '—'}:{snapshot['exit_port']}"
+        f"[info]Exit-нода:[/info] {snapshot['exit_ip'] or '—'}:{snapshot['exit_port']}"
     )
     for name, label in _UNITS:
         tag = "success" if snapshot["units"].get(name) else "warning"
@@ -146,7 +146,7 @@ def run_status(json_output: bool = False, state_path: Optional[str] = None) -> i
         tag = "success" if up else "warning"
         console.print(f"  [{tag}]iface {iface}: {'up' if up else 'down'}[/]")
     console.print(
-        f"[info] Нога до asv1 (handshake):[/info] {_fmt_age(snapshot['exit_handshake_age_sec'])}"
+        f"[info] Нога до exit (handshake):[/info] {_fmt_age(snapshot['exit_handshake_age_sec'])}"
     )
     p = snapshot["policy"]
     console.print(
@@ -161,6 +161,6 @@ def run_status(json_output: bool = False, state_path: Optional[str] = None) -> i
     )
     console.print(
         "[info] Проверки runbook:[/info] curl --interface awg1 ifconfig.me (должен быть "
-        "IP asv1); ya.ru — мимо awg1 (tcpdump/mtr); reboot-тест — юниты и правила на месте."
+        "IP exit-ноды); SNI-домен — мимо awg1 (tcpdump/mtr); reboot-тест — юниты и правила на месте."
     )
     return 0

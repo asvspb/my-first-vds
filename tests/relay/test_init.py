@@ -142,6 +142,7 @@ class TestDryRun:
         monkeypatch.setattr(relay_init, "_ensure_ip_forward_relay", lambda: None)
         monkeypatch.setattr(relay_init, "_install_exit_unit", lambda: True)
         monkeypatch.setattr(relay_init, "_detect_wan_iface", lambda: "eth0")
+        monkeypatch.setattr(relay_init, "_ensure_iptables", lambda: None)
         monkeypatch.setattr(relay_init, "_install_nat_unit", lambda wan_if: None)
         monkeypatch.setattr(relay_init, "_install_policy_and_cidr", lambda: None)
 
@@ -189,3 +190,151 @@ class TestDryRun:
         checks = preflight_checks(RelayArgs(exit_ip=EXIT_IP, domain="", sni=""))
         assert json.dumps(checks, ensure_ascii=False)  # сериализуемо (для логов)
         assert not any("PrivateKey" in str(c) for c in checks)
+
+
+class TestIptables:
+    """Живой дефект LandVPS 2026-11-17: минимальный cloud-шаблон без iptables
+    → vds-relay-nat.service падал с exit 127. NAT-шаг доустанавливает пакет."""
+
+    def test_present_binary_makes_no_calls(self, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(relay_init.shutil, "which", lambda name: "/usr/sbin/iptables")
+        monkeypatch.setattr(
+            relay_init, "run_list",
+            lambda args, timeout=0: calls.append(list(args)),  # type: ignore[func-returns-value]
+        )
+        relay_init._ensure_iptables()
+        assert calls == []
+
+    def test_missing_binary_installs_package(self, monkeypatch):
+        state = {"present": False}
+        calls: list[list[str]] = []
+
+        def _which(name: str) -> str | None:
+            return "/usr/sbin/iptables" if state["present"] else None
+
+        def _run(args: list[str], timeout: int = 0) -> ShellResult:
+            calls.append(list(args))
+            state["present"] = True
+            return ShellResult(stdout="", stderr="", returncode=0)
+
+        monkeypatch.setattr(relay_init.shutil, "which", _which)
+        monkeypatch.setattr(relay_init, "run_list", _run)
+        relay_init._ensure_iptables()
+        assert ["apt-get", "install", "-y", "iptables"] in calls
+
+    def test_failed_install_raises(self, monkeypatch):
+        monkeypatch.setattr(relay_init.shutil, "which", lambda name: None)
+        monkeypatch.setattr(
+            relay_init, "run_list",
+            lambda args, timeout=0: ShellResult(stdout="", stderr="E: fail", returncode=100),
+        )
+        with pytest.raises(relay_init.RelayInitError):
+            relay_init._ensure_iptables()
+
+
+class TestPortIdempotency:
+    """Повторный init не должен блокироваться 443, занятым своими юнитами."""
+
+    def test_own_units_keep_ports_ok(self, monkeypatch):
+        monkeypatch.setattr(relay_init, "port_free", lambda port, proto="tcp": False)
+        monkeypatch.setattr(
+            relay_init, "run_list",
+            lambda args, timeout=0: ShellResult(stdout="", stderr="", returncode=0),
+        )
+        checks = relay_init._check_ports()
+        assert [c["name"] for c in checks] == ["порт 443/tcp", "порт 443/udp"]
+        assert all(c["ok"] for c in checks)
+        assert "нашим" in checks[0]["detail"]
+
+    def test_foreign_owner_still_blocks(self, monkeypatch):
+        monkeypatch.setattr(relay_init, "port_free", lambda port, proto="tcp": False)
+        monkeypatch.setattr(relay_init, "port_owner", lambda port, proto="tcp": "nginx")
+        monkeypatch.setattr(
+            relay_init, "run_list",
+            lambda args, timeout=0: ShellResult(stdout="", stderr="", returncode=3),
+        )
+        checks = relay_init._check_ports()
+        assert not any(c["ok"] for c in checks)
+        assert "nginx" in checks[0]["detail"]
+
+
+AWG0_CONF = """[Interface]
+Address = 10.10.0.1/24
+ListenPort = 443
+MTU = 1280
+PrivateKey = FIXTURE_PW_AWG_SERVER_PRIV=
+SaveConfig = false
+Jc = 8
+Jmin = 91
+Jmax = 482
+S1 = 57
+S2 = 48
+H1 = 241566753
+H2 = 1995206852
+H3 = 1543786635
+H4 = 926821342
+
+[Peer]
+PublicKey = FIXTURE_UUID_PEER_PUB=
+AllowedIPs = 10.10.0.2/32
+"""
+
+
+class TestAwgMetaRecovery:
+    """Повтор init после частичного сбоя: конфиг есть, state пуст (LandVPS)."""
+
+    def test_meta_recovered_from_config(self, monkeypatch, tmp_path: Path):
+        conf = tmp_path / "awg0.conf"
+        conf.write_text(AWG0_CONF, encoding="utf-8")
+        monkeypatch.setattr(relay_init, "RELAY_CONFIG_PATH", conf)
+        monkeypatch.setattr(
+            relay_init, "run_list",
+            lambda args, timeout=0: ShellResult(
+                stdout="FIXTURE_UUID_SERVER_PUB=", stderr="", returncode=0
+            ),
+        )
+        meta = relay_init._awg_meta_from_config(
+            RelayArgs(exit_ip=EXIT_IP, domain="relay.example.ru", sni="s")
+        )
+        assert meta["public_key"] == "FIXTURE_UUID_SERVER_PUB="
+        assert meta["port"] == 443 and meta["mtu"] == 1280
+        assert meta["subnet"] == "10.10.0.0/24"
+        assert meta["obfuscation"]["Jc"] == 8 and meta["obfuscation"]["H4"] == 926821342
+        assert meta["recovered_from_config"] is True
+
+    def test_install_awg_server_uses_recovery(self, monkeypatch, tmp_path: Path):
+        conf = tmp_path / "awg0.conf"
+        conf.write_text(AWG0_CONF, encoding="utf-8")
+        monkeypatch.setattr(relay_init, "RELAY_CONFIG_PATH", conf)
+        monkeypatch.setattr(relay_init, "_installed_awg_server", lambda: True)
+        monkeypatch.setattr(
+            relay_init, "run_list",
+            lambda args, timeout=0: ShellResult(
+                stdout="FIXTURE_UUID_SERVER_PUB=", stderr="", returncode=0
+            ),
+        )
+        args = RelayArgs(exit_ip=EXIT_IP, domain="relay.example.ru", sni="s")
+        meta = relay_init._install_awg_server(args, str(tmp_path / "state.json"))
+        assert meta["public_key"] == "FIXTURE_UUID_SERVER_PUB="
+        assert meta["obfuscation"]
+
+    def test_missing_private_key_raises(self, monkeypatch, tmp_path: Path):
+        conf = tmp_path / "awg0.conf"
+        conf.write_text("[Interface]\nAddress = 10.10.0.1/24\n", encoding="utf-8")
+        monkeypatch.setattr(relay_init, "RELAY_CONFIG_PATH", conf)
+        with pytest.raises(relay_init.RelayInitError):
+            relay_init._awg_meta_from_config(
+                RelayArgs(exit_ip=EXIT_IP, domain="relay.example.ru", sni="s")
+            )
+
+
+class TestRelayUnitTemplates:
+    """Маршрут `default dev awg1 table 100` привязан к интерфейсу: restart
+    exit-ноги его сносит, политика деградирует в прямой выход (LandVPS)."""
+
+    def test_policy_unit_follows_exit_leg(self):
+        root = Path(__file__).resolve().parents[2]
+        tpl = (root / "systemd" / "vds-relay-policy.service.tpl").read_text(encoding="utf-8")
+        assert "PartOf=vds-relay-exit.service" in tpl
+        assert "ip route replace default dev {exit_iface} table {table}" in tpl

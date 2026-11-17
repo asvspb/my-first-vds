@@ -54,7 +54,7 @@ vds/
 │   ├── vds-probe-rucidr.timer.tpl
 │   ├── vds-relay-exit.service.tpl       # RU-relay (ADR-007): exit-policy
 │   ├── vds-relay-nat.service.tpl        # RU-relay: NAT ноги
-│   ├── vds-relay-policy.service.tpl     # RU-relay: policy-routing до asv1
+│   ├── vds-relay-policy.service.tpl     # RU-relay: policy-routing до exit-ноды
 │   ├── vds-relay-cidr.service.tpl       # RU-relay: RU-CIDR (ipdeny)
 │   ├── vds-relay-cidr.timer.tpl         #   еженедельное обновление
 │   └── sysctl/99-vds-gateway.conf.tpl
@@ -236,10 +236,10 @@ vds amneziawg remove --apply        # Удалить сервис (пакеты 
 
 vds acme issue --domain vpn.example.ru --email admin@example.ru   # LE (HTTP-01) + deploy-hook
 
-vds relay init --exit 103.45.247.172 --domain relay.asvpersonal.ru --sni www.example.ru
+vds relay init --exit <exit-ip> --domain relay.asvpersonal.ru --sni <RU_SNI>
                                     # RU-relay (ADR-007): dry-run план; --apply развёртывает
                                     # AWG udp/443 + Reality tcp/443 + policy-routing (DEPLOY-RU-RELAY.md)
-vds relay status                    # Юниты, awg0/awg1, живость ноги до asv1, nft, CIDR
+vds relay status                    # Юниты, awg0/awg1, живость ноги до exit, nft, CIDR
 vds relay add-client phone          # Пир awg0: .conf (0600), endpoint relay-домен:443
                                      # (--keepalive 113 — И44: по умолчанию keepalive не пишется)
 ```

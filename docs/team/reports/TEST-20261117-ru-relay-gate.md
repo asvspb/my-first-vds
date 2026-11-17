@@ -63,6 +63,6 @@ Cleanup: пир `relay-smoke` удалён на asv2, `/tmp/awg1-smoke.conf` у�
 
 | Что | Ссылка/коммит |
 |---|---|
-| Gate-процедура | [DEPLOY-RU-RELAY §0.3](../DEPLOY-RU-RELAY.md) |
+| Gate-процедура | [DEPLOY-RU-RELAY §0.3](../../DEPLOY-RU-RELAY.md) |
 | ADR | [ADR-007](../../adr/ADR-007-ru-relay.md) |
 | Код релея | WP-1..5, `vds relay init` |

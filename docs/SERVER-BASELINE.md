@@ -285,7 +285,9 @@ OUTPUT; счётчики vds_probe стоят в prerouting **до** ufw-фил�
 
 **Правило:** после ребута ничего не «оживает руками» — всё enabled: `ufw`,
 `vds-amneziawg-nat` (идемпотентный oneshot, не зависит от ufw),
-`vds-probe-watch.timer` (+`vds-probe-rucidr.timer`, `vds-gateway-health.timer`, если ставились), транспортные юниты (vds-xray/vds-hysteria2*/vds-amneziawg); relay-нога — юниты `vds-relay-{exit,nat,policy,cidr}` из `vds relay init` (релей не развёрнут, шаблоны в `systemd/`).
+`vds-probe-watch.timer` (+`vds-probe-rucidr.timer`, `vds-gateway-health.timer`, если ставились), транспортные юниты (vds-xray/vds-hysteria2*/vds-amneziawg); relay-нога — юниты `vds-relay-{awg,exit,nat,policy,cidr}` из `vds relay init`
+(релей развёрнут 2026-11-17 на LandVPS; после `restart vds-relay-exit` политика
+перезапускается сама через `PartOf=`, иначе маршрут `table 100` теряется).
 sysctl-профиль проекта — `/etc/sysctl.d/99-vds-gateway.conf` (из
 `systemd/sysctl/99-vds-gateway.conf.tpl`; BBR/буферы — hysteria2 install;
 `net.netfilter.nf_conntrack_acct = 1` (byte-счётчики conntrack для
@@ -377,7 +379,7 @@ warning; TTL обязателен (default 48h, 1h..168h) — забытый л�
 `nft list set inet vds_probe probers4`.
 **Откат (манёвр уклонения, на клиенте):** `vpn` переключение профиля с AWG
 asv2 на Hysteria2 (asv1, port hopping + salamander) / VLESS+WS :2053
-(Cloudflare) / транзитный RU-relay (когда развёрнут).
+(Cloudflare) / транзитный RU-relay (`185.80.91.135`, развёрнут 2026-11-17).
 
 ### 5.13 Съём эталонного дампа пробы ТСПУ (при RU-PROBE-SUSPECT)
 
