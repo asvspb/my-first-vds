@@ -73,3 +73,43 @@ asv2-reality  xray-reality socks:2080
 | guard live-fix (stderr/cursor) | `ubuntuInstaller 78ce00c` |
 | HF-SSH (UFW phase A) | `my-first-vds 14999ec` |
 | T0/пост-мортем docs | `0798218` |
+
+## T0.5 — контрольная точка T+12 ч (2026-11-17, после раскатки RU-relay)
+
+```
+vpn-guard.service: running, hardened, state=armed, iface=laptop
+counters: events=77, unparsed=6, dropped=0, findings=3,
+          suppressed=43, redaction_hits=0
+coverage: unparsed_ratio=0.75, blind=[], speed_ring_restored:4
+findings.jsonl: 3 записи за интервал
+```
+
+### Диагноз `unparsed_ratio=0.75` — артефакт метрики, не деградация парсера
+
+Реплей 24-часового user-журнала через `JournalParser`:
+
+```
+ParseStats(lines=34485, app_lines=16, parsed=4, unparsed=12,
+           ignored_infra=0, errors=0)
+```
+
+Все 12 «непарсенных» — **стартовый баннер Xray**, а не телеметрия:
+
+```
+Xray 26.1.23 (Xray, Penetrates Everything.) 0a42dba (go1.25.6 linux/amd64)
+A unified platform for anti-censorship.
+2026/11/17 08:18:40 [Info] infra/conf/serial: Reading config: &{Name:...}
+```
+
+Причина: знаменатель AC-5 — `app_lines` (16 за сутки, реального трафика в
+окне почти не было), а каждая смена профиля добавляет 3 строки баннера.
+На боевом трафике доля баннеров падает до ~0. Заведено в TECHDEBT P21:
+в v1.1 классифицировать баннеры как `ignored_infra` (вне `app_lines`).
+
+### Findings: G-06/G-07 по `cloudflared-proxy-dns.service`
+
+Записи 18:03–18:41 UTC (21:03–21:41 MSK, 16.11) — `network_unreachable=8`
+и `dns_timeout`. Это локальная сеть/DNS ноутбука, не VPN: FP-логика верно
+отмечает `no network_unreachable/no_route in 60s`, `0 distinct names`.
+Связаны со сменой сети/сна ноутбука вечером 16.11 (до начала раскатки
+релея 17.11). Подавления (43) — штатная гистерезисная работа правил.

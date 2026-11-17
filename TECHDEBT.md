@@ -392,3 +392,21 @@ vds-relay-awg` (так удалён тестовый `smoke-asv2` при рас�
 
 **Критерий.** Пиры: добавить → удалить → в конфиге и в `awg show awg0` нет
 пира, остальные не тронуты; повторный `remove` идемпотентен.
+
+## P21 — `unparsed_ratio`: стартовый баннер Xray засчитывается как app-строка (2026-11-17)
+
+**Факт.** AC-5 меряет `unparsed / app_lines`. Старт каждого Xray-профиля
+пишет 3 строки, которые не несут телеметрии:
+`Xray <ver> (Xray, Penetrates Everything.)`, `A unified platform for
+anti-censorship.`, `[Info] infra/conf/serial: Reading config: &{...}`.
+На ноутбуке за 24 ч: `app_lines=16`, из них 12 — баннеры → `unparsed_ratio=0.75`
+при полностью рабочем парсере (T0.5 в
+`docs/team/reports/TEST-20261117-vpn-guard-checkpoint-t0.md`).
+
+**Действие (v1.1).** Классифицировать баннеры как `ignored_infra`
+(исключать из `app_lines`), по аналогии с awg-quick/dnsmasq-шумом.
+Спека AC-5 при этом не меняется — меняется только учёт.
+
+**Критерий.** Реплей 24-часового журнала с 12 баннерными строками даёт
+`unparsed_ratio <= 0.05` без реальных непарсенных событий; тест на
+`ParseStats`.
