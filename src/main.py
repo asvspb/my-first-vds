@@ -44,6 +44,12 @@ logs_capture_app = typer.Typer(
     help="Bounded pcap-захват tcp/443 (metadata-only, TTL 7 дней, §8.1)"
 )
 logs_app.add_typer(logs_capture_app, name="capture")
+alert_app = typer.Typer(
+    help=(
+        "Сторож угрозы на exit-узле (SPEC-20261117-alert-watch): threat/пульс "
+        "плеча/лок 443 → Telegram/SMTP. Только уведомления; dry-run по умолчанию"
+    )
+)
 app.add_typer(zerotier_app, name="zerotier")
 app.add_typer(wireguard_app, name="wireguard")
 app.add_typer(coturn_app, name="coturn")
@@ -58,6 +64,7 @@ system_app.add_typer(ufw_app, name="ufw")
 gateway_app.add_typer(probe_watch_app, name="probe-watch")
 probe_watch_app.add_typer(probe_rucidr_app, name="ru-cidr")
 app.add_typer(logs_app, name="logs")
+app.add_typer(alert_app, name="alert")
 
 @app.callback(invoke_without_command=True)
 def main_menu(ctx: typer.Context):
@@ -1780,6 +1787,108 @@ def logs_remove(
     from src.logs.install import cmd_remove
 
     raise typer.Exit(cmd_remove(apply=apply))
+
+
+@alert_app.command("install")
+def alert_install(
+    apply: bool = typer.Option(False, "--apply", help="Исполнить (по умолчанию dry-run)"),
+    channel: Optional[str] = typer.Option(
+        None, "--channel", help="tg,smtp — какие каналы включить (пусто = авто по парам ключей)"
+    ),
+    interval: str = typer.Option("2m", "--interval", help="Период тика таймера (2m)"),
+    handshake_threshold: str = typer.Option(
+        "300s", "--handshake-threshold", help="Порог возраста handshake для пульса плеча"
+    ),
+    heartbeat: str = typer.Option("24h", "--heartbeat", help="Период heartbeat (dead-man switch)"),
+    force: bool = typer.Option(False, "--force", help="Перезаписать существующий alert.env"),
+    allow_relay_node: bool = typer.Option(
+        False,
+        "--allow-relay-node",
+        help="Разрешить установку на узле-рееле (делать не надо: секреты на релее не храним)",
+    ),
+):
+    """Установить сторожа на exit-узле: юниты + /etc/vds/alert.env (0600).
+
+    Dry-run по умолчанию. Секреты в юнит не попадают: процесс читает env сам.
+
+    Примеры:
+      sudo vds alert install                 # план: юниты, имена ключей, каналы
+      sudo vds alert install --apply
+      sudo vds alert install --channel smtp --apply
+    """
+    from src.alert.cli import cmd_install
+
+    raise typer.Exit(
+        cmd_install(
+            apply=apply,
+            channel=channel,
+            interval=interval,
+            handshake_threshold=handshake_threshold,
+            heartbeat=heartbeat,
+            force=force,
+            allow_relay_node=allow_relay_node,
+        )
+    )
+
+
+@alert_app.command("remove")
+def alert_remove(
+    apply: bool = typer.Option(False, "--apply", help="Исполнить (по умолчанию dry-run)"),
+    purge: bool = typer.Option(
+        False, "--purge", help="Удалить также alert.env и alert-state.json"
+    ),
+):
+    """Снять юниты сторожа (alert.env сохраняется; --purge удаляет и его)."""
+    from src.alert.cli import cmd_remove
+
+    raise typer.Exit(cmd_remove(apply=apply, purge=purge))
+
+
+@alert_app.command("test")
+def alert_test(
+    channel: Optional[str] = typer.Option(
+        None, "--channel", help="tg|smtp — проверить только этот канал (по умолчанию все активные)"
+    ),
+):
+    """Отправить тестовое сообщение (root, читает /etc/vds/alert.env).
+
+    Без записи state: повторные запуски не влияют на дедуп/лимиты.
+
+    Примеры:
+      sudo vds alert test
+      sudo vds alert test --channel smtp
+    """
+    from src.alert.cli import cmd_test
+
+    raise typer.Exit(cmd_test(channel=channel))
+
+
+@alert_app.command("status")
+def alert_status(
+    json_out: bool = typer.Option(False, "--json", help="Машиночитаемый JSON (без секретов)"),
+):
+    """Состояние сторожа: каналы, юниты, что видно (coverage). Без root — урезанно."""
+    from src.alert.cli import cmd_status
+
+    raise typer.Exit(cmd_status(json_out=json_out))
+
+
+@alert_app.command("watch")
+def alert_watch(
+    config: str = typer.Option(
+        "/etc/vds/alert.env", "--config", help="Путь к конфигу (в юните — фиксированный)"
+    ),
+    no_send: bool = typer.Option(
+        False, "--no-send", help="Dry-run тика: план без отправки и без записи state"
+    ),
+):
+    """Служебная команда: один тик сторожа (его зовёт таймер).
+
+    Ручная отладка — только с --no-send, иначе возможен дубль тревоги.
+    """
+    from src.alert.watch import run_tick
+
+    raise typer.Exit(run_tick(config_path=config, no_send=no_send))
 
 
 if __name__ == "__main__":
