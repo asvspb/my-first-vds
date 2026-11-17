@@ -80,6 +80,7 @@
 | XHTTP / CDN | да | ✅ `xray add-transport` / `add-cdn` | — |
 | certbot + таймер | да | ✅ `acme issue` | — |
 | healthcheck-таймер | да | ✅ `gateway healthcheck --install-timer` | — |
+| сторож угрозы (уведомления) | нет | ✅ `alert install --apply` (exit-узел; на релее запрещён) | §5.15 |
 | fail2ban, NTP, journald, logrotate, limits | NTP да, остальное default | ❌ не автоматизировано | §3 |
 | Провайдерский файрвол/anti-DDoS | неизвестно | ❌ только панель хостера | §6 |
 | Cloudflare DNS/records | apex + CDN | ❌ только панель/API CF | §6 |
@@ -422,6 +423,44 @@ tshark -r /var/tmp/tspu_probes.pcap -Y "tls.handshake.type == 1" -V
 | §9.1 чеклист аварии | починка исправного сервера при локальном сбое ноутбука |
 | Fail-safe порядок §5.1 | enable без ssh-правила → отрезание по ssh |
 
+### 5.15 Правило знаний: сторож угрозы `vds-alert-watch` (SPEC-20261117)
+
+**Что это:** независимый oneshot-таймер на **exit-узле**, который раз в 2 мин
+читает уже существующую телеметрию и при переходе состояния отправляет одно
+короткое сообщение в Telegram и/или SMTP (stdlib). Только уведомления: сторож
+**не** меняет `probe-watch.json`, `state.json`, UFW и юниты протоколов.
+
+**Юниты и файлы:**
+
+| Артефакт | Путь | Права | Назначение |
+|---|---|---|---|
+| `vds-alert-watch.service` / `.timer` | `/etc/systemd/system/` | 0644 | рендер из `vds-alert-watch.service.tpl` / `vds-alert-watch.timer.tpl` |
+| Конфиг каналов | `/etc/vds/alert.env` | 0600 | TG-токен / SMTP App Password — **единственный носитель секретов** |
+| Состояние | `/var/lib/vds/alert-state.json` | 0600 | последние отправки, окно лимита, backoff каналов |
+
+Секреты в `Environment=` юнита **не** попадают: процесс читает `alert.env` сам
+(иначе `systemctl show -p Environment` светил бы токен).
+
+**Сигналы:** `threat` из `/var/lib/vds/probe-watch.json` (missing/corrupt/
+`no_level`/stale различаются — «нет данных» ≠ «тихо»); пульс плеча relay→exit
+(`awg show awg0 dump` + пир `relay` из `state.json`, гейт активности: без
+недавнего роста `rx` старый handshake — `idle`, не алерт); активный `lock-443`.
+
+**Проверка:** `sudo vds alert status` (каналы/юниты/coverage, `--json` без
+секретов); `sudo vds alert test [--channel smtp]` — реальная отправка без
+записи state; `journalctl -u vds-alert-watch` — теги `ALERT-SENT / ALERT-FAILED /
+ALERT-SKIP`. Ручной тик — только `sudo vds alert watch --no-send`.
+
+**Правило `PersistentKeepalive`:** на релее `awg1` по умолчанию **нет**
+keepalive (И44), поэтому свежесть handshake в простое ничего не значит —
+сторож валидирует сигнал гейтом активности, а деплой рекомендует
+`PersistentKeepalive = 113` на `awg1` (см. `docs/DEPLOY-RU-RELAY.md`), тогда
+`idle` не наступает.
+
+**Откат:** `sudo vds alert remove --apply` (юниты сняты, `alert.env` сохранён) →
+`sudo vds alert remove --apply --purge` (удалить `alert.env` и
+`alert-state.json`). UFW/`probe-watch.json`/`state.json` не затрагиваются.
+
 ## 6. Провайдер и DNS (руками, без API-токена не автоматизируется)
 
 | Что | Как | Проверка |
@@ -452,6 +491,9 @@ tshark -r /var/tmp/tspu_probes.pcap -Y "tls.handshake.type == 1" -V
    (`vds … add-client`) и ре-импорт ссылок.
 7. Клиенты (§9): `vpn profile pull`, AWG `.conf`, проверка `vpn speed`.
 8. Опционально: swap, unattended-upgrades, journald, лимиты (§3), fail2ban.
+9. Сторож угрозы (**только exit-узел**, §5.15): `sudo vds alert install --apply`
+   → заполнить `/etc/vds/alert.env` (0600) → `sudo vds alert test` →
+   `sudo vds alert status`. На RU-рееле `install` отказывает (секретов там нет).
 
 ## 8. Данные и секреты (миграция vs «с нуля»)
 
@@ -463,6 +505,7 @@ tshark -r /var/tmp/tspu_probes.pcap -Y "tls.handshake.type == 1" -V
 | Hysteria2 | `/etc/hysteria/{config,obfs}.yaml`, `cert.pem`, `key.pem` | 0600 | миграция |
 | AmneziaWG | `/etc/amnezia/awg0.conf` | 0600 | миграция |
 | LE | `/etc/letsencrypt/` | 0600 | миграция или `acme issue` заново |
+| Уведомления сторожа | `/etc/vds/alert.env` | 0600 | **не переносить на релей**: заново `vds alert test` на exit-узле (FR-2) |
 | CDN/CF | панель | — | вручную |
 
 «С нуля» = все ключи новые, клиентам нужен ре-импорт. Ссылки сохраняются

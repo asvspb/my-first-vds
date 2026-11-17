@@ -203,6 +203,15 @@ sanitize при переносе (CLI делает автоматически; �
 Проверка: `ip link show awg1` → up; `awg show awg1 latest-handshakes` →
 свежий handshake; `curl --interface awg1 ifconfig.me` → **IP asv2** (213.108.23.119).
 
+**Precondition для сторожа угрозы (SPEC-20261117):** в `[Interface]` awg1
+выставить `PersistentKeepalive = 113`. По умолчанию keepalive не пишется
+(И44 — радиомолчание в простое, метроном 25 с = DPI-маяк), но тогда
+handshake на exit-узле законно стареет часами и пульс плеча классифицируется
+как `idle` (не алерт). С keepalive 113 с сигнал валиден и `idle` не наступает;
+сторож и без него не даёт ложных тревог (гейт активности по росту `rx`), но
+диагностика становится грубее. Проверка: `awg show awg1 dump` → у пира
+`latest_handshake` не старше ~2 мин при живом канале.
+
 ### 5. ip_forward + MASQUERADE + UFW
 
 ```bash

@@ -57,6 +57,8 @@ vds/
 │   ├── vds-relay-policy.service.tpl     # RU-relay: policy-routing до exit-ноды
 │   ├── vds-relay-cidr.service.tpl       # RU-relay: RU-CIDR (ipdeny)
 │   ├── vds-relay-cidr.timer.tpl         #   еженедельное обновление
+│   ├── vds-alert-watch.service.tpl      # сторож угрозы на exit-узле (SPEC-20261117)
+│   ├── vds-alert-watch.timer.tpl        #   тик 2 мин: threat/пульс плеча/лок 443
 │   └── sysctl/99-vds-gateway.conf.tpl
 ├── AGENTS.md           # Контекст проекта для ИИ-агентов
 ├── TECHDEBT.md         # Бэклог техдолга
@@ -196,6 +198,17 @@ vds logs capture status             # Статус активного capture
 vds logs capture stop               # Остановить capture, собрать бандл
 vds logs remove --apply             # Демонтаж таймеров/данных лог-конвейера (dry-run)
 
+vds alert install                   # Сторож угрозы на exit-узле: план установки (dry-run)
+vds alert install --apply           # Юниты vds-alert-watch + /etc/vds/alert.env (0600)
+vds alert install --channel smtp --apply   # только почта (telegram — по умолчанию оба)
+vds alert test                      # Тестовое сообщение во все активные каналы (root)
+vds alert test --channel smtp       # Проверить именно почту (App Password)
+vds alert status                    # Каналы/юниты/coverage; --json — без секретов
+vds alert watch --no-send           # Один тик без отправки и без записи state (отладка)
+vds alert remove --apply            # Снять юниты (alert.env сохраняется; --purge — удалить)
+# Секреты сторожа живут только в /etc/vds/alert.env (0600); в юнит не попадают.
+# Сторож только уведомляет: probe-watch.json, state.json, UFW он не меняет.
+
 vds xray install                    # Установить Xray VLESS Reality (TCP 443)
 vds xray install --sni www.cloudflare.com   # Сайт-маска (по умолчанию www.google.com)
 vds xray add-client phone           # Клиент + share-link vless://...
@@ -318,6 +331,7 @@ Gateway-таймеры (ставятся по явной команде, не п
 | `vds-relay-cidr.timer` | RU-CIDR на релее (еженедельно) | `vds relay init --apply` (ADR-007) |
 | `vds-logs-sample.timer` (`vds-logs-sample.service.tpl`/`vds-logs-sample.timer.tpl`) | 5-минутный сэмпл телеметрии (journald/счётчики, ADR-012); `ReadWritePaths=/var/lib/vds /var/run` (runtime-lock) | `vds logs install --apply` |
 | `vds-logs-daily.timer` (`vds-logs-daily.service.tpl`/`vds-logs-daily.timer.tpl`) | ежедневный отчёт/ротация лог-конвейера (ADR-012); `ReadWritePaths=/var/lib/vds /var/run` (runtime-lock) | `vds logs install --apply` |
+| `vds-alert-watch.timer` (`vds-alert-watch.service.tpl`/`vds-alert-watch.timer.tpl`) | сторож угрозы на exit-узле: threat из `probe-watch.json`, пульс плеча relay→exit по `awg show awg0 dump`, лок 443; доставка в Telegram/SMTP, heartbeat раз в сутки (SPEC-20261117); `ReadWritePaths=/var/lib/vds /var/run` | `vds alert install --apply` |
 
 Таймеры ZeroTier (архив) активируются **только** при явной установке
 `vds zerotier install` (опциональный сценарий):
@@ -369,6 +383,8 @@ journalctl -u vds-watchdog -n 20
 | `/etc/amnezia/awg0.conf` | Конфиг AmneziaWG (0600) |
 | `/etc/letsencrypt/live/<domain>/` | LE-сертификаты (ACME, HTTP-01) |
 | `/usr/local/bin/vds` | Симлинк команды `vds` |
+| `/etc/vds/alert.env` | Каналы и параметры сторожа угрозы (0600; единственный носитель TG-токена и SMTP App Password) |
+| `/var/lib/vds/alert-state.json` | Состояние сторожа: последние отправки, окно лимита, backoff каналов (0600) |
 | `/etc/systemd/system/vds-*.service` | Systemd-сервисы |
 
 ## Зависимости

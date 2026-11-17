@@ -41,6 +41,13 @@
       "why": "probe-watch/threat-level/ru-cidr/lock-443"
     },
     {
+      "id": "alert",
+      "match": ["src/alert/**"],
+      "require": ["README.md", "AGENTS.md", "docs/SERVER-BASELINE.md", "docs/DEPLOY.md"],
+      "consider": ["docs/DEPLOY-RU-RELAY.md"],
+      "why": "сторож угрозы: каналы/секреты/юниты/покрытие сигналов (SPEC-20261117)"
+    },
+    {
       "id": "relay",
       "match": ["src/relay/**"],
       "require": ["README.md", "docs/DEPLOY-RU-RELAY.md", "AGENTS.md"],

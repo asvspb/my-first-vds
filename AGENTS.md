@@ -47,13 +47,17 @@ src/
 ├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание), probing (probe-watch: телеметрия+threat-level+auto-lockdown+verified_session_ips anti Self-DoS, SPEC probe-response; probers4 на tcp/{443,8443,2053} + быстрый контур fast_contour_check в 5-мин сэмплере vds-logs-sample, SPEC probe-coverage W1-1; RU-PROBE-SUSPECT = syn_valid + syn_valid_extra, PROBE-BURST — только 443), probing_rucidr (RU-CIDR)
 ├── sysinfo/             # dashboard
 ├── logs/                # log-forensics (ADR-012): install, collect (sample), report/analyze, capture
+├── alert/               # сторож угрозы на exit-узле (SPEC-20261117): paths, env (/etc/vds/alert.env),
+│                        # state (alert-state.json), channels (SMTP/Telegram на stdlib), checks (threat/
+│                        # awg dump/лок), watch (тик), cli (install/remove/test/status). Только уведомления
 └── system/              # setup, cleanup, ufw (harden/ssh-port — SPEC-20261116; CDN-порт — CF-CIDR-набор)
 systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg(-nat)/
                          # vds-relay-{exit,nat,policy,cidr}.service.tpl; vds-gateway-health / vds-probe-watch /
-                         # vds-probe-rucidr / vds-logs-sample / vds-logs-daily .service+.timer.tpl
+                         # vds-probe-rucidr / vds-logs-sample / vds-logs-daily /
+                         # vds-alert-watch .service+.timer.tpl (сторож: тик 2 мин, exit-узел)
                          # (vds-logs-sample/daily: ReadWritePaths /var/lib/vds + /var/run для FileLock);
                          # sysctl/99-vds-gateway.conf.tpl
-tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/, amneziawg/, acme/, relay/
+tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/, amneziawg/, acme/, relay/, alert/
 docs/                    # TEAM.md, DEPLOY.md, DEPLOY-RU-RELAY.md, VPN-PROTOCOLS.md, CDN-FRONTS.md,
                          # CENSORSHIP-ROADMAP.md, CENSORSHIP-PATTERNS.md, MIGRATE-VDS.md, adr/, team/
 install.sh, preinstall.sh, local-init.sh, myhelp.sh
@@ -70,6 +74,11 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 | `vds system ufw ssh-port --to 49222 [--finalize]` | Двухфазный перенос SSH-порта (22 закрывается только `--finalize`; откат Фазы A сам перезапускает ssh.socket/ssh, drop-in 0644) |
 | `vds relay init --exit <ip> --domain <домен> --sni <RU_SNI> --apply` | RU-relay (ADR-007): AWG udp/443 + Reality tcp/443 + policy-routing до exit-ноды; целевая ОС — Ubuntu 24.04 (`docs/DEPLOY-RU-RELAY.md`) |
 | `vds relay add-client NAME [--endpoint HOST[:PORT]] [--dns IP[,IP]] [--qr]` | Пир awg0 + .conf 0600 (MTU 1280, `AllowedIPs = 0.0.0.0/0` v4-only, `DNS = 1.1.1.1, 1.0.0.1` через exit); endpoint = домен клиентов (имя машины пропускается, нерезолв → IP сервера, P22); `--qr` — ANSIUTF8 в терминале через stdin (без qrencode — warning), P23 |
+| `sudo vds alert install --apply` | Сторож угрозы на exit-узле (SPEC-20261117): юниты `vds-alert-watch.service`/`.timer` из `vds-alert-watch.service.tpl`/`vds-alert-watch.timer.tpl`, `/etc/vds/alert.env` 0600; dry-run без `--apply` |
+| `sudo vds alert test [--channel tg\|smtp]` | Тестовая отправка без записи state (проверить почту/бота) |
+| `vds alert status [--json]` | Каналы/юниты/coverage; JSON без секретов |
+| `vds alert watch --no-send` | Один тик сторожа без отправки и без записи state (отладка) |
+| `sudo vds alert remove --apply [--purge]` | Снять юниты; `--purge` удаляет alert.env и alert-state.json |
 | `python -m compileall -q src` | Синтаксическая проверка |
 | `pytest -q` | Юнит-тесты (`tests/`, без root/сети/docker) |
 | `bash install.sh` | Установка (root, на сервере) |
@@ -102,6 +111,9 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 - Не логировать и не выводить UUID, пароли, приватные ключи.
 - Перед установкой сервиса проверять занятость порта (`ss -tlnp`).
 - systemd-юниты — только из шаблонов `systemd/`, не править на сервере руками.
+- **Секреты уведомлений** (SPEC-20261117): только `/etc/vds/alert.env` (0600) на
+  **exit-узле**; на RU-рееле их нет и не будет (`vds alert install` там отказывает
+  без `--allow-relay-node`). В systemd-юнит секреты не попадают — только путь.
 - **Фикстуры секретов** (тесты, примеры в доке) — только со значимыми префиксами
   `FIXTURE_PW_` / `FIXTURE_UUID_` и зарезервированными IP/UUID (203.0.113.0/24 RFC 5737,
   11111111-2222-…). Никаких «правдоподобных» паролей (`SharedPass123`, `s3cretpass`) —

@@ -248,6 +248,37 @@ vds gateway probe-watch ru-cidr install --apply    # RU-CIDR без релея: 
 изоляция 443 с TTL и undo; AWG/CDN/ssh остаются живы. Auto-lockdown по умолчанию
 выключен (`vds gateway probe-watch config`).
 
+### Сторож угрозы на exit-узле (SPEC-20261117-alert-watch)
+
+Уведомления отправляет **exit-узел** (на RU-рееле секретов нет). Порядок:
+
+1. `sudo vds alert install` — dry-run: план, имена ключей `alert.env` и активные
+   каналы. Ничего не пишется.
+2. Создать `/etc/vds/alert.env` (0600): пары `TG_BOT_TOKEN`+`TG_CHAT_ID` и/или
+   `SMTP_HOST`/`SMTP_FROM`/`SMTP_TO`/`SMTP_PASS` (App Password, не основной
+   пароль); `SMTP_STARTTLS=1` для :587. Параметры — `ALERT_*` (см. шаблон в выводе
+   `install`). Минимально для почты:
+
+   ```bash
+   sudo install -m 0600 /dev/null /etc/vds/alert.env
+   sudoedit /etc/vds/alert.env   # SMTP_HOST/SMTP_FROM/SMTP_TO/SMTP_PASS
+   ```
+
+3. `sudo vds alert install --apply` — рендер `vds-alert-watch.service`/`.timer`,
+   `daemon-reload`, enable/start таймера. Идемпотентно; существующий `alert.env`
+   не перезаписывается без `--force`.
+4. `sudo vds alert test` (или `--channel smtp` — быстрая проверка почты) —
+   реальная отправка, **без** записи state.
+5. `sudo vds alert status` — сверить каналы, юниты и coverage (что «слепо» и
+   почему). `--json` машинно читается и не содержит значений секретов.
+6. `sudo vds alert watch --no-send` — прогнать тик без отправки: `relay_pulse` не
+   должен быть `inconclusive`/`idle` при живом канале.
+
+**Откат:** `sudo vds alert remove --apply` (юниты сняты, `alert.env` сохранён) →
+`--purge` (удалить и `alert.env`/`alert-state.json`). UFW, `probe-watch.json` и
+`state.json` не затрагиваются. Диагностика доставки — `journalctl -u
+vds-alert-watch` (теги `ALERT-SENT`/`ALERT-FAILED`/`ALERT-SKIP`).
+
 ---
 
 ## Пробы при приёмке: серийно, с паузами (И26)
