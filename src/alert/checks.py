@@ -328,7 +328,11 @@ def read_relay_signal(
     if dead and endpoint_host:
         if tcp_probe is not None:
             try:
-                tcp_ok = bool(tcp_probe(endpoint_host, cfg.relay_probe_port, float(cfg.tcp_timeout_s)))
+                probed = tcp_probe(
+                    endpoint_host, cfg.relay_probe_port, float(cfg.tcp_timeout_s)
+                )
+                # None = проба не выполнялась (например, `vds alert status`)
+                tcp_ok = None if probed is None else bool(probed)
             except OSError:
                 tcp_ok = False
         else:
