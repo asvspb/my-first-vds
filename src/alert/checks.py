@@ -66,6 +66,8 @@ class RelaySignal:
     tcp_ok: Optional[bool]
     icmp_ok: Optional[bool]
     traffic_active: bool
+    # rx пира: нужен гейту активности между тиками (last_rx в alert-state).
+    peer_rx: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +193,19 @@ def classify_relay(
     return "inconclusive"
 
 
+def _gateway_state_path(state_path: Optional[str]) -> str:
+    """Путь gateway `state.json`; по умолчанию — `gateway.paths.STATE_PATH`.
+
+    Резолвим здесь (а не полагаемся на дефолт `store.load_state`), чтобы
+    `state_path` был явным и тесты могли подменить путь без импорта store.
+    """
+    if state_path is not None:
+        return str(state_path)
+    from src.gateway.paths import STATE_PATH
+
+    return str(STATE_PATH)
+
+
 def _split_endpoint(endpoint: str) -> tuple[str, int]:
     """`1.2.3.4:51820` / `[2001:db8::1]:51820` → (host, port); мусор → ("", 0)."""
     if not endpoint:
@@ -224,6 +239,7 @@ def _signal(
     tcp_ok: Optional[bool] = None,
     icmp_ok: Optional[bool] = None,
     traffic_active: bool = False,
+    peer_rx: int = 0,
 ) -> RelaySignal:
     return RelaySignal(
         classification=classification,
@@ -235,6 +251,7 @@ def _signal(
         tcp_ok=tcp_ok,
         icmp_ok=icmp_ok,
         traffic_active=traffic_active,
+        peer_rx=peer_rx,
     )
 
 
@@ -256,7 +273,7 @@ def read_relay_signal(
     try:
         from src.gateway.store import load_state
 
-        gateway_state = load_state(state_path)
+        gateway_state = load_state(_gateway_state_path(state_path))
     except Exception:  # StoreError и любые ошибки чтения — «слеп», не алерт
         return _signal("inconclusive", "state_unreadable")
 
@@ -333,6 +350,7 @@ def read_relay_signal(
         tcp_ok=tcp_ok,
         icmp_ok=icmp_ok,
         traffic_active=traffic_active,
+        peer_rx=awg_peer.rx,
     )
 
 
@@ -346,6 +364,6 @@ def read_lockdown(state_path: Optional[str] = None) -> dict:
         from src.gateway.store import load_state
         from src.system.ufw import get_lockdown
 
-        return get_lockdown(load_state(state_path))
+        return get_lockdown(load_state(_gateway_state_path(state_path)))
     except Exception:  # битый state.json → лок считается неактивным (§5 failure modes)
         return {"active": False, "error": "state_unreadable"}
