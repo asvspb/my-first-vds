@@ -5,14 +5,29 @@
 > Счётчики тестов в исторических записях — моментальные снимки (OQ-9):
 > актуальный baseline — `pytest -q`, число в живых доках не хранится.
 
-## Активный цикл: doc-sync (SPEC-20261116-doc-sync) — WP-3 baseline
-- **SPEC:** [SPEC-20261116-doc-sync](specs/SPEC-20261116-doc-sync.md) (G2, WP-1/2 done:
-  `tools/docsync.py` + `docs/doc-sync.json` + тесты, коммит `5ff2bef`)
-- **WP-3 (в работе, vds-docs):** синхронизация живых доков по §11 — команды
-  probe-watch/ru-cidr/CDN-remove, юниты health/probe/relay/amneziawg-nat, ADR-011,
-  10 ролей, версия, banned-счётчики, source_lag.
-- **Дальше:** WP-4 (хуки + процесс), WP-5 (warn → block).
-- **Doc audit:** in progress (WP-3 = G5 этого цикла).
+## Активный цикл: alert-watch + fast alerts/scout (2026-11-17)
+- **SPEC:** [SPEC-20261117-alert-watch](specs/SPEC-20261117-alert-watch.md) — G2 APPROVED;
+  **WP-1…WP-7 реализованы и запушены** (`4af69c6..2782349`; код + тесты + доки).
+- **Сервер (vds):** `src/alert/` (7 модулей), юниты `vds-alert-watch.{service,timer}.tpl`,
+  `vds alert install/remove/test/status/watch` (+ аддитивный `test --channel tg|smtp`),
+  видимость в `WATCH_UNITS` (ADR-012), doc-sync правило `alert`. Проверка: полный
+  `pytest -q` зелёный, `docsync audit --strict` OK; секреты только в
+  `/etc/vds/alert.env` (0600).
+- **Клиент (`ubuntuInstaller/scripts/vpn-manager`):** `vpnm/scout` WP-S1…S4 —
+  `vpn scout [--json] [--sync]`, `vpn up --scout` (схема `scout.report/1`);
+  `vpn guard notify-test` (контракт WP-G5 не менялся). Полный `pytest -q` зелёный;
+  wheel содержит `vpnm/scout/*`, `SCHEMA = scout.report/1` импортируется из wheel.
+- **Осталось:** живая приёмка AC-1…AC-13 на asv2 — `/etc/vds/alert.env` 0600,
+  `vds alert test --channel smtp`, `awg show awg0 dump` (AC-13), простой 3+ ч
+  (`stale`/`telemetry_unavailable`); `vpn scout` на ноутбуке; пометка
+  «реализовано» в research-доке — после приёмки (SPEC §11).
+- **Doc audit:** `docsync audit --strict` — OK (эта правка снимает warning по STATUS.md).
+
+## Цикл doc-sync (SPEC-20261116-doc-sync) — WP-1…WP-4 закрыты
+- **SPEC:** [SPEC-20261116-doc-sync](specs/SPEC-20261116-doc-sync.md) (G2; `tools/docsync.py`,
+  `docs/doc-sync.json`, хуки `.githooks`, агентские DoD — коммит `26cdbf8`).
+- **Осталось:** WP-5 — переход `mode: warn → block` после подтверждения владельца
+  (после ~2026-11-30); до этого нарушения печатаются, но не блокируют.
 
 ## Предложение на G2: survivability (SPEC-20261116-survivability)
 - **SPEC:** [SPEC-20261116-survivability](specs/SPEC-20261116-survivability.md) —
