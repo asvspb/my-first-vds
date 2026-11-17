@@ -113,3 +113,40 @@ A unified platform for anti-censorship.
 отмечает `no network_unreachable/no_route in 60s`, `0 distinct names`.
 Связаны со сменой сети/сна ноутбука вечером 16.11 (до начала раскатки
 релея 17.11). Подавления (43) — штатная гистерезисная работа правил.
+
+### Пост-фикс по итогам T0.5 (2026-11-17)
+
+Полевые данные `vpn guard findings` вскрыли 4 дефекта правил и корреляции;
+закрыты в ubuntuInstaller коммитом `c447171` (ветка
+`fix/guard-g6-field-checkpoint`, полный прогон зелёный, +17 тестов в
+`tests/guard/test_guard_field_fixes.py`):
+
+1. **G-09 на вспомогательном DNS-юните.** `_g09` не различал тип юнита, и
+   `conn_reset=5` от `cloudflared-proxy-dns.service` давал
+   `endpoint_silent` с советом «свежие ссылки / резервный канал».
+   Введён `is_vpn_transport_unit()` (только `vpnm-*`, `vpn-xray-split@*`,
+   `vpn-awg-split@*`, `awg-quick@*`, `vpn-relay-*`; неизвестный юнит —
+   не транспорт, fail-closed).
+2. **Дубли findings в одном батче.** Ключ дедупа
+   `rule|unit|endpoint|cause` строился по endpoint события-триггера, а
+   правило выбирает хост из окна; при нескольких upstream-IP это давало
+   новые ключи. Добавлен `_Verdict.dedup_endpoint` (G-02/G-03/G-08/G-09) —
+   один физический сбой = один finding.
+3. **Немонотонный порядок `vpn guard findings`.** `FindingsStore.read()`
+   отдавал файловый порядок. Теперь strict chronology по `window.last|ts`
+   с детерминированным tie-break по вставке; `--json`/`--follow` — тот же
+   путь.
+4. **G-06 не подавлялся парным G-07.** Окно-подавление было, добавлен
+   batch-scoped приоритет (`_batch_local_net`): drain, в котором есть
+   `no_route`/`network_unreachable`, не может обвинить DNS; reason
+   `local_net_down`. При `distinct_names=0` fp-строка теперь честная —
+   «distinct names not extracted», а не «0 names broken».
+5. **G-12 `source_lost: sysfs:awg` при выключенном AWG.** Runner читает
+   `mode.json` (`note_awg_expected`), плюс детектор suspend/resume по
+   расхождению realtime↔monotonic (`SUSPEND_DRIFT_S=5`) — `note_clock_skew`
+   наконец вызывается из рантайма.
+
+Отдельно (не Guard, системное): шум `cloudflared-proxy-dns` объясняется
+`strict-order` в `/etc/dnsmasq.d/awg-split.conf` — dnsmasq сначала ждёт
+мёртвый в РФ DoH (1.1.1.1:443) и только потом идёт в 77.88.8.8. Правка —
+в генераторе `15_domain-split.sh` (ubuntuInstaller), решение владельца.
