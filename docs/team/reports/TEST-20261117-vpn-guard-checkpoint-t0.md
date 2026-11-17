@@ -150,3 +150,22 @@ A unified platform for anti-censorship.
 `strict-order` в `/etc/dnsmasq.d/awg-split.conf` — dnsmasq сначала ждёт
 мёртвый в РФ DoH (1.1.1.1:443) и только потом идёт в 77.88.8.8. Правка —
 в генераторе `15_domain-split.sh` (ubuntuInstaller), решение владельца.
+
+### A+B: IPv6-ENETUNREACH и IPv4-only cloudflared (2026-11-17, `904212f`)
+
+Полевой остаток: на ноутбуке без v6 dual-stack cloudflared ходил в
+`[2606:4700:4700::1111]` и получал `network is unreachable` каждые ~5 с —
+16 строк / 10 мин, G-07 high по G-07-логике и риск маскировки настоящего
+G-06 через batch-приоритет. Закрыто с двух сторон одним коммитом:
+
+- **Guard:** парсер не эмитит `network_unreachable`/`no_route`, если в
+  сообщении IPv6-адресат (учёт в `ignored_infra`, AC-5 не раздувается);
+  IPv4-случай по-прежнему даёт сигнал.
+- **Система:** cloudflared получает только IPv4-литералы
+  (`--upstream 1.1.1.1/1.0.0.1`, bootstrap `162.159.36.1/46.1`);
+  `15_domain-split.sh` идемпотентно переписывает ExecStart уже
+  установленного юнита и перезапускает сервис.
+
+Живая проверка после применения: `network is unreachable` — 0 за 3 мин,
+ошибок cloudflared — 0, `vpn guard findings --since 20m` — пусто,
+DNS отвечает (youtube/ipinfo — единицы миллисекунд).
