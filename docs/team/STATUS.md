@@ -109,6 +109,12 @@
   **Ранбук обновлён 2026-11-17:** тариф LandVPS RU-1 (KVM, 1 ГБ/20 ГБ,
   1 месяц до года, swap при 0.75 ГБ), 5-мин gate §0.3 через **asv2
   (213.108.23.119:51825)**, anti-DDoS UDP-проверка; asv1-IP удалён из команд.
+  **Gate PASS 2026-11-17:** LandVPS `vm354051` (185.80.91.135, AS216334,
+  Москва) — AWG UDP до asv2 работает (egress 213.108.23.119, Google 200/0.34 s),
+  anti-DDoS UDP не режет. Отчёт:
+  [TEST-20261117-ru-relay-gate](reports/TEST-20261117-ru-relay-gate.md).
+  Остаток: решение OS 24.04 vs 22.04, DNS `relay.asvpersonal.ru` (A→IP,
+  DNS-only), RU_SNI, затем `vds relay init --exit 213.108.23.119`.
 - **probe-watch v3** (SPEC-20261116-probe-response): threat-level quiet/elevated/high,
   ru-cidr install, lock-443 TTL/undo/hop-guard, auto-lockdown off (default).
 - **И44:** AWG/relay генераторы клиентов без дефолтного `PersistentKeepalive`
