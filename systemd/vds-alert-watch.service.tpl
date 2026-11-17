@@ -23,4 +23,5 @@ ProtectSystem=strict
 ReadWritePaths=/var/lib/vds /var/run
 ProtectHome=yes
 PrivateTmp=yes
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# awg show — netlink (AF_NETLINK + CAP_NET_ADMIN), TCP-проба релея — AF_INET
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK

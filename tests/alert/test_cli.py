@@ -318,6 +318,11 @@ def test_service_template_renders_with_ctx():
         text = (SYSTEMD_DIR / name).read_text(encoding="utf-8").format(**ctx)
         assert "{python}" not in text and "{interval_sec}" not in text
 
+    # `awg show` общается с ядром через netlink: без AF_NETLINK юнит получает
+    # «Address family not supported by protocol» и пульс уходит в inconclusive.
+    service = (SYSTEMD_DIR / SERVICE_TEMPLATE).read_text(encoding="utf-8")
+    assert "AF_NETLINK" in service
+
 
 def alert_cli_main_app():
     from src.main import app

@@ -332,7 +332,7 @@ Gateway-таймеры (ставятся по явной команде, не п
 | `vds-relay-cidr.timer` | RU-CIDR на релее (еженедельно) | `vds relay init --apply` (ADR-007) |
 | `vds-logs-sample.timer` (`vds-logs-sample.service.tpl`/`vds-logs-sample.timer.tpl`) | 5-минутный сэмпл телеметрии (journald/счётчики, ADR-012); `ReadWritePaths=/var/lib/vds /var/run` (runtime-lock) | `vds logs install --apply` |
 | `vds-logs-daily.timer` (`vds-logs-daily.service.tpl`/`vds-logs-daily.timer.tpl`) | ежедневный отчёт/ротация лог-конвейера (ADR-012); `ReadWritePaths=/var/lib/vds /var/run` (runtime-lock) | `vds logs install --apply` |
-| `vds-alert-watch.timer` (`vds-alert-watch.service.tpl`/`vds-alert-watch.timer.tpl`) | сторож угрозы на exit-узле: threat из `probe-watch.json`, пульс плеча relay→exit по `awg show awg0 dump`, лок 443; доставка в Telegram/SMTP, heartbeat раз в сутки (SPEC-20261117); `ReadWritePaths=/var/lib/vds /var/run` | `vds alert install --apply` |
+| `vds-alert-watch.timer` (`vds-alert-watch.service.tpl`/`vds-alert-watch.timer.tpl`) | сторож угрозы на exit-узле: threat из `probe-watch.json`, пульс плеча relay→exit по `awg show awg0 dump`, лок 443; доставка в Telegram/SMTP, heartbeat раз в сутки (SPEC-20261117); `ReadWritePaths=/var/lib/vds /var/run`; `RestrictAddressFamilies` включает `AF_NETLINK` (иначе `awg show` → «Address family not supported») | `vds alert install --apply` |
 
 Таймеры ZeroTier (архив) активируются **только** при явной установке
 `vds zerotier install` (опциональный сценарий):

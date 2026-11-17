@@ -441,6 +441,14 @@ tshark -r /var/tmp/tspu_probes.pcap -Y "tls.handshake.type == 1" -V
 Секреты в `Environment=` юнита **не** попадают: процесс читает `alert.env` сам
 (иначе `systemctl show -p Environment` светил бы токен).
 
+**Песочница юнита:** `ProtectSystem=strict`, `ReadWritePaths=/var/lib/vds /var/run`,
+`ProtectHome=yes`, `PrivateTmp=yes`, `CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW`,
+`RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK`. **`AF_NETLINK`
+обязателен:** `awg show` читает состояние через netlink, и без него юнит получает
+`Unable to access interface: Address family not supported by protocol` — пульс
+уходит в `inconclusive` (`ALERT-SKIP relay_pulse no_telemetry`), хотя ручной
+`vds alert status` данные видит. Симптом на живом узле — ровно эта пара строк.
+
 **Сигналы:** `threat` из `/var/lib/vds/probe-watch.json` (missing/corrupt/
 `no_level`/stale различаются — «нет данных» ≠ «тихо»); пульс плеча relay→exit
 (`awg show awg0 dump` + пир `relay` из `state.json`, гейт активности: без
