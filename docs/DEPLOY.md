@@ -270,7 +270,9 @@ vds gateway probe-watch ru-cidr install --apply    # RU-CIDR без релея: 
 4. `sudo vds alert test` (или `--channel smtp` — быстрая проверка почты) —
    реальная отправка, **без** записи state.
 5. `sudo vds alert status` — сверить каналы, юниты и coverage (что «слепо» и
-   почему). `--json` машинно читается и не содержит значений секретов.
+   почему). `--json` машинно читается и не содержит значений секретов. Без root
+   статус работает в урезанном виде (`alert.env` 0600 не читается) — это норма,
+   для coverage нужен `sudo`.
 6. `sudo vds alert watch --no-send` — прогнать тик без отправки: `relay_pulse` не
    должен быть `inconclusive`/`idle` при живом канале.
 

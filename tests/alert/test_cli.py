@@ -204,6 +204,20 @@ def test_status_without_config_is_graceful(tmp_path, gateway_state, fake_console
     assert "не настроены" in text or "нет активных" in text
 
 
+def test_status_unreadable_env_is_truncated(tmp_path, gateway_state, fake_console, monkeypatch):
+    """0600 root без sudo: status не падает, а печатает урезанный вид."""
+    env_path = _env_file(tmp_path)
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text("SMTP_HOST=smtp.example.com\n", encoding="utf-8")
+
+    def boom(path):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(alert_cli, "load_config", boom)
+    assert alert_cli.cmd_status(root=str(tmp_path)) == 0
+    assert any("конфиг недоступен" in line for line in fake_console.lines)
+
+
 def test_test_channel_invalid(tmp_path, fake_console):
     assert alert_cli.cmd_test(root=str(tmp_path), channel="carrier-pigeon") == 1
     assert any("--channel" in line for line in fake_console.lines)

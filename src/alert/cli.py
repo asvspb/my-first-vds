@@ -324,8 +324,17 @@ def cmd_status(*, json_out: bool = False, root: str = "/") -> int:
     """Состояние сторожа: каналы, юниты, coverage. Без root — урезанно."""
     env_path = _env_path(root)
     present = env_path.is_file()
-    cfg = load_config(str(env_path))
-    warnings = config_warnings(cfg) if present else ["конфиг недоступен — запустите под sudo"]
+    cfg = AlertConfig()
+    unreadable = "конфиг недоступен — запустите под sudo"
+    if present:
+        try:
+            cfg = load_config(str(env_path))
+            warnings = config_warnings(cfg)
+        except OSError:
+            # 0600 root: без sudo файл не читается — урезанный режим (SPEC §3.4)
+            warnings = [unreadable]
+    else:
+        warnings = [unreadable]
 
     state_path = _state_path(root)
     alert_state, corrupted = load_state(state_path)
