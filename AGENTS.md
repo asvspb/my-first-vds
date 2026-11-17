@@ -75,10 +75,10 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 | `vds system ufw ssh-port --to 49222 [--finalize]` | Двухфазный перенос SSH-порта (22 закрывается только `--finalize`; откат Фазы A сам перезапускает ssh.socket/ssh, drop-in 0644) |
 | `vds relay init --exit <ip> --domain <домен> --sni <RU_SNI> --apply` | RU-relay (ADR-007): AWG udp/443 + Reality tcp/443 + policy-routing до exit-ноды; целевая ОС — Ubuntu 24.04 (`docs/DEPLOY-RU-RELAY.md`) |
 | `vds relay add-client NAME [--endpoint HOST[:PORT]] [--dns IP[,IP]] [--qr]` | Пир awg0 + .conf 0600 (MTU 1280, `AllowedIPs = 0.0.0.0/0` v4-only, `DNS = 1.1.1.1, 1.0.0.1` через exit); endpoint = домен клиентов (имя машины пропускается, нерезолв → IP сервера, P22); `--qr` — ANSIUTF8 в терминале через stdin (без qrencode — warning), P23 |
-| `sudo vds alert install --apply` | Сторож угрозы на exit-узле (SPEC-20261117): юниты `vds-alert-watch.service`/`.timer` из `vds-alert-watch.service.tpl`/`vds-alert-watch.timer.tpl`, `/etc/vds/alert.env` 0600; dry-run без `--apply` |
+| `sudo vds alert install --apply` | Сторож угрозы на exit-узле (SPEC-20261117): юниты `vds-alert-watch.service`/`.timer` из `vds-alert-watch.service.tpl`/`vds-alert-watch.timer.tpl`, `/etc/vds/alert.env` 0600; dry-run без `--apply`; флаги `--channel tg,smtp`, `--interval 2m`, `--handshake-threshold 300s`, `--heartbeat 24h`, `--force`; на релее нужен `--allow-relay-node` (не делать) |
 | `sudo vds alert test [--channel tg\|smtp]` | Тестовая отправка без записи state (проверить почту/бота) |
 | `vds alert status [--json]` | Каналы/юниты/coverage; JSON без секретов; без root — урезанно (env 0600) |
-| `vds alert watch --no-send` | Один тик сторожа без отправки и без записи state (отладка) |
+| `vds alert watch --no-send` | Один тик сторожа без отправки и без записи state (отладка); `--config` — путь к env (в юните фиксирован) |
 | `sudo vds alert remove --apply [--purge]` | Снять юниты; `--purge` удаляет alert.env и alert-state.json |
 | `python -m compileall -q src` | Синтаксическая проверка |
 | `pytest -q` | Юнит-тесты (`tests/`, без root/сети/docker) |

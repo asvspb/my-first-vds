@@ -252,16 +252,24 @@ vds gateway probe-watch ru-cidr install --apply    # RU-CIDR без релея: 
 
 Уведомления отправляет **exit-узел** (на RU-рееле секретов нет). Порядок:
 
-1. `sudo vds alert install` — dry-run: план, имена ключей `alert.env` и активные
-   каналы. Ничего не пишется.
+1. `sudo vds alert install` — dry-run: план, имена ключей `alert.env` и
+   запрошенные каналы (без `--channel` — «авто по парам ключей»). Ничего не
+   пишется. Флаги: `--interval` (тик, 2m), `--handshake-threshold` (порог пульса
+   плеча, 300s), `--heartbeat` (dead-man switch, 24h), `--force`,
+   `--allow-relay-node` (на релее не использовать).
 2. Создать `/etc/vds/alert.env` (0600): пары `TG_BOT_TOKEN`+`TG_CHAT_ID` и/или
    `SMTP_HOST`/`SMTP_FROM`/`SMTP_TO`/`SMTP_PASS` (App Password, не основной
-   пароль); `SMTP_STARTTLS=1` для :587. Параметры — `ALERT_*` (см. шаблон в выводе
-   `install`). Минимально для почты:
+   пароль). **Порт 587 требует обоих ключей:** `SMTP_PORT=587` и
+   `SMTP_STARTTLS=1` — по умолчанию `SMTP_PORT=465` (implicit TLS), и STARTTLS
+   на нём не работает. Параметры — `ALERT_*`; полный шаблон со значениями по
+   умолчанию — это сам `/etc/vds/alert.env`, который создаёт `install --apply`
+   (без `--force` существующий сохраняется). Минимально для почты
+   (implicit TLS, порт 465):
 
    ```bash
    sudo install -m 0600 /dev/null /etc/vds/alert.env
    sudoedit /etc/vds/alert.env   # SMTP_HOST/SMTP_FROM/SMTP_TO/SMTP_PASS
+   # для :587 дополнительно: SMTP_PORT=587 и SMTP_STARTTLS=1
    ```
 
 3. `sudo vds alert install --apply` — рендер `vds-alert-watch.service`/`.timer`,
@@ -274,7 +282,12 @@ vds gateway probe-watch ru-cidr install --apply    # RU-CIDR без релея: 
    статус работает в урезанном виде (`alert.env` 0600 не читается) — это норма,
    для coverage нужен `sudo`.
 6. `sudo vds alert watch --no-send` — прогнать тик без отправки: `relay_pulse` не
-   должен быть `inconclusive`/`idle` при живом канале.
+   должен быть `inconclusive` при живом канале (`idle` допустим, если на `awg1`
+   не выставлен `PersistentKeepalive` — см. DEPLOY-RU-RELAY §4).
+
+**Heartbeat (dead-man switch):** раз в `ALERT_HEARTBEAT_H`=24 ч уходит «Сторож
+жив» с числом пропущенных часов и предупреждениями каналов — тишина дольше
+суток сама по себе означает, что сторож или канал не работают.
 
 **Откат:** `sudo vds alert remove --apply` (юниты сняты, `alert.env` сохранён) →
 `--purge` (удалить и `alert.env`/`alert-state.json`). UFW, `probe-watch.json` и

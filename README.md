@@ -200,7 +200,9 @@ vds logs remove --apply             # Демонтаж таймеров/данн
 
 vds alert install                   # Сторож угрозы на exit-узле: план установки (dry-run)
 vds alert install --apply           # Юниты vds-alert-watch + /etc/vds/alert.env (0600)
-vds alert install --channel smtp --apply   # только почта (telegram — по умолчанию оба)
+vds alert install --channel smtp --apply   # только почта (без --channel — авто по парам ключей)
+vds alert install --interval 2m --handshake-threshold 300s --heartbeat 24h  # тик/пульс/dead-man
+vds alert install --force --apply   # перезаписать существующий alert.env
 vds alert test                      # Тестовое сообщение во все активные каналы (root)
 vds alert test --channel smtp       # Проверить именно почту (App Password)
 vds alert status                    # Каналы/юниты/coverage; --json — без секретов
@@ -209,6 +211,7 @@ vds alert watch --no-send           # Один тик без отправки и
 vds alert remove --apply            # Снять юниты (alert.env сохраняется; --purge — удалить)
 # Секреты сторожа живут только в /etc/vds/alert.env (0600); в юнит не попадают.
 # Сторож только уведомляет: probe-watch.json, state.json, UFW он не меняет.
+# На RU-рееле install отказывает (--allow-relay-node делать не надо).
 
 vds xray install                    # Установить Xray VLESS Reality (TCP 443)
 vds xray install --sni www.cloudflare.com   # Сайт-маска (по умолчанию www.google.com)
