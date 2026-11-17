@@ -411,7 +411,15 @@ anti-censorship.`, `[Info] infra/conf/serial: Reading config: &{...}`.
 `unparsed_ratio <= 0.05` без реальных непарсенных событий; тест на
 `ParseStats`.
 
-## P22 — `vds relay add-client`: endpoint из неразрешимого `state.domain` (2026-11-17)
+## P22 — `vds relay add-client`: endpoint из неразрешимого `state.domain` (2026-11-17) — ✅ ВЫПОЛНЕНО 2026-11-17
+
+> Закрыто: `--endpoint HOST[:PORT]` + `choose_endpoint()` — домен проверяется
+> на публичный резолв, неразрешимый → warning и фолбэк на публичный src-IP
+> сервера (`ip route get`), нет фолбэка → отказ с подсказкой `--endpoint`.
+> Тесты: `tests/relay/test_clients.py::TestChooseEndpoint` (+2 сквозных на
+> `add_client`); доки — README, AGENTS, DEPLOY-RU-RELAY §9.
+> Живая проверка 2026-11-17: после фикса DNS `relay.asvpersonal.ru` клиент
+> `laptop` собирается на домене.
 
 **Факт.** Клиентский `.conf` получает `Endpoint = {state.domain}:443`
 (`src/relay/clients.py`: `domain or 'relay.asvpersonal.ru'`). На LandVPS

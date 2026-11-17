@@ -275,6 +275,15 @@ systemctl list-timers vds-relay-cidr.timer
   (AllowedIPs 0.0.0.0/0). И44: `PersistentKeepalive` по умолчанию не
   пишется (радиомолчание в простое); клиенту за NAT —
   `--keepalive 113`.
+- **Endpoint клиента.** По умолчанию берётся домен релея (`state.domain`,
+  иначе `relay.asvpersonal.ru`). Если имя не резолвится в публичный адрес
+  (внутреннее имя хостера — LandVPS `354051.landvps.online` — или A-запись
+  ещё не создана), команда печатает warning и **фолбэкает на публичный IP
+  сервера** (`ip route get`, src наружу): клиент поднимается, но при смене
+  IP адрес надо перегенерировать. Явное значение —
+  `--endpoint HOST[:PORT]` (например `--endpoint 185.80.91.135:443`).
+  Симптом неверного endpoint на клиенте: `awg-quick: Name or service not
+  known: '<host>:443'` и юнит в `failed` (TECHDEBT P22).
 - **Ноутбук:** инстанция `vpn-awg-split@relay` в ubuntuInstaller
   (доменный split без изменений; меняется только выходная нога).
   Управление — `vpn start relay` (весь трафик → релей), `vpn start` —

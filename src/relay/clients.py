@@ -14,8 +14,11 @@
 конфиг копируется с сервера по ssh — DEPLOY-RU-RELAY §Клиенты).
 """
 
+import ipaddress
 import os
 import random
+import re
+import socket
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -50,6 +53,8 @@ from src.relay.paths import (
 
 FIRST_CLIENT_HOST = 2  # 10.10.0.1 — сервер (SPEC §2)
 BACKUP_SUFFIX = ".bak-pre-mutation"
+DEFAULT_RELAY_DOMAIN = "relay.asvpersonal.ru"  # §9: до создания A-записи — IP
+ENDPOINT_PROBE_HOST = "1.1.1.1"  # только для `ip route get` (публичный src)
 
 
 class RelayClientError(Exception):
@@ -106,6 +111,125 @@ def next_address(state) -> str:
     )
 
 
+def _is_public_ip(address: str) -> bool:
+    """Публичный (маршрутизируемый в интернете) адрес — не private/loopback и т.п."""
+    try:
+        ip = ipaddress.ip_address(address.split("%")[0])
+    except ValueError:
+        return False
+    return not (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+    )
+
+
+def _looks_like_ip(host: str) -> bool:
+    """Host — литеральный IPv4/IPv6 (в т.ч. в скобках), а не имя."""
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+    return True
+
+
+def _parse_endpoint(value: str, default_port: int) -> str:
+    """`HOST`, `HOST:PORT`, `[v6]:PORT` → нормализованный `HOST:PORT`."""
+    text = value.strip()
+    if not text or "/" in text or any(ch.isspace() for ch in text):
+        raise RelayClientError(
+            f"Некорректный endpoint {value!r}: ожидается HOST[:PORT] (например "
+            f"{DEFAULT_RELAY_DOMAIN}:{default_port} или IP:{default_port})."
+        )
+    if text.startswith("["):  # IPv6 в скобках: [::1]:443
+        host, sep, port_text = text.rpartition("]:")
+        if not sep:
+            raise RelayClientError(
+                f"Некорректный endpoint {value!r}: для IPv6 нужен вид [addr]:port."
+            )
+        host = host + "]"
+    else:
+        host, sep, port_text = text.rpartition(":")
+        if not sep:
+            host, port_text = text, ""
+    if not host or host == "[]":
+        raise RelayClientError(f"Некорректный endpoint {value!r}: пустой host.")
+    if not port_text:
+        return f"{host}:{default_port}"
+    if not port_text.isdigit() or not 1 <= int(port_text) <= 65535:
+        raise RelayClientError(
+            f"Некорректный endpoint {value!r}: порт '{port_text}' вне 1..65535."
+        )
+    return f"{host}:{int(port_text)}"
+
+
+def _resolve_public(host: str, port: int) -> list[str]:
+    """Публичные A/AAAA для host; пусто — имя не резолвится или только приватное."""
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_DGRAM)
+    except socket.gaierror:
+        return []
+    addresses: list[str] = []
+    for info in infos:
+        address = str(info[4][0])
+        if address not in addresses:
+            addresses.append(address)
+    return [address for address in addresses if _is_public_ip(address)]
+
+
+def _public_source_ip() -> Optional[str]:
+    """Публичный IP сервера (src маршрута наружу); None — только приватный/NAT."""
+    result = run_list(["ip", "-4", "route", "get", ENDPOINT_PROBE_HOST], timeout=10)
+    if not result.ok:
+        return None
+    match = re.search(r"\bsrc\s+(\S+)", result.output)
+    if not match or not _is_public_ip(match.group(1)):
+        return None
+    return match.group(1)
+
+
+def choose_endpoint(
+    domain: str, override: Optional[str] = None, port: int = RELAY_PORT
+) -> str:
+    """Endpoint клиентского .conf: явный override → домен → фолбэк на IP сервера.
+
+    Причина (TECHDEBT P22): `state.domain` может быть внутренним именем
+    (LandVPS `354051.landvps.online`), которого нет в публичном DNS, — тогда
+    `awg-quick` падает на «Name or service not known». Если домен не
+    резолвится в публичный адрес, берём публичный src-IP сервера и
+    предупреждаем; явный `--endpoint` клиент получает без проверок.
+    """
+    if override:
+        endpoint = _parse_endpoint(override, port)
+        host = endpoint.rsplit(":", 1)[0]
+        if not _looks_like_ip(host) and not _resolve_public(host, port):
+            console.print(
+                f"[warning][relay] endpoint '{host}' не резолвится в публичный "
+                "адрес с этого сервера — если клиент увидит его, оставляем как "
+                "задано.[/warning]"
+            )
+        return endpoint
+    host = domain.strip() or DEFAULT_RELAY_DOMAIN
+    if _resolve_public(host, port):
+        return f"{host}:{port}"
+    console.print(
+        f"[warning][relay] домен '{host}' не резолвится в публичный адрес "
+        "(внутреннее имя хостера или запись ещё не создана).[/warning]"
+    )
+    source = _public_source_ip()
+    if source:
+        console.print(
+            f"[warning][relay] фолбэк endpoint = {source}:{port} (IP сервера). "
+            "Для домена — создайте A-запись и перегенерируйте клиента, "
+            "или укажите --endpoint явно.[/warning]"
+        )
+        return f"{source}:{port}"
+    raise RelayClientError(
+        f"Домен релея '{host}' не резолвится в публичный адрес, а публичный IP "
+        "сервера определить не удалось (NAT/приватный src) — укажите endpoint "
+        "явно: --endpoint HOST[:PORT] (docs/DEPLOY-RU-RELAY.md §9)."
+    )
+
+
 def _append_mtu(client_conf: str, mtu: int) -> str:
     """MTU в [Interface] клиентского conf (render_client_conf MTU не пишет)."""
     lines = client_conf.split("\n")
@@ -122,6 +246,7 @@ def add_client(
     no_psk: bool = False,
     keepalive: Optional[int] = None,
     state_path: Optional[str] = None,
+    endpoint_override: Optional[str] = None,
 ) -> dict:
     """Добавить пир awg0; вернуть dict с conf_path (без секретов)."""
     if os.geteuid() != 0:
@@ -143,7 +268,7 @@ def add_client(
     use_psk = psk_required and not no_psk
     psk = _run_checked(["awg", "genpsk"], timeout=10, what="awg genpsk") if use_psk else None
     junk = gen_obfuscation_params(random.Random())
-    endpoint = f"{domain or 'relay.asvpersonal.ru'}:{RELAY_PORT}"
+    endpoint = choose_endpoint(domain, endpoint_override, RELAY_PORT)
 
     conf_path = RELAY_CLIENTS_DIR / f"{name}.conf"
     client_conf = _append_mtu(

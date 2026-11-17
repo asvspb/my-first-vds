@@ -141,6 +141,17 @@
   `relay.asvpersonal.ru` (владелец) либо `--endpoint` в `add-client`
   (TECHDEBT P22). `vpn status relay` — не подкоманда: режим показывает
   `vpn status`.
+  **Закрыто 2026-11-17:** DNS `relay.asvpersonal.ru` → A `185.80.91.135`
+  создан владельцем; endpoint возвращён на домен (`~/.awg/relay.conf`,
+  бэкап `.bak-ip-endpoint`), серверные экспорты `laptop.conf` /
+  `smoke-asv2.conf` — тоже домен. Живая проверка на домене: юнит active,
+  egress `213.108.23.119`, `ya.ru 302 / 0.17 s`. **TECHDEBT P22 закрыт
+  кодом:** `vds relay add-client --endpoint HOST[:PORT]` +
+  `choose_endpoint()` (домен → проверка публичного резолва → фолбэк на
+  публичный src-IP сервера → отказ с подсказкой); 10 новых тестов,
+  полный прогон зелёный. Ноутбук возвращён в **прямой контур**:
+  `@laptop` active (handshake, endpoint asv2:51825, policy 0x21000),
+  `@relay` остановлен, `mode.json` = `direct`.
   **Ранбук обновлён 2026-11-17:** тариф LandVPS RU-1 (KVM, 1 ГБ/20 ГБ,
   1 месяц до года, swap при 0.75 ГБ), 5-мин gate §0.3 через **asv2
   (213.108.23.119:51825)**, anti-DDoS UDP-проверка; asv1-IP удалён из команд.

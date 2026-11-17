@@ -110,6 +110,11 @@ class TestAddClient:
             relay_clients, "run_list",
             lambda args, timeout=None: ShellResult(stdout="", stderr="", returncode=0),
         )
+        # Домен фикстур резолвится в публичный адрес — иначе choose_endpoint
+        # уйдёт в IP-фолбэк (см. TestChooseEndpoint).
+        monkeypatch.setattr(
+            relay_clients, "_resolve_public", lambda host, port: ["203.0.113.10"],
+        )
         (tmp_path / "awg0.conf").write_text(SERVER_CONF, encoding="utf-8")
         return path
 
@@ -184,3 +189,96 @@ class TestAddClient:
         # Секреты в state допускаются (файл 0600), но list-вывод их не печатает —
         # контракт: вернуть профили; печать выполняет CLI без extra-полей.
         assert clients[0].name == "phone"
+
+    def test_endpoint_override_written_verbatim(self, monkeypatch, tmp_path: Path):
+        """P22: явный --endpoint попадает в conf без переопределений."""
+        path = self._setup(monkeypatch, tmp_path)
+        result = relay_clients.add_client(
+            "phone", state_path=path, endpoint_override="198.51.100.9:51820",
+        )
+        assert result["endpoint"] == "198.51.100.9:51820"
+        text = Path(result["conf_path"]).read_text(encoding="utf-8")
+        assert "Endpoint = 198.51.100.9:51820" in text
+
+    def test_unresolvable_domain_falls_back_to_server_ip(self, monkeypatch, tmp_path: Path):
+        """P22: state.domain без публичного DNS → IP сервера, клиент поднимается."""
+        path = self._setup(monkeypatch, tmp_path)
+        monkeypatch.setattr(relay_clients, "_resolve_public", lambda host, port: [])
+        monkeypatch.setattr(relay_clients, "_public_source_ip", lambda: "198.51.100.9")
+        result = relay_clients.add_client("phone", state_path=path)
+        assert result["endpoint"] == "198.51.100.9:443"
+        text = Path(result["conf_path"]).read_text(encoding="utf-8")
+        assert "Endpoint = 198.51.100.9:443" in text
+
+
+class TestChooseEndpoint:
+    """Выбор endpoint клиента (TECHDEBT P22): домен → IP сервера → отказ."""
+
+    def _public_fixture(self, monkeypatch) -> None:
+        # RFC 5737 (203.0.113.0/24) в Python 3.10 считается private — для
+        # фикстур разрешаем только эти диапазоны.
+        monkeypatch.setattr(
+            relay_clients, "_is_public_ip",
+            lambda addr: addr.startswith(("203.0.113.", "198.51.100.")),
+        )
+
+    def test_resolving_domain_is_used(self, monkeypatch):
+        self._public_fixture(monkeypatch)
+        monkeypatch.setattr(
+            relay_clients, "_resolve_public",
+            lambda host, port: ["203.0.113.10"],
+        )
+        assert relay_clients.choose_endpoint("relay.example.ru") == "relay.example.ru:443"
+
+    def test_unresolvable_domain_falls_back_to_source_ip(self, monkeypatch):
+        self._public_fixture(monkeypatch)
+        monkeypatch.setattr(relay_clients, "_resolve_public", lambda host, port: [])
+        monkeypatch.setattr(relay_clients, "_public_source_ip", lambda: "198.51.100.9")
+        assert (
+            relay_clients.choose_endpoint("354051.landvps.online")
+            == "198.51.100.9:443"
+        )
+
+    def test_unresolvable_without_source_ip_refuses(self, monkeypatch):
+        monkeypatch.setattr(relay_clients, "_resolve_public", lambda host, port: [])
+        monkeypatch.setattr(relay_clients, "_public_source_ip", lambda: None)
+        with pytest.raises(RelayClientError, match="--endpoint"):
+            relay_clients.choose_endpoint("354051.landvps.online")
+
+    def test_empty_domain_uses_default(self, monkeypatch):
+        monkeypatch.setattr(
+            relay_clients, "_resolve_public",
+            lambda host, port: ["203.0.113.10"],
+        )
+        assert (
+            relay_clients.choose_endpoint("") == "relay.asvpersonal.ru:443"
+        )
+
+    def test_override_without_port_gets_relay_port(self):
+        assert relay_clients.choose_endpoint("x", "198.51.100.7") == "198.51.100.7:443"
+
+    def test_override_with_port_kept(self):
+        assert (
+            relay_clients.choose_endpoint("x", "198.51.100.7:51820")
+            == "198.51.100.7:51820"
+        )
+
+    def test_override_ipv6_kept(self):
+        assert (
+            relay_clients.choose_endpoint("x", "[2001:db8::1]:443")
+            == "[2001:db8::1]:443"
+        )
+
+    def test_override_bad_port_refused(self):
+        with pytest.raises(RelayClientError, match="порт"):
+            relay_clients.choose_endpoint("x", "198.51.100.7:70000")
+
+    def test_override_bad_host_refused(self):
+        with pytest.raises(RelayClientError):
+            relay_clients.choose_endpoint("x", "/bad host")
+
+    def test_is_public_ip_marks_private_and_loopback(self):
+        assert relay_clients._is_public_ip("10.9.0.2") is False
+        assert relay_clients._is_public_ip("127.0.0.1") is False
+        assert relay_clients._is_public_ip("198.51.100.9") is False  # RFC 5737
+        assert relay_clients._is_public_ip("8.8.8.8") is True

@@ -1298,12 +1298,18 @@ def relay_add_client(
         0, "--keepalive",
         help="PersistentKeepalive клиента (И44: по умолчанию НЕ пишется — "
              "радиомолчание; для NAT-дырки простое 113)"),
+    endpoint: str = typer.Option(
+        "", "--endpoint",
+        help="Явный endpoint клиента HOST[:PORT] (по умолчанию домен релея, "
+             "при неразрешимом домене — IP сервера)"),
 ):
     """Добавить пира AWG-сервера релея: .conf 0600 с endpoint <relay-домен>:443,
     MTU 1280 (двойная инкапсуляция), AllowedIPs 0.0.0.0/0 (DNS уходит на релей,
     там RU-CIDR → напрямую, прочее → asv1). Секреты в stdout не выводятся.
 
     Пример: sudo vds relay add-client phone
+    Домен не резолвится (внутреннее имя хостера / нет A-записи) → warning и
+    фолбэк на публичный IP сервера; переопределение — `--endpoint`.
     Конфиг копируется с сервера по ssh → импорт в AmneziaVPN
     (docs/DEPLOY-RU-RELAY.md §Клиенты)."""
     from src.core.logger import console
@@ -1311,7 +1317,10 @@ def relay_add_client(
     from src.relay.clients import RelayClientError, add_client
 
     try:
-        add_client(name, no_psk=no_psk, keepalive=keepalive or None)
+        add_client(
+            name, no_psk=no_psk, keepalive=keepalive or None,
+            endpoint_override=endpoint or None,
+        )
     except (StoreError, RelayClientError) as exc:
         console.print(f"[error][relay] {exc}[/error]")
         raise typer.Exit(1)

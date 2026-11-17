@@ -244,6 +244,8 @@ vds relay init --exit <exit-ip> --domain relay.asvpersonal.ru --sni <RU_SNI>
 vds relay status                    # Юниты, awg0/awg1, живость ноги до exit, nft, CIDR
 vds relay add-client phone          # Пир awg0: .conf (0600), endpoint relay-домен:443
                                      # (--keepalive 113 — И44: по умолчанию keepalive не пишется)
+                                     # (--endpoint HOST[:PORT] — явный endpoint;
+                                     #  неразрешимый домен → warning + IP сервера)
 ```
 
 Ссылки импортируются в v2rayNG / NekoRay / Hiddify / sing-box; AmneziaWG-конфиг —
