@@ -38,6 +38,7 @@ UFW (профиль relay через `vds system ufw harden --profile relay --ap
 | Foreign через AWG-клиента (`github.com`) | 200, 2.6 с (двойной хоп) ✅ |
 | `systemctl --failed` | 0 ✅ |
 | ufw после включения | SSH 22 доступен, правила на месте ✅ |
+| **reboot-тест** | SSH поднялся через 50 с; все 6 юнитов active, `ip rule fwmark 0x1` + `table 100 default dev awg1` восстановились, 2 правила MASQUERADE на месте, `curl --interface awg1` → `213.108.23.119` ✅ |
 
 Маскировка Reality: `SNI=ya.ru` + в **той же /24** (`185.80.91.119`) реально
 живёт Yandex-фронт (GlobalSign `*.yandex.by`, HTTP/2, captcha-страница) —
@@ -142,5 +143,14 @@ API-токена на машинах проекта нет. Пока испол�
 | UFW-профиль relay | [SERVER-BASELINE §5.11](../../SERVER-BASELINE.md) |
 | Долги | `TECHDEBT.md` P20 |
 
-Тесты: `tests/relay` — 65 passed; `pytest -q` целиком — 1060+ passed;
+Тесты: `tests/relay` — 65 passed; `pytest -q` целиком — 1064 passed;
 `python3 tools/docsync.py audit --strict` — 0.
+
+## 7. Как код попал на релей
+
+`/opt/my-vds` собран tar-снимком рабочего дерева `my-first-vds` (без `.git`),
+`bash install.sh` создал venv и `vds`. Обновление кода на релее — повторная
+раскатка снимка + `systemctl restart` затронутых юнитов; после любых правок
+`src/relay/*` полезно прогнать идемпотентный `vds relay init --apply`.
+Git-версию фиксируемого состояния релея смотрите в `state.protocols['relay']`
+(домен/exit/SNI/обфускация) и в коммитах `my-first-vds`.
