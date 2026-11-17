@@ -115,6 +115,7 @@
   [DEPLOY-20261117-ru-relay-landvps](reports/DEPLOY-20261117-ru-relay-landvps.md).
   Открыто: DNS `relay.asvpersonal.ru` (A, DNS-only) — владелец; решение
   ОС 24.04 vs 22.04; смена паролей панели/root; TECHDEBT P20 (remove-client).
+  Reboot-тест PASS: 6/6 юнитов, policy-маршрут и NAT восстанавливаются сами.
   **Ранбук обновлён 2026-11-17:** тариф LandVPS RU-1 (KVM, 1 ГБ/20 ГБ,
   1 месяц до года, swap при 0.75 ГБ), 5-мин gate §0.3 через **asv2
   (213.108.23.119:51825)**, anti-DDoS UDP-проверка; asv1-IP удалён из команд.
