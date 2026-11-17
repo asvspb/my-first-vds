@@ -187,16 +187,31 @@ def _public_source_ip() -> Optional[str]:
     return match.group(1)
 
 
+def _is_local_hostname(host: str) -> bool:
+    """host — имя самой машины (hostname/FQDN): клиентам оно не годится."""
+    name = host.strip().rstrip(".").lower()
+    if not name:
+        return True
+    local = {
+        socket.gethostname().strip(".").lower(),
+        socket.getfqdn().strip(".").lower(),
+        socket.gethostname().split(".")[0].strip(".").lower(),
+    }
+    return name in {item for item in local if item}
+
+
 def choose_endpoint(
     domain: str, override: Optional[str] = None, port: int = RELAY_PORT
 ) -> str:
-    """Endpoint клиентского .conf: явный override → домен → фолбэк на IP сервера.
+    """Endpoint клиентского .conf: override → домен релея → фолбэк на IP сервера.
 
-    Причина (TECHDEBT P22): `state.domain` может быть внутренним именем
-    (LandVPS `354051.landvps.online`), которого нет в публичном DNS, — тогда
-    `awg-quick` падает на «Name or service not known». Если домен не
-    резолвится в публичный адрес, берём публичный src-IP сервера и
-    предупреждаем; явный `--endpoint` клиент получает без проверок.
+    Причина (TECHDEBT P22): `state.domain` может оказаться внутренним именем
+    хостера (LandVPS пишет туда `354051.landvps.online`), и хотя на самом
+    сервере оно резолвится через внутренний DNS, у клиента — NXDOMAIN, а
+    `awg-quick` падает на «Name or service not known». Поэтому имя, равное
+    hostname/FQDN сервера, пропускается, и берётся канонический домен
+    клиентов; если и он не резолвится в публичный адрес — IP сервера.
+    Явный `--endpoint` клиент получает без переопределений.
     """
     if override:
         endpoint = _parse_endpoint(override, port)
@@ -208,12 +223,28 @@ def choose_endpoint(
                 "задано.[/warning]"
             )
         return endpoint
-    host = domain.strip() or DEFAULT_RELAY_DOMAIN
-    if _resolve_public(host, port):
-        return f"{host}:{port}"
+
+    candidates: list[str] = []
+    configured = domain.strip()
+    if configured:
+        if _is_local_hostname(configured):
+            console.print(
+                f"[warning][relay] state.domain = '{configured}' — это имя самой "
+                "машины (внутреннее имя хостера), клиентам не годится; беру "
+                f"'{DEFAULT_RELAY_DOMAIN}'.[/warning]"
+            )
+        else:
+            candidates.append(configured)
+    if DEFAULT_RELAY_DOMAIN not in candidates:
+        candidates.append(DEFAULT_RELAY_DOMAIN)
+    for host in candidates:
+        if _resolve_public(host, port):
+            return f"{host}:{port}"
+
     console.print(
-        f"[warning][relay] домен '{host}' не резолвится в публичный адрес "
-        "(внутреннее имя хостера или запись ещё не создана).[/warning]"
+        f"[warning][relay] ни один домен релея ({', '.join(candidates)}) не "
+        "резолвится в публичный адрес — запись не создана или DNS не виден "
+        "отсюда.[/warning]"
     )
     source = _public_source_ip()
     if source:
@@ -224,9 +255,9 @@ def choose_endpoint(
         )
         return f"{source}:{port}"
     raise RelayClientError(
-        f"Домен релея '{host}' не резолвится в публичный адрес, а публичный IP "
-        "сервера определить не удалось (NAT/приватный src) — укажите endpoint "
-        "явно: --endpoint HOST[:PORT] (docs/DEPLOY-RU-RELAY.md §9)."
+        "Публичный домен релея не резолвится, а публичный IP сервера определить "
+        "не удалось (NAT/приватный src) — укажите endpoint явно: "
+        "--endpoint HOST[:PORT] (docs/DEPLOY-RU-RELAY.md §9)."
     )
 
 

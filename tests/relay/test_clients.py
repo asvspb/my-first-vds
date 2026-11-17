@@ -239,6 +239,31 @@ class TestChooseEndpoint:
             == "198.51.100.9:443"
         )
 
+    def test_server_hostname_is_skipped_for_canonical(self, monkeypatch):
+        """P22-живой случай: state.domain = hostname сервера → берём домен клиентов."""
+        self._public_fixture(monkeypatch)
+        monkeypatch.setattr(
+            relay_clients, "_resolve_public",
+            lambda host, port: ["203.0.113.10"],
+        )
+        import socket
+
+        assert (
+            relay_clients.choose_endpoint(socket.gethostname())
+            == "relay.asvpersonal.ru:443"
+        )
+
+    def test_server_hostname_with_dead_canonical_uses_source_ip(self, monkeypatch):
+        self._public_fixture(monkeypatch)
+        monkeypatch.setattr(relay_clients, "_resolve_public", lambda host, port: [])
+        monkeypatch.setattr(relay_clients, "_public_source_ip", lambda: "198.51.100.9")
+        import socket
+
+        assert (
+            relay_clients.choose_endpoint(socket.getfqdn())
+            == "198.51.100.9:443"
+        )
+
     def test_unresolvable_without_source_ip_refuses(self, monkeypatch):
         monkeypatch.setattr(relay_clients, "_resolve_public", lambda host, port: [])
         monkeypatch.setattr(relay_clients, "_public_source_ip", lambda: None)

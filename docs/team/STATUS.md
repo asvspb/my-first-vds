@@ -147,9 +147,15 @@
   `smoke-asv2.conf` — тоже домен. Живая проверка на домене: юнит active,
   egress `213.108.23.119`, `ya.ru 302 / 0.17 s`. **TECHDEBT P22 закрыт
   кодом:** `vds relay add-client --endpoint HOST[:PORT]` +
-  `choose_endpoint()` (домен → проверка публичного резолва → фолбэк на
-  публичный src-IP сервера → отказ с подсказкой); 10 новых тестов,
-  полный прогон зелёный. Ноутбук возвращён в **прямой контур**:
+  `choose_endpoint()`: override → `state.domain` → канонический
+  `relay.asvpersonal.ru` → публичный src-IP сервера → отказ с подсказкой.
+  Ключевая деталь: резолв проверяется **с сервера**, а внутреннее имя
+  хостера там резолвится (LandVPS-DNS), поэтому отсечка идёт по совпадению
+  имени с hostname/FQDN машины. 12 новых тестов, полный прогон зелёный;
+  код докатан на релей (`/opt/my-vds/src/...`, venv-PYTHONPATH) и проверен
+  вживую: `choose_endpoint('354051.landvps.online')` →
+  `relay.asvpersonal.ru:443` + warning, override — как задан. Ноутбук
+  возвращён в **прямой контур**:
   `@laptop` active (handshake, endpoint asv2:51825, policy 0x21000),
   `@relay` остановлен, `mode.json` = `direct`.
   **Ранбук обновлён 2026-11-17:** тариф LandVPS RU-1 (KVM, 1 ГБ/20 ГБ,

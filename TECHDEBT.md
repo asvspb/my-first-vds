@@ -413,9 +413,12 @@ anti-censorship.`, `[Info] infra/conf/serial: Reading config: &{...}`.
 
 ## P22 — `vds relay add-client`: endpoint из неразрешимого `state.domain` (2026-11-17) — ✅ ВЫПОЛНЕНО 2026-11-17
 
-> Закрыто: `--endpoint HOST[:PORT]` + `choose_endpoint()` — домен проверяется
-> на публичный резолв, неразрешимый → warning и фолбэк на публичный src-IP
-> сервера (`ip route get`), нет фолбэка → отказ с подсказкой `--endpoint`.
+> Закрыто: `--endpoint HOST[:PORT]` + `choose_endpoint()` — override →
+> `state.domain` (имя самой машины пропускается) → канонический домен →
+> публичный src-IP сервера (`ip route get`); нет фолбэка → отказ с
+> подсказкой `--endpoint`. Важно: проверка резолва идёт с сервера, а
+> внутреннее имя хостера там резолвится, поэтому отсекается именно по
+> совпадению с hostname/FQDN.
 > Тесты: `tests/relay/test_clients.py::TestChooseEndpoint` (+2 сквозных на
 > `add_client`); доки — README, AGENTS, DEPLOY-RU-RELAY §9.
 > Живая проверка 2026-11-17: после фикса DNS `relay.asvpersonal.ru` клиент

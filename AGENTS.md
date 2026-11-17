@@ -69,7 +69,7 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 | `vds system ufw harden --profile gateway/relay/exit-cascade` | Идемпотентный UFW hardening (SPEC-20261116; dry-run по умолчанию, `--apply`, `--undo`; hop-диапазон из state нормализуется `-`→`:`) |
 | `vds system ufw ssh-port --to 49222 [--finalize]` | Двухфазный перенос SSH-порта (22 закрывается только `--finalize`; откат Фазы A сам перезапускает ssh.socket/ssh, drop-in 0644) |
 | `vds relay init --exit <ip> --domain <домен> --sni <RU_SNI> --apply` | RU-relay (ADR-007): AWG udp/443 + Reality tcp/443 + policy-routing до exit-ноды; целевая ОС — Ubuntu 24.04 (`docs/DEPLOY-RU-RELAY.md`) |
-| `vds relay add-client NAME [--endpoint HOST[:PORT]]` | Пир awg0 + .conf 0600 (MTU 1280, AllowedIPs 0.0.0.0/0); endpoint = домен релея, неразрешимый домен → warning + публичный IP сервера (TECHDEBT P22) |
+| `vds relay add-client NAME [--endpoint HOST[:PORT]]` | Пир awg0 + .conf 0600 (MTU 1280, AllowedIPs 0.0.0.0/0); endpoint = домен клиентов (имя самой машины пропускается), неразрешимый → warning + публичный IP сервера (TECHDEBT P22) |
 | `python -m compileall -q src` | Синтаксическая проверка |
 | `pytest -q` | Юнит-тесты (`tests/`, без root/сети/docker) |
 | `bash install.sh` | Установка (root, на сервере) |

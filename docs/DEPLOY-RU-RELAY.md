@@ -275,11 +275,13 @@ systemctl list-timers vds-relay-cidr.timer
   (AllowedIPs 0.0.0.0/0). И44: `PersistentKeepalive` по умолчанию не
   пишется (радиомолчание в простое); клиенту за NAT —
   `--keepalive 113`.
-- **Endpoint клиента.** По умолчанию берётся домен релея (`state.domain`,
-  иначе `relay.asvpersonal.ru`). Если имя не резолвится в публичный адрес
-  (внутреннее имя хостера — LandVPS `354051.landvps.online` — или A-запись
-  ещё не создана), команда печатает warning и **фолбэкает на публичный IP
-  сервера** (`ip route get`, src наружу): клиент поднимается, но при смене
+- **Endpoint клиента.** Порядок выбора: явный `--endpoint` → `state.domain`
+  → канонический `relay.asvpersonal.ru` → публичный IP сервера. Имя,
+  совпадающее с hostname/FQDN самой машины, **пропускается с warning**:
+  LandVPS пишет в `state.domain` своё внутреннее имя
+  (`354051.landvps.online`) — на сервере оно резолвится внутренним DNS, а у
+  клиента NXDOMAIN. Если ни один домен не резолвится в публичный адрес,
+  берётся IP (`ip route get`, src наружу): клиент поднимается, но при смене
   IP адрес надо перегенерировать. Явное значение —
   `--endpoint HOST[:PORT]` (например `--endpoint 185.80.91.135:443`).
   Симптом неверного endpoint на клиенте: `awg-quick: Name or service not
