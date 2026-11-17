@@ -410,3 +410,24 @@ anti-censorship.`, `[Info] infra/conf/serial: Reading config: &{...}`.
 **Критерий.** Реплей 24-часового журнала с 12 баннерными строками даёт
 `unparsed_ratio <= 0.05` без реальных непарсенных событий; тест на
 `ParseStats`.
+
+## P22 — `vds relay add-client`: endpoint из неразрешимого `state.domain` (2026-11-17)
+
+**Факт.** Клиентский `.conf` получает `Endpoint = {state.domain}:443`
+(`src/relay/clients.py`: `domain or 'relay.asvpersonal.ru'`). На LandVPS
+`state.domain = 354051.landvps.online` — внутреннее имя панели, которого
+нет в публичном DNS (проверено 1.1.1.1 и 8.8.8.8). `relay.asvpersonal.ru`
+тоже ещё не создан. Итог живой приёмки 2026-11-17: `vpn start relay`
+падает на `awg-quick: Name or service not known`, хотя сервер и ключи
+исправны — чинилось ручной заменой endpoint на IP.
+
+**Действие.** `vds relay add-client --endpoint HOST[:PORT]` (явный
+override) + предупреждение, если `state.domain` не резолвится (или
+резолвится в приватный адрес); в ранбуке §9 — «до создания
+`relay.asvpersonal.ru` endpoint = IP релея».
+
+**Критерий.** `add-client` без override при неразрешимом домене печатает
+warning и пишет IP-фолбэк (или отказывает с подсказкой `--endpoint`);
+`add-client --endpoint relay.asvpersonal.ru:443` пишет ровно заданное;
+юнит-тест на выбор endpoint; `vpn start relay` с таким conf поднимается
+без ручной правки.

@@ -126,6 +126,21 @@
   читает его как подсказку, `activity.json` остаётся probe-маркером.
   Живой preflight на ноутбуке: без `sudo -n` `vpn start relay` → exit 1,
   прямой контур (`asv2-reality` + `@laptop`) не изменён.
+  **Живой старт PASS 2026-11-17:** первый запуск падал на
+  `vpn-awg-split@relay` — `awg-quick: Name or service not known:
+  '354051.landvps.online:443'`. Причина: `vds relay add-client` берёт
+  endpoint из `state.domain`, а это внутреннее имя LandVPS, не публикуемое
+  в публичном DNS (`relay.asvpersonal.ru` ещё не создан). Ключи целы
+  (пир `9tmMZ…` = серверный peer), сервер в порядке (`:443/udp`, UFW 443,
+  pubkey совпадает). Фикс: `Endpoint = 185.80.91.135:443` в
+  `~/.awg/relay.conf` (бэкап `.bak-pre-endpoint`) + серверные экспорты
+  `laptop.conf` / `smoke-asv2.conf` (там же бэкапы). После фикса: юнит
+  active, handshake есть, egress `213.108.23.119` (asv2), RU-сайты direct
+  (`ya.ru 302 / 0.19 s`), `mode.json` = `relay`, `vpn status` печатает
+  `RELAY (awg relay → 185.80.91.135)`. Постоянное решение — DNS-запись
+  `relay.asvpersonal.ru` (владелец) либо `--endpoint` в `add-client`
+  (TECHDEBT P22). `vpn status relay` — не подкоманда: режим показывает
+  `vpn status`.
   **Ранбук обновлён 2026-11-17:** тариф LandVPS RU-1 (KVM, 1 ГБ/20 ГБ,
   1 месяц до года, swap при 0.75 ГБ), 5-мин gate §0.3 через **asv2
   (213.108.23.119:51825)**, anti-DDoS UDP-проверка; asv1-IP удалён из команд.
