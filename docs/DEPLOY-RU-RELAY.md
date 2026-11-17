@@ -275,6 +275,22 @@ systemctl list-timers vds-relay-cidr.timer
   (AllowedIPs 0.0.0.0/0). И44: `PersistentKeepalive` по умолчанию не
   пишется (радиомолчание в простое); клиенту за NAT —
   `--keepalive 113`.
+- **`DNS =` в клиентском conf не пишется** (проверено 2026-11-17 на
+  Android/Windows). При `AllowedIPs 0.0.0.0/0` это типичная причина
+  «подключено, но ничего не открывается»: клиент спрашивает DNS у
+  локального роутера, а тот адрес уходит в туннель. Резолвера на
+  `10.10.0.1` нет. Добавлять в `[Interface]` вручную:
+  `DNS = 1.1.1.1` (через релей+exit) или `77.88.8.8` (RU-CIDR — релей
+  пустит напрямую). Также убирать `::/0` из `AllowedIPs`: нога `awg1`
+  v4-only, v6 в туннеле — чёрная дыра (источник IPv6-ENETUNREACH).
+- **QR для телефона** (Android) — штатной команды у `vds` нет; рабочий
+  путь: скопировать conf на ноутбук как `~/.awg/<name>.conf` (0600), затем
+  `vpn amneziawg qr <name>` (терминал, секрет — через stdin) или
+  `qrencode -t PNG -m 4 -o <name>-qr.png -r ~/.awg/<name>.conf` (PNG 0600).
+  Имя не должно совпадать с локальными инстансами (`laptop`, `relay`) —
+  `qr` сначала ищет `/etc/amnezia/amneziawg/<name>.conf`. Windows: QR не
+  нужен — импорт файла. Автоматизация (`add-client --dns/--qr`) —
+  TECHDEBT P23.
 - **Endpoint клиента.** Порядок выбора: явный `--endpoint` → `state.domain`
   → канонический `relay.asvpersonal.ru` → публичный IP сервера. Имя,
   совпадающее с hostname/FQDN самой машины, **пропускается с warning**:
