@@ -275,8 +275,15 @@ systemctl list-timers vds-relay-cidr.timer
   (AllowedIPs 0.0.0.0/0). И44: `PersistentKeepalive` по умолчанию не
   пишется (радиомолчание в простое); клиенту за NAT —
   `--keepalive 113`.
-- **Ноутбук:** инстанция `vpn-awg-split@relay` в ubuntuInstaller (доменный
-  split без изменений; меняется только выходная нога).
+- **Ноутбук:** инстанция `vpn-awg-split@relay` в ubuntuInstaller
+  (доменный split без изменений; меняется только выходная нога).
+  Управление — `vpn start relay` (весь трафик → релей), `vpn start` —
+  обратно на прямой контур, `vpn down` — выключить профили и релей
+  (`vpn-guard.service` не трогается). Контуры взаимоисключающие: старт
+  нового сначала гасит старый, при неудаче — отказ, а не два маршрута.
+  Режим пишется в `~/.local/share/vpn-manager/mode.json` (schema
+  `vpnm.mode/1`) — это контракт с `vpn guard`; `guard/activity.json`
+  остаётся probe-маркером `{cmd,started,until}` и не перезаписывается.
 
 ### 10. Reboot-тест (приёмка)
 
