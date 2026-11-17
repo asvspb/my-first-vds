@@ -1302,12 +1302,19 @@ def relay_add_client(
         "", "--endpoint",
         help="Явный endpoint клиента HOST[:PORT] (по умолчанию домен релея, "
              "при неразрешимом домене — IP сервера)"),
+    dns: str = typer.Option(
+        "", "--dns",
+        help="DNS клиента: IP-литералы через запятую (по умолчанию "
+             "1.1.1.1,1.0.0.1 — идут через exit, в обход ТСПУ)"),
+    qr: bool = typer.Option(
+        False, "--qr",
+        help="Напечатать QR конфига в терминале (qrencode; без него — warning)"),
 ):
     """Добавить пира AWG-сервера релея: .conf 0600 с endpoint <relay-домен>:443,
-    MTU 1280 (двойная инкапсуляция), AllowedIPs 0.0.0.0/0 (DNS уходит на релей,
-    там RU-CIDR → напрямую, прочее → asv1). Секреты в stdout не выводятся.
+    MTU 1280 (двойная инкапсуляция), AllowedIPs 0.0.0.0/0 (только IPv4: нога
+    awg1 v4-only) и DNS = 1.1.1.1, 1.0.0.1. Секреты в stdout не выводятся.
 
-    Пример: sudo vds relay add-client phone
+    Пример: sudo vds relay add-client phone --keepalive 25 --qr
     Домен не резолвится (внутреннее имя хостера / нет A-записи) → warning и
     фолбэк на публичный IP сервера; переопределение — `--endpoint`.
     Конфиг копируется с сервера по ssh → импорт в AmneziaVPN
@@ -1320,6 +1327,7 @@ def relay_add_client(
         add_client(
             name, no_psk=no_psk, keepalive=keepalive or None,
             endpoint_override=endpoint or None,
+            dns=dns or None, qr=qr,
         )
     except (StoreError, RelayClientError) as exc:
         console.print(f"[error][relay] {exc}[/error]")

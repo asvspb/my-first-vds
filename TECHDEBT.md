@@ -443,7 +443,14 @@ warning и пишет IP-фолбэк (или отказывает с подск
 юнит-тест на выбор endpoint; `vpn start relay` с таким conf поднимается
 без ручной правки.
 
-## P23 — `vds relay add-client`: нет `DNS =` и нет выпуска QR (2026-11-17)
+## P23 — `vds relay add-client`: нет `DNS =` и нет выпуска QR (2026-11-17) — ✅ ВЫПОЛНЕНО 2026-11-17
+
+> Закрыто: `DNS = 1.1.1.1, 1.0.0.1` пишется всегда (`--dns` для
+> переопределения, принимаются только IP-литералы), `AllowedIPs` только
+> `0.0.0.0/0` (без `::/0`), `--qr` печатает ANSIUTF8-QR через stdin
+> (`qrencode`; без него — warning, без падения). Тесты —
+> `tests/relay/test_clients.py` (DNS default/override/отказ, AllowedIPs, QR
+> без qrencode и через stdin); доки — README, AGENTS, DEPLOY-RU-RELAY §9.
 
 **Факт.** Клиентский conf не содержит `DNS =`, а `AllowedIPs` пишется как
 `0.0.0.0/0,::/0`. На Android/Windows при полном туннеле это даёт «подключено,

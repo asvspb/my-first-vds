@@ -80,6 +80,35 @@ def run_list(
         return ShellResult(stdout="", stderr=str(e), returncode=-1)
 
 
+def run_input(
+    args: list[str],
+    text: str,
+    timeout: Optional[int] = None,
+) -> ShellResult:
+    """Запустить команду с текстом на stdin (для qrencode и подобного).
+
+    Секреты передаются через stdin, а не через argv: `ps`/история их не
+    увидят. Ошибки, как и у run_list, возвращаются через ShellResult.
+    """
+    try:
+        result = subprocess.run(
+            args,
+            input=text,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return ShellResult(
+            stdout=result.stdout,
+            stderr=result.stderr,
+            returncode=result.returncode,
+        )
+    except subprocess.TimeoutExpired:
+        return ShellResult(stdout="", stderr="timeout", returncode=-1)
+    except Exception as e:
+        return ShellResult(stdout="", stderr=str(e), returncode=-1)
+
+
 def command_exists(name: str) -> bool:
     return shutil.which(name) is not None
 

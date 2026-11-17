@@ -25,7 +25,6 @@ from typing import Optional
 
 from src.amneziawg.clients import _append_peer, _gen_client_keys, _validate_server_conf
 from src.amneziawg.config import (
-    DEFAULT_CLIENT_ALLOWED_IPS,
     ClientParams,
     gen_obfuscation_params,
     render_client_conf,
@@ -33,7 +32,7 @@ from src.amneziawg.config import (
 from src.core.lock import FileLock
 from src.core.logger import console
 from src.core.secrets import write_secret_atomic
-from src.core.shell import run_list
+from src.core.shell import command_exists, run_input, run_list
 from src.gateway.paths import AWG_CLIENTS_DIR  # тот же каталог ссылок клиентов
 from src.gateway.store import (
     ClientProfile,
@@ -55,6 +54,14 @@ FIRST_CLIENT_HOST = 2  # 10.10.0.1 — сервер (SPEC §2)
 BACKUP_SUFFIX = ".bak-pre-mutation"
 DEFAULT_RELAY_DOMAIN = "relay.asvpersonal.ru"  # §9: до создания A-записи — IP
 ENDPOINT_PROBE_HOST = "1.1.1.1"  # только для `ip route get` (публичный src)
+#: AllowedIPs клиента релея — только IPv4: нога awg1 v4-only, `::/0` в
+#: туннеле даёт чёрную дыру для AAAA-запросов (2026-11-17, Android/Windows).
+RELAY_CLIENT_ALLOWED_IPS = "0.0.0.0/0"
+#: DNS клиента по умолчанию. Без `DNS =` при AllowedIPs 0.0.0.0/0 клиент
+#: спрашивает DNS у локального роутера, а тот адрес уходит в туннель →
+#: «подключено, но не открывается». 1.1.1.1/1.0.0.1 не входят в RU-CIDR,
+#: поэтому запросы идут через table 100 → awg1 → asv2 (в обход ТСПУ).
+DEFAULT_RELAY_DNS: tuple[str, ...] = ("1.1.1.1", "1.0.0.1")
 
 
 class RelayClientError(Exception):
@@ -272,12 +279,78 @@ def _append_mtu(client_conf: str, mtu: int) -> str:
     return "\n".join(out)
 
 
+def _parse_dns(value: Optional[str]) -> tuple[str, ...]:
+    """`--dns 1.1.1.1,1.0.0.1` → кортеж IPv4/IPv6-литералов (без имён хостов).
+
+    WireGuard резолвит имена вне туннеля — «DNS = dns.google» на клиенте за
+    NAT/ТСПУ не работает, поэтому принимаем только литеральные адреса.
+    """
+    if value is None or not value.strip():
+        return DEFAULT_RELAY_DNS
+    servers: list[str] = []
+    for raw in value.split(","):
+        candidate = raw.strip()
+        if not candidate:
+            continue
+        try:
+            ipaddress.ip_address(candidate)
+        except ValueError:
+            raise RelayClientError(
+                f"Некорректный DNS {candidate!r}: нужны IP-литералы "
+                "через запятую (например 1.1.1.1,1.0.0.1)."
+            ) from None
+        servers.append(candidate)
+    if not servers:
+        raise RelayClientError("--dns пуст — укажите хотя бы один IP.")
+    return tuple(servers)
+
+
+def _append_dns(client_conf: str, dns: tuple[str, ...]) -> str:
+    """`DNS =` в [Interface]: render_client_conf его не пишет (P23)."""
+    if not dns:
+        return client_conf
+    value = ", ".join(dns)
+    lines = client_conf.split("\n")
+    out: list[str] = []
+    for line in lines:
+        out.append(line)
+        if line.strip().startswith("Address = "):
+            out.append(f"DNS = {value}")
+    return "\n".join(out)
+
+
+def _print_qr(conf_text: str) -> bool:
+    """QR конфига в терминал (ANSIUTF8) через stdin — без падения без qrencode."""
+    if not command_exists("qrencode"):
+        console.print(
+            "[warning][relay] qrencode не найден — QR пропущен "
+            "(sudo apt install qrencode), конфиг-файл уже записан.[/warning]"
+        )
+        return False
+    result = run_input(
+        ["qrencode", "-t", "ANSIUTF8", "-m", "2", "-o", "-", "-r", "/dev/stdin"],
+        text=conf_text,
+        timeout=15,
+    )
+    if not result.ok or not result.stdout.strip():
+        detail = (result.stderr or "").strip().splitlines()
+        console.print(
+            f"[warning][relay] QR не построен: "
+            f"{detail[-1] if detail else f'rc={result.returncode}'}[/warning]"
+        )
+        return False
+    console.print(result.stdout.rstrip("\n"))
+    return True
+
+
 def add_client(
     name: str,
     no_psk: bool = False,
     keepalive: Optional[int] = None,
     state_path: Optional[str] = None,
     endpoint_override: Optional[str] = None,
+    dns: Optional[str] = None,
+    qr: bool = False,
 ) -> dict:
     """Добавить пир awg0; вернуть dict с conf_path (без секретов)."""
     if os.geteuid() != 0:
@@ -289,6 +362,7 @@ def add_client(
     server_obf = dict(meta.get("obfuscation") or {})
     psk_required = bool(meta.get("psk_required", True))
     domain = str(state.domain or meta.get("domain") or "")
+    dns_servers = _parse_dns(dns)
 
     # Дубль имени и аллокация адреса — до мутаций (паттерн E4).
     probe = ClientProfile(name=name, protocol="relay-awg", port=RELAY_PORT)
@@ -302,21 +376,24 @@ def add_client(
     endpoint = choose_endpoint(domain, endpoint_override, RELAY_PORT)
 
     conf_path = RELAY_CLIENTS_DIR / f"{name}.conf"
-    client_conf = _append_mtu(
-        render_client_conf(
-            ClientParams(
-                private_key=priv,
-                address=address,
-                server_pubkey=server_pubkey,
-                endpoint=endpoint,
-                junk={k: junk[k] for k in ("Jc", "Jmin", "Jmax")},
-                obf=server_obf,
-                psk=psk,
-                allowed_ips=DEFAULT_CLIENT_ALLOWED_IPS,
-                keepalive=keepalive,
-            )
+    client_conf = _append_dns(
+        _append_mtu(
+            render_client_conf(
+                ClientParams(
+                    private_key=priv,
+                    address=address,
+                    server_pubkey=server_pubkey,
+                    endpoint=endpoint,
+                    junk={k: junk[k] for k in ("Jc", "Jmin", "Jmax")},
+                    obf=server_obf,
+                    psk=psk,
+                    allowed_ips=RELAY_CLIENT_ALLOWED_IPS,
+                    keepalive=keepalive,
+                )
+            ),
+            RELAY_MTU,
         ),
-        RELAY_MTU,
+        dns_servers,
     )
     profile = ClientProfile(
         name=name,
@@ -329,7 +406,8 @@ def add_client(
             "conf_path": str(conf_path),
             "endpoint": endpoint,
             "mtu": RELAY_MTU,
-            "allowed_ips": DEFAULT_CLIENT_ALLOWED_IPS,
+            "allowed_ips": RELAY_CLIENT_ALLOWED_IPS,
+            "dns": list(dns_servers),
             **({"psk": psk} if psk is not None else {}),
         },
     )
@@ -367,11 +445,17 @@ def add_client(
         f"импортируйте в AmneziaVPN; endpoint {endpoint}, MTU {RELAY_MTU}.[/change]"
     )
     console.print(
-        f"[info][relay] DNS клиента уходит на релей (AllowedIPs 0.0.0.0/0): "
-        "RU-CIDR идёт напрямую, прочее — через awg1 до exit-ноды (ADR-007).[/info]"
+        f"[info][relay] DNS клиента = {', '.join(dns_servers)} (AllowedIPs "
+        f"{RELAY_CLIENT_ALLOWED_IPS}): RU-CIDR релей ведёт напрямую, прочее — "
+        "через awg1 до exit-ноды (ADR-007). DNS-запросы идут через exit "
+        "(в обход ТСПУ).[/info]"
     )
+    if qr:
+        _print_qr(client_conf)
     return {"name": name, "protocol": "relay-awg", "address": address,
-            "conf_path": str(conf_path), "endpoint": endpoint}
+            "conf_path": str(conf_path), "endpoint": endpoint,
+            "dns": list(dns_servers),
+            "allowed_ips": RELAY_CLIENT_ALLOWED_IPS}
 
 
 def list_clients(state_path: Optional[str] = None):

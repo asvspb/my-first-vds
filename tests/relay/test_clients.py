@@ -210,6 +210,67 @@ class TestAddClient:
         text = Path(result["conf_path"]).read_text(encoding="utf-8")
         assert "Endpoint = 198.51.100.9:443" in text
 
+    # --- P23: DNS / AllowedIPs / QR -------------------------------------
+
+    def test_conf_writes_dns_and_ipv4_only_allowed_ips(self, monkeypatch,
+                                                       tmp_path: Path):
+        """P23: `DNS =` по умолчанию и AllowedIPs без `::/0` (awg1 v4-only)."""
+        path = self._setup(monkeypatch, tmp_path)
+        result = relay_clients.add_client("phone", state_path=path)
+        text = Path(result["conf_path"]).read_text(encoding="utf-8")
+        assert "DNS = 1.1.1.1, 1.0.0.1" in text
+        assert "AllowedIPs = 0.0.0.0/0" in text
+        assert "::/0" not in text
+        assert result["dns"] == ["1.1.1.1", "1.0.0.1"]
+        assert result["allowed_ips"] == "0.0.0.0/0"
+
+        from src.gateway.store import load_state
+
+        profile = next(c for c in load_state(path).clients if c.name == "phone")
+        assert profile.extra["dns"] == ["1.1.1.1", "1.0.0.1"]
+        assert profile.extra["allowed_ips"] == "0.0.0.0/0"
+
+    def test_dns_override_is_written(self, monkeypatch, tmp_path: Path):
+        path = self._setup(monkeypatch, tmp_path)
+        result = relay_clients.add_client(
+            "phone", state_path=path, dns="77.88.8.8,77.88.8.7",
+        )
+        text = Path(result["conf_path"]).read_text(encoding="utf-8")
+        assert "DNS = 77.88.8.8, 77.88.8.7" in text
+
+    def test_dns_hostname_is_refused(self, monkeypatch, tmp_path: Path):
+        path = self._setup(monkeypatch, tmp_path)
+        with pytest.raises(RelayClientError, match="IP-литералы"):
+            relay_clients.add_client("phone", state_path=path, dns="dns.google")
+        # отказ до мутаций: пира в server-конфиге нет
+        assert "AllowedIPs = 10.10.0.2/32" not in (
+            tmp_path / "awg0.conf").read_text(encoding="utf-8")
+
+    def test_qr_without_qrencode_does_not_fail(self, monkeypatch,
+                                               tmp_path: Path):
+        path = self._setup(monkeypatch, tmp_path)
+        monkeypatch.setattr(relay_clients, "command_exists", lambda name: False)
+        result = relay_clients.add_client("phone", state_path=path, qr=True)
+        assert Path(result["conf_path"]).exists()
+
+    def test_qr_passes_conf_via_stdin(self, monkeypatch, tmp_path: Path):
+        """Секреты уходят в qrencode через stdin, а не аргументами процесса."""
+        path = self._setup(monkeypatch, tmp_path)
+        monkeypatch.setattr(relay_clients, "command_exists", lambda name: True)
+        captured: dict = {}
+
+        def fake_run_input(args, text, timeout=None):
+            captured["args"] = args
+            captured["text"] = text
+            return ShellResult(stdout="QR-ART", stderr="", returncode=0)
+
+        monkeypatch.setattr(relay_clients, "run_input", fake_run_input)
+        relay_clients.add_client("phone", state_path=path, qr=True)
+        assert "ANSIUTF8" in captured["args"]
+        assert "/dev/stdin" in captured["args"]
+        assert "PrivateKey" in captured["text"]  # конфиг целиком, через stdin
+        assert not any("PrivateKey" in a for a in captured["args"])
+
 
 class TestChooseEndpoint:
     """Выбор endpoint клиента (TECHDEBT P22): домен → IP сервера → отказ."""

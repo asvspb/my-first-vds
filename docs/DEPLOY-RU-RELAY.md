@@ -269,28 +269,28 @@ systemctl list-timers vds-relay-cidr.timer
 
 ### 9. Клиенты
 
-- **Телефон:** `sudo vds relay add-client phone` → скопировать
-  `/opt/my-vds/gateway/clients/relay/phone.conf` по ssh → импорт в
-  AmneziaVPN; endpoint `relay.asvpersonal.ru:443`; DNS уходит на релей
-  (AllowedIPs 0.0.0.0/0). И44: `PersistentKeepalive` по умолчанию не
-  пишется (радиомолчание в простое); клиенту за NAT —
-  `--keepalive 113`.
-- **`DNS =` в клиентском conf не пишется** (проверено 2026-11-17 на
-  Android/Windows). При `AllowedIPs 0.0.0.0/0` это типичная причина
-  «подключено, но ничего не открывается»: клиент спрашивает DNS у
-  локального роутера, а тот адрес уходит в туннель. Резолвера на
-  `10.10.0.1` нет. Добавлять в `[Interface]` вручную:
-  `DNS = 1.1.1.1` (через релей+exit) или `77.88.8.8` (RU-CIDR — релей
-  пустит напрямую). Также убирать `::/0` из `AllowedIPs`: нога `awg1`
-  v4-only, v6 в туннеле — чёрная дыра (источник IPv6-ENETUNREACH).
-- **QR для телефона** (Android) — штатной команды у `vds` нет; рабочий
-  путь: скопировать conf на ноутбук как `~/.awg/<name>.conf` (0600), затем
-  `vpn amneziawg qr <name>` (терминал, секрет — через stdin) или
-  `qrencode -t PNG -m 4 -o <name>-qr.png -r ~/.awg/<name>.conf` (PNG 0600).
-  Имя не должно совпадать с локальными инстансами (`laptop`, `relay`) —
-  `qr` сначала ищет `/etc/amnezia/amneziawg/<name>.conf`. Windows: QR не
-  нужен — импорт файла. Автоматизация (`add-client --dns/--qr`) —
-  TECHDEBT P23.
+- **Телефон (Android):** `sudo vds relay add-client phone --keepalive 25 --qr`
+  → QR печатается сразу в терминале, файл
+  `/opt/my-vds/gateway/clients/relay/phone.conf` (0600) остаётся для ssh.
+  Импорт в AmneziaVPN: сканировать QR (или импорт файла).
+  И44: `PersistentKeepalive` по умолчанию не пишется (радиомолчание в
+  простое); клиенту за NAT — `--keepalive 25` (или 113 «незаметнее»).
+- **Ноутбук/Windows:** `sudo vds relay add-client laptop` → скопировать
+  `.conf` по ssh → AmneziaVPN «Импорт из файла» (QR десктопу не нужен).
+- **Что уже в конфиге** (P23, 2026-11-17):
+  - `DNS = 1.1.1.1, 1.0.0.1` — DNS-запросы клиента идут через exit-ноду
+    (1.1.1.1/1.0.0.1 не в RU-CIDR → table 100 → awg1 → asv2), в обход ТСПУ.
+    Без этой строки при полном туннеле клиент спрашивал бы DNS у своего
+    роутера, и адрес уходил бы в туннель («подключено, но не открывается»).
+    Переопределение: `--dns 77.88.8.8` (только IP-литералы через запятую;
+    имена хостов отвергаются — WireGuard резолвит их вне туннеля).
+  - `AllowedIPs = 0.0.0.0/0` — **только IPv4**: нога `awg1` v4-only, `::/0`
+    в туннеле даёт чёрную дыру для AAAA (класс IPv6-ENETUNREACH).
+  - `MTU = 1280` (двойная инкапсуляция), endpoint `relay.asvpersonal.ru:443`.
+- **QR без `qrencode`:** `--qr` не падает — печатает warning, конфиг-файл
+  уже записан; поставить `sudo apt install qrencode`. Секреты в QR идут
+  через stdin, в argv/логи не попадают. Альтернатива без установки —
+  скопировать `.conf` на клиентский хост и импортировать файлом.
 - **Endpoint клиента.** Порядок выбора: явный `--endpoint` → `state.domain`
   → канонический `relay.asvpersonal.ru` → публичный IP сервера. Имя,
   совпадающее с hostname/FQDN самой машины, **пропускается с warning**:

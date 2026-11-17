@@ -242,11 +242,14 @@ vds relay init --exit <exit-ip> --domain relay.asvpersonal.ru --sni <RU_SNI>
                                     # Целевая ОС — Ubuntu 24.04 (LandVPS, проверено 2026-11-17):
                                     # iptables/ufw из коробки, ssh.socket, Python 3.12
 vds relay status                    # Юниты, awg0/awg1, живость ноги до exit, nft, CIDR
-vds relay add-client phone          # Пир awg0: .conf (0600), endpoint relay-домен:443
-                                     # (--keepalive 113 — И44: по умолчанию keepalive не пишется)
-                                     # (--endpoint HOST[:PORT] — явный endpoint;
-                                     #  имя самой машины пропускается, нерезолв →
-                                     #  warning + IP сервера)
+vds relay add-client phone --keepalive 25 --qr
+                                     # Пир awg0: .conf (0600), endpoint relay-домен:443,
+                                     # DNS = 1.1.1.1,1.0.0.1, AllowedIPs 0.0.0.0/0 (v4-only)
+                                     # (--keepalive N — И44: по умолчанию не пишется)
+                                     # (--endpoint HOST[:PORT] — явный endpoint; имя
+                                     #  самой машины пропускается, нерезолв → IP сервера)
+                                     # (--dns IP[,IP] — переопределить DNS;
+                                     #  --qr — QR в терминале через qrencode)
 ```
 
 Ссылки импортируются в v2rayNG / NekoRay / Hiddify / sing-box; AmneziaWG-конфиг —
