@@ -77,7 +77,8 @@ def test_parse_awg_dump_broken_numbers_default_to_zero():
 
 def test_parse_awg_dump_garbage_never_raises():
     assert parse_awg_dump("\x00\x01not a dump\n\n") == {}
-    assert parse_awg_dump(None) == {}  # type: ignore[arg-type]
+    assert parse_awg_dump("") == {}
+    assert parse_awg_dump("  \n\t\n") == {}
 
 
 # ---------------------------------------------------------------------------
