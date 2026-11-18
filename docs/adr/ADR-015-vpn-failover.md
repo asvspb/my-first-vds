@@ -1,7 +1,8 @@
 # ADR-015: клиентское авто-переключение каналов — отдельный юнит `vpn-failover`
 
 - **Дата:** 2026-11-18
-- **Статус:** proposed (ждёт G2; SPEC — [SPEC-20261118-vpn-failover](../team/specs/SPEC-20261118-vpn-failover.md))
+- **Статус:** accepted (G2 APPROVED 2026-11-18; обе линзы — реализуемость и
+  тест-план — без замечаний; SPEC — [SPEC-20261118-vpn-failover](../team/specs/SPEC-20261118-vpn-failover.md))
 - **Контекст SPEC:** SPEC-20261118-vpn-failover (WP-FAILOVER), продолжение
   SPEC-20261116-probe-response §16 и «Фазы 4» плейбука
 - **Связанные:** ADR-014 (клиентский `vpn guard`: контракт, приватность,
