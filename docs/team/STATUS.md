@@ -96,6 +96,16 @@
   тоже APPROVE. T0-снимок:
   [TEST-20261117-vpn-guard-checkpoint-t0](reports/TEST-20261117-vpn-guard-checkpoint-t0.md);
   следующая контрольная точка — T+24–48 ч.
+- **Чекпоинт T+33 (2026-11-19):** окно непрерывности **17.11 15:24 → 24.11
+  15:24 MSK** (сдвиг от T0 — рестарт после падения на отсутствующей схеме, D2);
+  AC-5 в поле: RSS 22.1 MiB, CPU 0.28 %, `NRestarts=0`, `dropped=0`,
+  `redaction_hits=0`. Findings 7d — 26: 13 G-06 / 7 G-07 (полевое доказательство
+  DNS-дефекта и локальной сети), 3 G-12 `source_lost: sysfs:awg` (кандидат в
+  калибровку G6), 3 G-09 — до фикса `c447171`, после него повторов нет.
+  **D1/D3 закрыты в коде** (`ubuntuInstaller 612a64b`, деплой отложен до
+  24.11 15:24): exit-код демона при штатном stop, баннер Hysteria2 2.x
+  `INFO→client mode` (покрытие G-01) и AC-5 min-sample. Отчёт:
+  [TEST-20261119-vpn-guard-t33](reports/TEST-20261119-vpn-guard-t33.md).
 - **Ревью (эволюция v1.0 → v2.0):** [ARCH-20261116-vpn-guard-evolution](reports/ARCH-20261116-vpn-guard-evolution.md) —
   стратегическая оценка + предложение v1.1 (ss/netlink, packet-size ratio,
   ленивый sync), v1.2 (`--client-report`) и v2.0 (Smart Failover, только через ADR).
