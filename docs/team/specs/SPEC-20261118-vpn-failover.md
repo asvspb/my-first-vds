@@ -164,6 +164,19 @@ socks-профили. Для схем обязателен `sudo -n`; отсут
    - `scheme:awg`: маршрут есть, `awg show` не отдаёт «Address family not
      supported» (иначе это наша ошибка прав, а не смерть канала).
    Провал → `Attempt(result="dead_entry")`, **switch не вызывается**.
+2a. **Гашение tun-схемы перед socks-ступенью** (2026-11-18, по итогам приёмки).
+   Если исходный канал поднят как `vpn start reality` / `vpn scheme xray-split`
+   (tun `xray0`), а кандидат — **профиль** (`asv2-hy2`, `asv2-cdn`), то перед
+   switch схема снимается (`xsplit.stop`): мёртвый `xray0` не должен остаться в
+   таблице маршрутизации над живым резервом. Схемные ступени (`relay`,
+   `asv2-awg`) снимают прямой контур сами внутри `vpn start relay` / `vpn start`
+   (`_teardown_direct`). Сбой гашения → статус `teardown_failed`, переключение
+   **не** выполняется (лучше не переключить, чем сложить два контура).
+   Права: `sudo -n` — `vpn-failover.service` это user-юнит без TTY, пароль
+   спросить некому; на ноутбуке passwordless sudo уже есть
+   (`1_ubuntuStart.sh` → `/etc/sudoers.d/90-nopasswd`).
+2b. **Источник активного канала.** `state.json.active` покрывает только socks;
+   tun-схема определяется из юнита `vpn-xray-split@<profile>` (см. §3).
 3. **switch** — `Candidate.argv` через `RunCmd` (без `shell=True`). Ненулевой код →
    `Attempt(result="switch_error")`.
 4. **`post_flight(candidate)`, бюджет 4.0 с:**
