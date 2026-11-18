@@ -360,6 +360,37 @@ def test_lockdown_message_contains_routing_advice():
     assert "vpn scout" in body
 
 
+def test_message_card_format():
+    """Вариант A: шапка с меткой статуса, разделитель, подписи с заглавной."""
+    cfg = AlertConfig(site_name="asv2")
+    _, high = format_message("threat_high", cfg, {"level": "high", "reason": "PROBE-BURST"})
+    header, sep_line, _ = high.split("\n", 2)
+    assert header == "🔴 УГРОЗА: HIGH"  # заголовок заглавными, без имени узла
+    assert sep_line == "━" * 30  # фиксированная ширина, без отступа
+    assert "Причина: PROBE-BURST" in high
+    assert high.index("Сервер: asv2") < high.index("Уровень:")  # сервер — перед уровнем
+
+    # длинная шапка → линия сдвинута к центру
+    _, long_msg = format_message("threat_elevated", cfg, {"level": "elevated"})
+    long_header, long_sep, _ = long_msg.split("\n", 2)
+    assert long_header == "🟠 УГРОЗА: ELEVATED (ВОЛНА ПРОБ)"
+    # длинная шапка → линия упирается в верхнюю границу и заполняет узкое окно;
+    # отступа нет, иначе строка переносится в узком окне
+    assert long_sep == "━" * 30
+
+    _, elevated = format_message("threat_elevated", cfg, {"level": "elevated"})
+    assert elevated.startswith("🟠")
+
+    _, release = format_message("threat_release", cfg, {"level": "quiet"})
+    assert release.startswith("🟢")
+
+    _, heartbeat = format_message("heartbeat", cfg, {})
+    assert heartbeat.startswith("⚪")
+
+    # подпись «только уведомление» удалена по требованию владельца
+    assert "только уведомление" not in high
+
+
 def test_lockdown_on_sends_once_then_reminder(tmp_path, gw, monkeypatch):
     lockdown = {
         "active": True,
@@ -423,7 +454,7 @@ def test_heartbeat_repeats_after_interval(tmp_path, gw):
     sender = Sender()
     _, lines = _tick(tmp_path, checks="none", sender=sender, state_path=state)
     assert "ALERT-SENT smtp heartbeat" in lines
-    assert "пропущено часов" in sender.calls[0]
+    assert "Пропущено часов без heartbeat: 30" in sender.calls[0]
 
 
 def test_corrupt_state_recovers_and_reports(tmp_path, gw):

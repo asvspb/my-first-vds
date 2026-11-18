@@ -65,8 +65,40 @@ TITLES = {
     "lockdown_still": "Лок 443 всё ещё активен",
     "telemetry_unavailable": "Телеметрия недоступна",
     "heartbeat": "Сторож жив (heartbeat)",
-    "summary": "Сводка подавлённых уведомлений",
+    "summary": "Отфильтрованные повторы за час",
 }
+
+# Метка статуса в шапке сообщения (вариант A: карточка с разделителем).
+STATUS_MARKS = {"quiet": "🟢", "elevated": "🟠", "high": "🔴"}
+
+THREAT_KINDS = {"threat_elevated", "threat_high", "threat_high_still", "threat_release"}
+
+KIND_MARKS = {
+    "relay_blocked": "🟠",
+    "relay_down": "🔴",
+    "relay_recovered": "🟢",
+    "lockdown_on": "🔴",
+    "lockdown_still": "🔴",
+    "telemetry_unavailable": "🟠",
+    "heartbeat": "⚪",
+    "summary": "ℹ️",
+}
+
+# Ширина линии-разделителя. В узком окне Telegram (~30 знаков на строку) линия
+# должна доходить до правого края; длиннее делать нельзя — переносится на вторую
+# строку. Фиксированная, чтобы ширина не зависела от длины заголовка.
+SEPARATOR_WIDTH = 30
+SEPARATOR = "━" * SEPARATOR_WIDTH
+
+
+def _mark(kind: str, level: str) -> str:
+    """Эмодзи статуса: для угрозы — по level, иначе — по типу события."""
+    if kind in THREAT_KINDS:
+        if level in STATUS_MARKS:
+            return STATUS_MARKS[level]
+        return "🟢" if kind == "threat_release" else "🟠"
+    return KIND_MARKS.get(kind, "⚪")
+
 
 TAG_SENT = "ALERT-SENT"
 TAG_FAILED = "ALERT-FAILED"
@@ -89,15 +121,15 @@ def routing_advice(lockdown_until: str = "") -> str:
     тревоги, но и рабочая альтернатива, пока 443/tcp закрыт.
     """
     if lockdown_until:
-        first = f"  • 443/tcp закрыт до {lockdown_until} — используйте Relay (AmneziaWG / Hysteria2)"
+        first = f"• 443/tcp закрыт до {lockdown_until} — используйте Relay (AmneziaWG / Hysteria2)"
     else:
-        first = "  • 443/tcp под угрозой (при HIGH лок включится автоматически) — держите Relay (AmneziaWG / Hysteria2) под рукой"
+        first = "• 443/tcp под угрозой (при HIGH лок включится автоматически) — держите Relay (AmneziaWG / Hysteria2) под рукой"
     return "\n".join(
         [
-            "Чем подключаться сейчас:",
+            "🔌 Чем подключаться сейчас",
             first,
-            "  • direct + AmneziaWG (не 443/tcp) — отдельный UDP-порт, лок его не трогает",
-            "  • на клиенте: vpn scout — покажет, что живо прямо сейчас",
+            "• direct + AmneziaWG (не 443/tcp) — отдельный UDP-порт, лок его не трогает",
+            "• на клиенте: vpn scout — покажет, что живо прямо сейчас",
         ]
     )
 
@@ -111,45 +143,48 @@ def format_message(kind: str, cfg: AlertConfig, payload: dict) -> tuple[str, str
     lines: list[str] = []
     now = payload.get("now")
     if now:
-        lines.append(f"время (UTC): {now}")
+        lines.append(f"Время (UTC): {now}")
+    lines.append(f"Сервер: {site}")
 
     level = payload.get("level")
     if level:
-        lines.append(f"threat level: {level}")
+        lines.append(f"Уровень: {level}")
     if payload.get("level_since"):
-        lines.append(f"level since: {payload['level_since']} (телеметрия часового тика — лаг до 1 ч)")
+        lines.append(f"Уровень с: {payload['level_since']} (телеметрия часового тика — лаг до 1 ч)")
     if payload.get("reason"):
-        lines.append(f"причина: {payload['reason']}")
+        lines.append(f"Причина: {payload['reason']}")
     if payload.get("age_sec") is not None:
-        lines.append(f"возраст снапшота: {int(payload['age_sec'])} с")
+        lines.append(f"Снапшот: {int(payload['age_sec'])} с назад")
     if payload.get("status"):
-        lines.append(f"статус телеметрии: {payload['status']}")
+        lines.append(f"Телеметрия: {payload['status']}")
 
     if payload.get("classification"):
-        lines.append(f"пульс плеча: {payload['classification']} ({payload.get('detail', '')})")
+        detail = str(payload.get("detail") or "")
+        suffix = f" ({detail})" if detail and detail != payload["classification"] else ""
+        lines.append(f"Плечо: {payload['classification']}{suffix}")
     if payload.get("handshake_age_sec") is not None:
         age = payload["handshake_age_sec"]
-        lines.append("handshake: никогда" if age == -1 else f"handshake age: {age} с")
+        lines.append("Handshake: никогда" if age == -1 else f"Handshake: {age} с")
     if payload.get("endpoint"):
-        lines.append(f"релей: {payload['endpoint']}")
+        lines.append(f"Релей: {payload['endpoint']}")
     if payload.get("tcp_ok") is not None:
-        lines.append(f"tcp до релея: {'жив' if payload['tcp_ok'] else 'не отвечает'}")
+        lines.append(f"TCP до релея: {'жив' if payload['tcp_ok'] else 'не отвечает'}")
     if payload.get("icmp_ok") is not None:
-        lines.append(f"icmp: {'отвечает' if payload['icmp_ok'] else 'нет'}")
+        lines.append(f"ICMP: {'отвечает' if payload['icmp_ok'] else 'нет'}")
     if payload.get("traffic_active") is not None:
-        lines.append(f"трафик по ноге недавно: {'да' if payload['traffic_active'] else 'нет'}")
+        lines.append(f"Трафик по ноге: {'есть' if payload['traffic_active'] else 'нет'}")
 
     if payload.get("ttl_until"):
-        lines.append(f"лок 443 до: {payload['ttl_until']}")
+        lines.append(f"Лок 443 до: {payload['ttl_until']}")
     if payload.get("lockdown_since"):
-        lines.append(f"лок 443 с: {payload['lockdown_since']}")
+        lines.append(f"Лок 443 с: {payload['lockdown_since']}")
     if payload.get("lockdown_reason"):
-        lines.append(f"причина лока: {payload['lockdown_reason']}")
+        lines.append(f"Причина лока: {payload['lockdown_reason']}")
     if payload.get("allow_from_count") is not None:
-        lines.append(f"allow-list лока: {payload['allow_from_count']} адрес(ов)")
+        lines.append(f"Allow-list лока: {payload['allow_from_count']} адрес(ов)")
 
     if payload.get("missed_hours"):
-        lines.append(f"пропущено часов без heartbeat: {payload['missed_hours']}")
+        lines.append(f"Пропущено часов без heartbeat: {payload['missed_hours']}")
 
     for extra in payload.get("extra_lines") or []:
         lines.append(str(extra))
@@ -160,15 +195,18 @@ def format_message(kind: str, cfg: AlertConfig, payload: dict) -> tuple[str, str
             lines.append(f"  подавлено {name}: {count}")
 
     if payload.get("channel_warnings"):
-        lines.append("каналы:")
+        lines.append("Каналы:")
         for warning in payload["channel_warnings"]:
             lines.append(f"  ! {warning}")
 
-    body_parts = [f"{site}: {title}", ""]
+    mark = _mark(kind, str(level or ""))
+    header = f"{mark} {title.upper()}"
+    # Без отступа: линия должна доходить до правого края в узком окне,
+    # а любой ведущий пробел съедает ширину и вызывает перенос.
+    body_parts = [header, SEPARATOR, ""]
     body_parts.extend(lines)
     if kind in ROUTING_KINDS:
         body_parts.extend(["", routing_advice(str(payload.get("ttl_until") or ""))])
-    body_parts.extend(["", "-- ", f"vds alert-watch ({site}) — только уведомление, действий не выполняет"])
     return subject, "\n".join(body_parts)
 
 
