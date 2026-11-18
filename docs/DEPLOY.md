@@ -284,10 +284,6 @@ vds gateway probe-watch ru-cidr install --apply    # RU-CIDR без релея: 
 6. `sudo vds alert watch --no-send` — прогнать тик без отправки: `relay_pulse` не
    должен быть `inconclusive` при живом канале (`idle` допустим, если на `awg1`
    не выставлен `PersistentKeepalive` — см. DEPLOY-RU-RELAY §4).
-7. Снятие лока (`lockdown_off`, SPEC-20261118-vpn-failover §10.2): после
-   `--unlock` или истечения TTL в журнале тика должна появиться строка
-   `ALERT-SENT … lockdown_off` с причиной (`ttl-expired` / `manual …`).
-   Клиент по этому событию **не** возвращается на 443/tcp автоматически.
 
 **Heartbeat (dead-man switch):** раз в `ALERT_HEARTBEAT_H`=24 ч уходит «Сторож
 жив» с числом пропущенных часов и предупреждениями каналов — тишина дольше

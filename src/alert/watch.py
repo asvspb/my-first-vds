@@ -51,9 +51,6 @@ ROUTING_KINDS = {
     "threat_high_still",
     "lockdown_on",
     "lockdown_still",
-    # SPEC-20261118-vpn-failover §10.2: the client must learn the 443/tcp lock
-    # is gone (it deliberately does not switch back on its own).
-    "lockdown_off",
 }
 
 TITLES = {
@@ -66,7 +63,6 @@ TITLES = {
     "relay_recovered": "Плечо relay→exit: восстановлено",
     "lockdown_on": "Лок 443 включён",
     "lockdown_still": "Лок 443 всё ещё активен",
-    "lockdown_off": "Лок 443 снят",
     "telemetry_unavailable": "Телеметрия недоступна",
     "heartbeat": "Сторож жив (heartbeat)",
     "summary": "Сводка подавлённых уведомлений",
@@ -151,8 +147,6 @@ def format_message(kind: str, cfg: AlertConfig, payload: dict) -> tuple[str, str
         lines.append(f"причина лока: {payload['lockdown_reason']}")
     if payload.get("allow_from_count") is not None:
         lines.append(f"allow-list лока: {payload['allow_from_count']} адрес(ов)")
-    if payload.get("unlock_reason"):
-        lines.append(f"причина снятия: {payload['unlock_reason']}")
 
     if payload.get("missed_hours"):
         lines.append(f"пропущено часов без heartbeat: {payload['missed_hours']}")
@@ -528,35 +522,6 @@ def _tick(
                 subject=subject,
                 body=body,
                 cooldown_min=0 if not prev_active else cfg.lock_reminder_h * 60,
-                **common,
-            )
-        elif prev_active:
-            # SPEC-20261118-vpn-failover §10.2: the client must learn the lock
-            # is gone.  Reason comes from the last journal event of the lock
-            # ("ttl-expired" / "manual").
-            last_event = lockdown.get("last_event") or {}
-            detail = str(last_event.get("detail") or "")
-            if not detail:
-                unlock_reason = "unknown"
-            elif detail == "ttl-expired":
-                unlock_reason = "ttl-expired"
-            elif detail == "manual":
-                unlock_reason = "manual (vpn system ufw lock-443 --unlock)"
-            else:
-                unlock_reason = f"manual:{detail}"
-            payload = {
-                **_payload_base(moment),
-                "lockdown_since": lockdown.get("since") or "",
-                "unlock_reason": unlock_reason,
-            }
-            subject, body = format_message("lockdown_off", cfg, payload)
-            _handle(
-                event="lockdown",
-                event_type="lockdown_off",
-                severity=0,
-                subject=subject,
-                body=body,
-                cooldown_min=0,
                 **common,
             )
 
