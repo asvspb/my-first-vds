@@ -361,22 +361,20 @@ def test_lockdown_message_contains_routing_advice():
 
 
 def test_message_card_format():
-    """Вариант A: шапка с меткой статуса, разделитель, подписи с заглавной."""
+    """Вариант A: шапка с меткой статуса, без подчёркивания, подписи с заглавной."""
     cfg = AlertConfig(site_name="asv2")
     _, high = format_message("threat_high", cfg, {"level": "high", "reason": "PROBE-BURST"})
-    header, sep_line, _ = high.split("\n", 2)
+    header, rest = high.split("\n", 1)
     assert header == "🔴 УГРОЗА: HIGH"  # заголовок заглавными, без имени узла
-    assert sep_line == "━" * 30  # фиксированная ширина, без отступа
+    assert "━" not in high  # подчёркивание под шапкой убрано (владелец, 2026-11-19)
+    assert rest.startswith("\n")  # шапка отделена пустой строкой, а не линией
     assert "Причина: PROBE-BURST" in high
     assert high.index("Сервер: asv2") < high.index("Уровень:")  # сервер — перед уровнем
 
-    # длинная шапка → линия сдвинута к центру
     _, long_msg = format_message("threat_elevated", cfg, {"level": "elevated"})
-    long_header, long_sep, _ = long_msg.split("\n", 2)
+    long_header, _ = long_msg.split("\n", 1)
     assert long_header == "🟠 УГРОЗА: ELEVATED (ВОЛНА ПРОБ)"
-    # длинная шапка → линия упирается в верхнюю границу и заполняет узкое окно;
-    # отступа нет, иначе строка переносится в узком окне
-    assert long_sep == "━" * 30
+    assert "━" not in long_msg
 
     _, elevated = format_message("threat_elevated", cfg, {"level": "elevated"})
     assert elevated.startswith("🟠")

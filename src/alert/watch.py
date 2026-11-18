@@ -68,7 +68,7 @@ TITLES = {
     "summary": "Отфильтрованные повторы за час",
 }
 
-# Метка статуса в шапке сообщения (вариант A: карточка с разделителем).
+# Метка статуса в шапке сообщения (вариант A: карточка).
 STATUS_MARKS = {"quiet": "🟢", "elevated": "🟠", "high": "🔴"}
 
 THREAT_KINDS = {"threat_elevated", "threat_high", "threat_high_still", "threat_release"}
@@ -84,11 +84,8 @@ KIND_MARKS = {
     "summary": "ℹ️",
 }
 
-# Ширина линии-разделителя. В узком окне Telegram (~30 знаков на строку) линия
-# должна доходить до правого края; длиннее делать нельзя — переносится на вторую
-# строку. Фиксированная, чтобы ширина не зависела от длины заголовка.
-SEPARATOR_WIDTH = 30
-SEPARATOR = "━" * SEPARATOR_WIDTH
+# Ширина линии-разделителя больше не используется: подчёркивание под шапкой
+# убрано по требованию владельца (2026-11-19).
 
 
 def _mark(kind: str, level: str) -> str:
@@ -201,9 +198,8 @@ def format_message(kind: str, cfg: AlertConfig, payload: dict) -> tuple[str, str
 
     mark = _mark(kind, str(level or ""))
     header = f"{mark} {title.upper()}"
-    # Без отступа: линия должна доходить до правого края в узком окне,
-    # а любой ведущий пробел съедает ширину и вызывает перенос.
-    body_parts = [header, SEPARATOR, ""]
+    # Подчёркивания нет (владелец, 2026-11-19): шапка, пустая строка, поля.
+    body_parts = [header, ""]
     body_parts.extend(lines)
     if kind in ROUTING_KINDS:
         body_parts.extend(["", routing_advice(str(payload.get("ttl_until") or ""))])
