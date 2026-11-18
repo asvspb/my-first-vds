@@ -5,6 +5,36 @@
 > Счётчики тестов в исторических записях — моментальные снимки (OQ-9):
 > актуальный baseline — `pytest -q`, число в живых доках не хранится.
 
+## Активный цикл: WP-FAILOVER — авто-переключение каналов (2026-11-18)
+
+- **SPEC:** [SPEC-20261118-vpn-failover](specs/SPEC-20261118-vpn-failover.md) — **G2 APPROVED 2026-11-18**;
+  **ADR-015** — accepted. OQ-1/OQ-2 закрыты на G2, **OQ-3/OQ-5 закрыты 2026-11-18** (SPEC §16).
+- **Клиент (`ubuntuInstaller/scripts/vpn-manager`):** `vpnm/guard/failover.py` — триггеры
+  `G-01` (high) / `G-09` (≥ medium) / производный `expected_lockdown`, `local_net_check`,
+  лестница `relay → asv2-hy2 → asv2-awg → asv2-cdn`, `pre/post_flight`,
+  cooldown 900 с / 3 в час / candidate cooldown 600 с, pin, total blackout с backoff,
+  снятие лока **без** авто-возврата. Расширены `store`/`schema` (+3 схемы), `redact`
+  (TG-токен), `notify` (desktop opt-in `notify.failover_desktop`, Telegram + очередь
+  `pending_alerts.jsonl`), `install` (юниты `vpn-failover.service`/`.path`, префикс
+  `vpn-`), `cli` (`vpn guard failover status|run --once|reset|enable|disable|test-notify`).
+  `vpn down`/`reset` ставят activity-маркер (SPEC §3.2).
+- **Сервер (`vds`):** событие `lockdown_off` (снятие по `ttl-expired`/вручную) —
+  `src/alert/watch.py`; `relay_ips_from_state`/`relay_allow_gaps` и предупреждение при
+  `--auto-lockdown on`, если релей не покрыт `lockdown_allow`/`own_ips` —
+  `src/gateway/probing.py`. `lockdown_on` не дублировался.
+- **Коммиты:** `ubuntuInstaller` `5c7ce03` (feat) + `b8779c3` (fix маркера подавления);
+  `my-first-vds` `3880b3c`. Полный `pytest -q` обоих репозиториев зелёный,
+  `docsync audit --strict` — OK.
+- **Дефект, найденный на ревью:** `vpn down`/`reset` гасили собственный маркер
+  (`mark_activity_end` пишет `until = now`), поэтому пятиминутного подавления не
+  существовало. Закрыт `b8779c3` + регресс-тест на длину окна (старый код 0.0003 с → FAIL).
+- **Фаза: G6 — Live Acceptance.** Порядок (SPEC §14 + arch-lead 2026-11-18):
+  `test-notify` (desktop + TG) → `vpn scout` (relay/hy2 живы) →
+  `vpn guard failover enable --apply` → контролируемый лок 443 при открытой резервной
+  сессии → проверка `lockdown_off` → и только потом
+  `probe-watch config --auto-lockdown on` на сервере.
+  **Не сделано:** живой прогон переключения, реальная отправка в Telegram.
+
 ## Активный цикл: alert-watch + fast alerts/scout (2026-11-17)
 - **SPEC:** [SPEC-20261117-alert-watch](specs/SPEC-20261117-alert-watch.md) — G2 APPROVED;
   **WP-1…WP-7 реализованы и запушены** (`4af69c6..2782349`; код + тесты + доки).
