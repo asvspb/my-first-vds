@@ -72,6 +72,7 @@
 | # | Инвариант | Как проверяется |
 |---|---|---|
 | I-1 | `vpn guard` остаётся read-only: в `reader.py`, `parse.py`, `window.py`, `rules.py`, `correlate.py` нет `sudo`, `systemctl`, вызовов failover и сетевых сокетов | AC-F1 (AST) |
+| I-1a | Явное уточнение (2026-11-18, по итогам ревью): `subprocess` **не** запрещён — `reader.py` штатно запускает `journalctl -f` (SPEC-20261116-vpn-guard §10.4). AST-тест запрещает сеть/`sudo`/`systemctl`/failover во всех пяти модулях, а `subprocess` — в четырёх (`parse`, `window`, `rules`, `correlate`); исключение для `reader.py` зафиксировано в docstring теста | AC-F1 |
 | I-2 | `vpn guard sync` — единственная сетевая команда **guard-а** | ревью + существующий тест |
 | I-3 | Секреты не попадают в argv, журнал, `export`, `failover_history.jsonl` | AC-F10 |
 | I-4 | Артефакты 0600 / каталог 0700, bounded, через `store.py` | AC-F11 + `selftest` |

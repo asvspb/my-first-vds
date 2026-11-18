@@ -211,6 +211,10 @@ vds alert watch --no-send           # Один тик без отправки и
 vds alert remove --apply            # Снять юниты (alert.env сохраняется; --purge — удалить)
 # Секреты сторожа живут только в /etc/vds/alert.env (0600); в юнит не попадают.
 # Сторож только уведомляет: probe-watch.json, state.json, UFW он не меняет.
+# События лока: lockdown_on / lockdown_still / lockdown_off (снятие с причиной
+# ttl-expired|manual) — клиент по lockdown_off узнаёт, что 443/tcp открыт, но
+# сам на прямой канал не возвращается (SPEC-20261118-vpn-failover §10.2).
+# config --auto-lockdown on предупреждает, если IP релея не покрыт allow-list.
 # На RU-рееле install отказывает (--allow-relay-node делать не надо).
 
 vds xray install                    # Установить Xray VLESS Reality (TCP 443)

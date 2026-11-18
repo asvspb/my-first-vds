@@ -44,12 +44,13 @@ src/
 ├── amneziawg/           # AmneziaWG (UDP 51825): install, clients, status, remove
 ├── relay/               # RU-relay (ADR-007): init, status, clients, cidr (AWG udp/443 + Reality tcp/443 + policy-routing до exit-ноды)
 ├── acme/                # ACME/LE: issue (HTTP-01) + deploy-hook для Hysteria2
-├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание), probing (probe-watch: телеметрия+threat-level+auto-lockdown+verified_session_ips anti Self-DoS, SPEC probe-response; probers4 на tcp/{443,8443,2053} + быстрый контур fast_contour_check в 5-мин сэмплере vds-logs-sample, SPEC probe-coverage W1-1; RU-PROBE-SUSPECT = syn_valid + syn_valid_extra, PROBE-BURST — только 443), probing_rucidr (RU-CIDR)
+├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание), probing (probe-watch: телеметрия+threat-level+auto-lockdown+verified_session_ips anti Self-DoS, SPEC probe-response; probers4 на tcp/{443,8443,2053} + быстрый контур fast_contour_check в 5-мин сэмплере vds-logs-sample, SPEC probe-coverage W1-1; RU-PROBE-SUSPECT = syn_valid + syn_valid_extra, PROBE-BURST — только 443; config --auto-lockdown on предупреждает, если IP релея не покрыт allow-list — SPEC-20261118 §10.1), probing_rucidr (RU-CIDR)
 ├── sysinfo/             # dashboard
 ├── logs/                # log-forensics (ADR-012): install, collect (sample), report/analyze, capture
 ├── alert/               # сторож угрозы на exit-узле (SPEC-20261117): paths, env (/etc/vds/alert.env),
 │                        # state (alert-state.json), channels (SMTP/Telegram на stdlib), checks (threat/
-│                        # awg dump/лок), watch (тик), cli (install/remove/test/status). Только уведомления
+│                        # awg dump/лок), watch (тик; события lockdown_on/still/off — SPEC-20261118 §10.2),
+│                        # cli (install/remove/test/status). Только уведомления
 └── system/              # setup, cleanup, ufw (harden/ssh-port — SPEC-20261116; CDN-порт — CF-CIDR-набор)
 systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg(-nat)/
                          # vds-relay-{exit,nat,policy,cidr}.service.tpl; vds-gateway-health / vds-probe-watch /

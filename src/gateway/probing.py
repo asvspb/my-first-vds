@@ -805,6 +805,64 @@ def load_own_ips(path: Optional[Path] = None) -> set[str]:
     return own
 
 
+#: Exit-узел знает релей как AWG-пира под этим именем (SPEC §3.1 alert-watch).
+RELAY_PEER_NAME = "relay"
+
+
+def relay_ips_from_state(state: object) -> list[str]:
+    """IPv4 релея из gateway state (пир/endpoint релея, SPEC-20261118 §10.1).
+
+    Ключа ``relay_ips`` в конфиге **нет** — источник фактов это state:
+    exit-узел хранит релей AWG-пиром (``clients[]``, ``protocol ==
+    "amneziawg"``, ``name == "relay"``) с ``extra.endpoint``; на самом релее
+    остаётся ``protocols["relay"].exit_ip``.  ``extra.address`` — туннельный
+    адрес пира (10.x), его ufw входящим источником не видит, поэтому в список
+    он не попадает.  Возвращаются только литеральные IPv4 — доменные
+    endpoint'ы не покрываются правилом ``from <ip>``, и выдумывать резолв
+    здесь нельзя.
+    """
+    ips: list[str] = []
+
+    def _add(value: object) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        if text.startswith("["):  # [v6]:port → не IPv4, пропускаем
+            return
+        host = text.rsplit(":", 1)[0] if text.count(":") == 1 else text
+        host = host.split("/", 1)[0]
+        try:
+            addr = ipaddress.ip_address(host)
+        except ValueError:
+            return
+        if addr.version != 4 or addr.is_loopback:
+            return
+        if host not in ips:
+            ips.append(host)
+
+    clients = getattr(state, "clients", None)
+    for client in clients or []:
+        name = getattr(client, "name", "")
+        proto = getattr(client, "protocol", "")
+        if name != RELAY_PEER_NAME or proto != "amneziawg":
+            continue
+        extra = getattr(client, "extra", {}) or {}
+        if isinstance(extra, dict):
+            _add(extra.get("endpoint"))
+    protocols = getattr(state, "protocols", None) or {}
+    relay_meta = protocols.get("relay") if isinstance(protocols, dict) else None
+    if isinstance(relay_meta, dict):
+        _add(relay_meta.get("exit_ip"))
+    return ips
+
+
+def relay_allow_gaps(allow_ips: list[str], own_ips: set[str],
+                     state: object) -> list[str]:
+    """IP релея, не покрытые ни ``lockdown_allow``, ни ``own_ips`` (§10.1)."""
+    covered = set(allow_ips) | set(own_ips)
+    return [ip for ip in relay_ips_from_state(state) if ip not in covered]
+
+
 def cached_own_ips(snapshot: dict[str, object]) -> list[str]:
     """Кэш AWG-endpoints из снапшота (ручной watch без root читает кэш тика)."""
     raw = snapshot.get("own_ips")
@@ -2308,6 +2366,25 @@ def cmd_config(
             "allow-ips.txt.[/error]"
         )
         return 1
+    if planned["auto_lockdown"]:
+        # SPEC-20261118 §10.1: релей ходит в exit по AWG/udp, но его IP в
+        # allow-list должен быть явным — иначе авто-лок закроет релею 443/tcp.
+        from src.gateway.store import StoreError, load_state
+
+        try:
+            gateway_state = load_state(state_path)
+        except (StoreError, OSError):
+            gateway_state = None
+        if gateway_state is not None:
+            gaps = relay_allow_gaps(
+                list(planned["lockdown_allow"]), load_own_ips(), gateway_state)
+            for ip in gaps:
+                console.print(
+                    f"[warning][probe] релей {ip} не покрыт lockdown_allow/"
+                    f"own_ips: при авто-локе 443/tcp релей потеряет прямой "
+                    f"доступ. Добавьте --lockdown-allow {ip} (или строку в "
+                    f"{OWN_IPS_FILE}).[/warning]"
+                )
     console.print(f"[info][probe] Планируемый конфиг: {planned}[/info]")
     if not apply:
         console.print("[info][probe] Dry-run: ничего не изменено. Для применения — --apply.[/info]")

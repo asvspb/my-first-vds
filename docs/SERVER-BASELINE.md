@@ -369,6 +369,12 @@ sudo vds system ufw lock-443 --unlock --apply             # откат = одн�
 sudo vds gateway probe-watch config --auto-lockdown on --lockdown-allow IP --apply  # авто-лок при high (default off)
 ```
 
+⚠️ Если релей задан в `state.json` (пир `relay` / его `Endpoint`) и его IP не
+покрыт `lockdown_allow`/`allow-ips.txt`, `config --auto-lockdown on` печатает
+предупреждение: авто-лок закроет релею 443/tcp. Отдельного ключа `relay_ips`
+нет — источник фактов сам state; allow-правило для релея ставится **выше**
+изъятия широкого allow (SPEC-20261118-vpn-failover §10.1).
+
 Лок не трогает AWG 51825/CDN 2053/ssh; Hy2-hop (asv1) остаётся открытым с
 warning; TTL обязателен (default 48h, 1h..168h) — забытый лок невозможен
 (auto-unlock тиком probe-watch). При downgrade лок НЕ снимается автоматически
@@ -454,6 +460,14 @@ tshark -r /var/tmp/tspu_probes.pcap -Y "tls.handshake.type == 1" -V
 `no_level`/stale различаются — «нет данных» ≠ «тихо»); пульс плеча relay→exit
 (`awg show awg0 dump` + пир `relay` из `state.json`, гейт активности: без
 недавнего роста `rx` старый handshake — `idle`, не алерт); активный `lock-443`.
+
+**Событие `lockdown_off`** (SPEC-20261118-vpn-failover §10.2): переход
+`lockdown.active: true → false` отправляется отдельным сообщением «Лок 443
+снят» с причиной снятия (`ttl-expired` — истёк TTL; `manual …` — `vds system
+ufw lock-443 --unlock`) и `since` прежнего лока. Это единственный способ для
+клиента узнать, что 443/tcp снова открыт: клиентский авто-failover **не**
+возвращается на прямой канал сам (ADR-015). Событие уходит только на переходе
+(повторов нет) и не подчиняется `ALERT_LOCK_REMINDER_H`.
 
 **Heartbeat (dead-man switch):** если с последней отправки прошло
 `ALERT_HEARTBEAT_H`=24 ч, уходит «Сторож жив» с числом пропущенных часов и

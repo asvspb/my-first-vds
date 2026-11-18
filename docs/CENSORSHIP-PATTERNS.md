@@ -204,13 +204,19 @@ xray/hysteria2 (access-log/loglevel — отдельное решение вла
   (allow-ips.txt или `--lockdown-allow`) — иначе exit 1. Реакция — только
   сетевая видимость 443 через UFW (`lock-443`), никогда юниты/конфиги
   xray/hy/awg; TTL обязателен (default 48h), downgrade лок не снимает;
-  авто-режим — opt-in (`config --auto-lockdown on`). RU-CIDR на
+  авто-режим — opt-in (`config --auto-lockdown on`). При включении авто-лока
+  проверяется покрытие релея: если пир/endpoint `relay` из `state.json` не
+  входит ни в `lockdown_allow`, ни в `allow-ips.txt`, печатается
+  предупреждение (иначе лок закрыл бы релею 443/tcp). RU-CIDR на
   exit-серверах без релея: `probe-watch ru-cidr install --apply`.
   Контракт монитор-поллинга: `watch --json` → `threat_level`,
   `threat_reason`, `ru_syn_new`, `lockdown{active,since,ttl_until,allow_from}`
   (старые ключи неизменны; W1-1 добавляет аддитивно
   `syn_valid_extra`/`syn_bare_extra`/`extra_ports` — guard sync старой
-  версией клиента работает без ошибок).
+  версией клиента работает без ошибок). Снятие лока клиент узнаёт из
+  события `vds alert` `lockdown_off` (причина `ttl-expired`/`manual`) и
+  остаётся на резервном канале — авто-возврата нет
+  (SPEC-20261118-vpn-failover §6/§10.2).
   Полностью — docs/team/specs/SPEC-20261116-probe-response.md и
   SERVER-BASELINE §5.12.
 

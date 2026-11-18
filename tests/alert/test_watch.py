@@ -513,3 +513,65 @@ def test_channel_not_configured_skips(tmp_path, gw):
         watch.console = original
     assert code == 0
     assert "ALERT-SKIP threat_elevated channel_not_configured" in fake.lines
+
+
+# ---------------------------------------------------------------------------
+# lockdown_off (SPEC-20261118-vpn-failover §10.2)
+# ---------------------------------------------------------------------------
+
+def _state_with_active_lockdown(tmp_path) -> str:
+    path = tmp_path / "alert-state-lockdown.json"
+    path.write_text(json.dumps({
+        "version": 1,
+        "sources": {"lockdown": {"active": True}},
+        "window": [],
+        "suppressed": {},
+        "failures": {},
+    }), encoding="utf-8")
+    return str(path)
+
+
+def test_lockdown_off_ttl_expired(tmp_path, gw, monkeypatch):
+    """Переход active→false шлёт lockdown_off один раз с причиной."""
+    unlocked = {
+        "active": False,
+        "since": "2026-11-17T10:00:00+00:00",
+        "ttl_until": "2026-11-19T10:00:00+00:00",
+        "ttl_hours": 48,
+        "reason": "auto:RU-SUSPECT",
+        "events": [{"event": "unlock", "detail": "ttl-expired",
+                    "ts": "2026-11-19T10:00:05+00:00"}],
+    }
+    path = _gateway_state(tmp_path, lockdown=unlocked)
+    monkeypatch.setattr("src.gateway.paths.STATE_PATH", path)
+    state = _state_with_active_lockdown(tmp_path)
+
+    sender = Sender()
+    _, lines = _tick(tmp_path, checks="lockdown", sender=sender, state_path=state)
+    assert "ALERT-SENT smtp lockdown_off" in lines
+    assert "причина снятия: ttl-expired" in sender.calls[0]
+    assert "Лок 443 снят" in sender.calls[0]
+
+    # второй тик — лок уже неактивен, prev_active=false → тишина
+    sender2 = Sender()
+    _, lines2 = _tick(tmp_path, checks="lockdown", sender=sender2,
+                      state_path=state, moment=NOW + timedelta(minutes=5))
+    assert sender2.calls == []
+    assert lines2 == []
+
+
+def test_lockdown_off_manual_reason(tmp_path, gw, monkeypatch):
+    unlocked = {
+        "active": False,
+        "since": "2026-11-17T10:00:00+00:00",
+        "events": [{"event": "unlock", "detail": "manual",
+                    "ts": "2026-11-17T11:00:00+00:00"}],
+    }
+    path = _gateway_state(tmp_path, lockdown=unlocked)
+    monkeypatch.setattr("src.gateway.paths.STATE_PATH", path)
+    state = _state_with_active_lockdown(tmp_path)
+
+    sender = Sender()
+    _, lines = _tick(tmp_path, checks="lockdown", sender=sender, state_path=state)
+    assert "ALERT-SENT smtp lockdown_off" in lines
+    assert "причина снятия: manual (vpn system ufw lock-443 --unlock)" in sender.calls[0]

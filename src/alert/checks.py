@@ -363,11 +363,22 @@ def read_relay_signal(
 # ---------------------------------------------------------------------------
 
 def read_lockdown(state_path: Optional[str] = None) -> dict:
-    """Нормализованное состояние лока 443; ошибка чтения → `active: False`."""
+    """Нормализованное состояние лока 443; ошибка чтения → `active: False`.
+
+    ``last_event`` — последняя запись журнала лока (``lock``/``extend``/
+    ``unlock``/…) как есть.  Нужна событию ``lockdown_off``, чтобы назвать
+    причину снятия (``ttl-expired`` / ручной unlock) — additive ключ,
+    нормализованный контракт ``get_lockdown`` не меняется.
+    """
     try:
         from src.gateway.store import load_state
         from src.system.ufw import get_lockdown
 
-        return get_lockdown(load_state(_gateway_state_path(state_path)))
+        state = load_state(_gateway_state_path(state_path))
+        payload = get_lockdown(state)
+        events = (state.ufw_lockdown or {}).get("events")
+        if isinstance(events, list) and events and isinstance(events[-1], dict):
+            payload["last_event"] = dict(events[-1])
+        return payload
     except Exception:  # битый state.json → лок считается неактивным (§5 failure modes)
         return {"active": False, "error": "state_unreadable"}
