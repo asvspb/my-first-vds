@@ -35,6 +35,12 @@
   лестницы `xray0` гасится (`xsplit.stop`), иначе мёртвый tun остаётся над живым
   резервом; сбой гашения → `teardown_failed` без переключения. Схемные ступени
   (`relay`, `awg`) снимают прямой контур сами.
+- **Detect-1 (2026-11-18):** `vpn-failover.timer` (60 с) + in-tunnel liveness
+  (`curl --interface xray0` на split-домен, 2 провала подряд, обязательный
+  `local_net_check`). Закрывает слепоту `xray=blind`: mid-session обрыв
+  443/tcp больше не требует ручного `vpn guard sync`. Новое правило в каталог
+  `G-01…G-12` не вводилось (ADR-014); loglevel `warning` добавлен в генератор
+  конфига xray как задел под Detect-2.
 - **Фаза: G6 — Live Acceptance.** Порядок (SPEC §14 + arch-lead 2026-11-18):
   `test-notify` (desktop + TG) → `vpn scout` (relay/hy2 живы) →
   `vpn guard failover enable --apply` → контролируемый лок 443 при открытой резервной
