@@ -104,7 +104,10 @@
   калибровку G6), 3 G-09 — до фикса `c447171`, после него повторов нет.
   **D1/D3 закрыты в коде** (`ubuntuInstaller 612a64b`, деплой отложен до
   24.11 15:24): exit-код демона при штатном stop, баннер Hysteria2 2.x
-  `INFO→client mode` (покрытие G-01) и AC-5 min-sample. Отчёт:
+  `INFO→client mode` (покрытие G-01) и AC-5 min-sample. Полевая серия
+  19.11 выявила **D6** (`proto_hints` не заполнялся → `signals.xray/hysteria2`
+  навсегда `blind`; фикс — store-hints + контент/имя-юнита fallback, реплей
+  68 657 строк: `unparsed 1 → 0`); XHTTP в поле — N/A (нет на asv2). Отчёт:
   [TEST-20261119-vpn-guard-t33](reports/TEST-20261119-vpn-guard-t33.md).
 - **Ревью (эволюция v1.0 → v2.0):** [ARCH-20261116-vpn-guard-evolution](reports/ARCH-20261116-vpn-guard-evolution.md) —
   стратегическая оценка + предложение v1.1 (ss/netlink, packet-size ratio,

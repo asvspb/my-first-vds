@@ -41,10 +41,11 @@ signals: systemd=ok, amneziawg=counters, dns/xray/hysteria2=blind
 
 - `unparsed=1` — **единственная** строка за 33 ч: Hysteria2-баннер
   `INFO\tclient mode` (см. §4/D3). `unparsed_ratio=1.0` — арифметика `1/1`
-  на выборке из одной app-строки, а не деградация парсера; после фикса D3
-  реплей даёт `parsed=1, unparsed=0`.
-- `app_signal=blind` — за окно не было запусков xray/hy2 (последнее app-событие
-  18.11 14:56 UTC); ожидаемо в простое.
+  на выборке из одной app-строки, а не деградация парсера; после фиксов
+  D3+D6 реплей всего журнала даёт `parsed=6, unparsed=0` (§4/D6).
+- `app_signal=blind` — **не «простой»**, а дефект D6: `proto_hints` не
+  заполнялся, поэтому сигналы не могли стать `ok` даже при живом трафике
+  (полевая серия §6 это подтвердила).
 - `verdict_stale` — `vpn guard sync` не запускался > 65 мин (норма без sync).
 
 ## 3. Findings за 7 дней — 26 (live, `--since 7d`)
@@ -133,32 +134,95 @@ sysfs-источника при смене iface).
 См. §3: `counters.findings` — монотонный счётчик процесса; `findings` — окно по
 `window.last` из `findings.jsonl`. Разные семантики, обе корректны.
 
+### D6 — `signals.xray`/`signals.hysteria2` не могли стать `ok` (ИСПРАВЛЕНО В КОДЕ)
+
+Найдено полевой серией (§7): при живом трафике Reality и Hy2 сигналы оставались
+`blind`, `notes` держал `app_signal=blind`.
+
+**Root cause.** `JournalParser.proto_hints` в боевом `build_runner` **не
+заполнялся вообще** (единственное заполнение — в `cli.py` у `selftest`). Для
+юнитов `vpnm-*` протокол брался только из hints (`parse.py:_proto_for`), иначе
+`"unknown"`; а `_app_proto[proto]="ok"` пишется только для
+`xray|hysteria2|amneziawg` (`runner.py`). Итог: в проде все события профилей
+получали `unknown` → `signals.xray/hysteria2` навсегда `blind`, и AC-5
+«покрытие доказано» было недоказуемо даже при живом трафике.
+
+**Фикс (три уровня, контракт не меняется):**
+
+1. **Primary** — `build_runner` собирает hints из клиентского profile-store
+   (`runner.profile_proto_hints()`): `xray-*|vless*|vmess*|trojan* → xray`,
+   `hysteria2|hy2 → hysteria2`, `amneziawg|awg → amneziawg`.
+2. **Fallback #1 (контент)** — в `parse.py`, если hint'а нет: однозначные
+   маркеры строки (`Xray <ver>`, `infra/conf/serial`, `core: Xray` →
+   `xray`; `client mode`, `SOCKS5 server listening`, `update available
+   {"version":"v2.` → `hysteria2`) резолвят протокол и **кэшируются** в
+   `proto_hints` (самовосстановление для профилей, добавленных после старта
+   демона, и при недоступном store).
+3. **Fallback #2 (имя юнита)** — `vpnm-*-hy2|*hysteria*` → `hysteria2`,
+   `vpnm-*-reality|-xhttp|-xray|-ws|-cdn` → `xray`.
+
+**Заодно закрыт `unparsed` пролога** (те же 4 строки из полевой серии):
+`Xray <ver> (…)` теперь `app_banner_ok`; `A unified platform for
+anti-censorship`, `infra/conf/serial: Reading config`,
+`update available {"version":…}` и `received signal, shutting down gracefully` →
+`ignored_infra` (авторитетный lifecycle-сигнал даёт systemd `unit_stop`).
+
+**Evidence (реплей user-журнала с 17.11 15:24, 68 657 строк):**
+
+| прогон | app_lines | parsed | unparsed | ignored_infra |
+|---|---|---|---|---|
+| до фикса | 7 | 6 | **1** | 3 |
+| после фикса | 6 | 6 | **0** | 4 |
+
+Runner-реплей 10 записей `vpnm-*` через реальный `build_runner`:
+`signals = {systemd: ok, xray: ok, hysteria2: ok, amneziawg: counters, dns: blind}`,
+`unparsed_ratio=0.0`, `notes` без `app_signal=blind` (остаётся `app_lines_low:6`).
+
 ## 5. Состояние кода и стоп-кран на аптайм
 
 | Что | Где | Статус |
 |---|---|---|
-| D1 фикс + 3 теста | `vpnm/guard/cli.py`, `tests/guard/test_guard_g6_acceptance.py` | в рабочем дереве, **не закоммичено/не задеплоено** |
-| D3 фикс + 5 тестов | `vpnm/guard/parse.py`, `vpnm/guard/runner.py`, там же | в рабочем дереве, **не закоммичено/не задеплоено** |
-| Полный прогон | `scripts/vpn-manager` | **1175 passed** |
-| Живой демон | `vpn-guard.service` | **не тронут**: `NRestarts=0`, тот же PID, окно непрерывности идёт |
+| D1 фикс + 3 теста | `vpnm/guard/cli.py`, `tests/guard/test_guard_g6_acceptance.py` | **закоммичено** `612a64b`, не задеплоено |
+| D3 фикс + 5 тестов | `vpnm/guard/parse.py`, `vpnm/guard/runner.py`, там же | **закоммичено** `612a64b`, не задеплоено |
+| D6 фикс + 6 тестов | `vpnm/guard/{parse,runner}.py`, там же | в рабочем дереве, **не закоммичено/не задеплоено** |
+| Полный прогон | `scripts/vpn-manager` | **1181 passed** |
+| Живой демон | `vpn-guard.service` | **не тронут**: `MainPID=2100090`, `NRestarts=0`, окно непрерывности идёт |
 
-Деплой D1/D3 (`pipx install --force -e .` + рестарт юнита) и AC-11 (`kill -9`)
+Деплой D1/D3/D6 (`pipx install --force -e .` + рестарт юнита) и AC-11 (`kill -9`)
 — **строго после 2026-11-24 15:24 MSK**, чтобы не обнулить 7-дневное окно.
 
-## 6. План полевого покрытия транспортов (до закрытия окна)
+## 6. Полевая серия транспортов (2026-11-19, живой прогон)
 
-Цель: вывести `xray`/`hysteria2` из `blind` и получить хотя бы по одному окну с
-`app_banner_ok` + handshake для **AWG / Reality / XHTTP / Hy2**, не трогая
-`vpn-guard.service` (инвариант #4: `vpn down` его не касается).
+Проведена по решению владельца. Демон **не перезапускался**: `MainPID=2100090`,
+`NRestarts=0`, `active` до, между и после всех переключений (`pipx install` не
+выполнялся — живёт ещё не обновлённый инстанс).
 
-Для каждого прогона — дельта `vpn guard status --json` и
-`vpn guard findings --since 1h`; ожидаемо:
+| Транспорт | Доказательство трафика | Δevents / Δunparsed | findings 1h | signals |
+|---|---|---|---|---|
+| **AWG** (`laptop`, mode DIRECT) | 3× HTTPS 200; iface `laptop`: tx **+59 008 B**, rx **+1 045 504 B** | +0 / +0 | 0 | `amneziawg=counters` (канал kernel-level: журнал не растёт, sysfs-счётчики — да) |
+| **Reality** (`asv2-reality`, socks 2080) | `generate_204` 204, 0.48 s | +5 / +3 | 0 | до фикса — `blind`; после D6-фикса в реплее — `ok` |
+| **Hy2** (`asv2-hy2`, socks 2083) | `generate_204` 204, 0.42 s | +4 / +2 | 0 | до фикса — `blind`; после D6-фикса в реплее — `ok` |
+| **XHTTP** | — | — | — | **N/A**: на asv2 транспорта нет (Reality 443/tcp + Hy2 443/udp + AWG), asv1 с XHTTP выведен 2026-11-16. Движок Xray в поле доказан через Reality; ветка XHTTP покрыта корпусными/контрактными тестами |
 
-- `signals.<proto>`: `blind → ok`;
-- `app_banner_ok` в событиях, G-01 не срабатывает при живом handshake;
-- на AWG: `amneziawg=counters` сохраняется, `state=armed`, `dropped=0`;
-- отсутствие новых high-findings на транспортных юнитах (это и есть
-  полевое доказательство G-02…G-05).
+Возврат в штатный режим выполнен: `mode: DIRECT (awg laptop)`, split жив; итог
+`events 6025 → 6034`, `unparsed 1 → 6`, `dropped 0`, `findings 7 → 7` (новых
+нет), `redaction_hits 0`.
+
+**Разбор +5 unparsed** (источник правок D3/D6): Reality — 3 строки пролога
+Xray (`Xray 26.x (…)`, tagline, `Reading config`); Hy2 — баннер `client mode`
+(не распознан старым инстансом) и `update available {"version":…}`. После
+фиксов реплей даёт `unparsed = 0` (§4/D6).
+
+**G-12 `source_lost: sysfs:awg` в серии не срабатывал:** socks-профили не
+трогают AWG-интерфейс, `sysfs:awg` оставался `ok`; ранее зафиксированные
+61–62 с относятся к реальным сменам AWG-iface и остаются кандидатом в
+калибровку порогов на T+7.
+
+## 7. Остаток до G6 close
+
+Осталось: завершение 7-дневного окна (24.11 15:24 MSK), деплой D1/D3/D6,
+AC-11 (`kill -9`), тюнинг порогов по кандидатам (Xray/Hy2-пролог → `ignored_infra`
+уже закрыт; `source_lost: sysfs:awg`; D4-note TTL) и финальный G6-отчёт.
 
 ## Трассируемость
 
@@ -167,5 +231,6 @@ sysfs-источника при смене iface).
 | T0/T0.5 (исходная точка) | [TEST-20261117-vpn-guard-checkpoint-t0](TEST-20261117-vpn-guard-checkpoint-t0.md) |
 | Спека и AC-1…AC-17 | [SPEC-20261116-vpn-guard](../specs/SPEC-20261116-vpn-guard.md) §14.2, §15 |
 | Полевые фиксы правил (G-09 и др.) | `ubuntuInstaller c447171` (T0.5, §«Пост-фикс») |
-| D1/D3 (этот чекпоинт) | `ubuntuInstaller` (рабочее дерево, ревью) |
+| D1/D3 (этот чекпоинт) | `ubuntuInstaller 612a64b` (запушен 2026-11-19) |
+| D6 (полевая серия) | `ubuntuInstaller` (рабочее дерево, ревью) |
 | Дефект D4 | TECHDEBT (P-долг, кандидат P22+) |
