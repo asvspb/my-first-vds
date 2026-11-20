@@ -441,7 +441,7 @@ CONF_TEXT = (
     "\n"
     "[Peer]\n"
     f"PublicKey = {MANEUVER_PUB}\n"
-    "Endpoint = 213.108.23.119:51900\n"
+    "Endpoint = 198.51.100.10:51900\n"
     "AllowedIPs = 0.0.0.0/0\n"
 )
 
@@ -464,7 +464,7 @@ class _P2PRunner:
         if call[:3] == ["awg", "show", "awg1"] and call[3:] == ["dump"]:
             dump = (
                 "privkey\tpubkey\t51900\toff\n"
-                f"{MANEUVER_PUB}\t(none)\t213.108.23.119:51900\t10.11.0.2/32\t"
+                f"{MANEUVER_PUB}\t(none)\t198.51.100.10:51900\t10.11.0.2/32\t"
                 f"{int(NOW.timestamp())}\t50\t60\toff\n"
             )
             return ShellResult(dump, "", 0)
@@ -563,7 +563,7 @@ def test_run_step_exhausted_recovers_and_resets_p25(tmp_path, monkeypatch):
             if call[:3] == ["awg", "show", "awg1"] and call[3:] == ["dump"]:
                 dump = (
                     "privkey\tpubkey\t51900\toff\n"
-                    f"{MANEUVER_PUB}\t(none)\t213.108.23.119:51900\t10.11.0.2/32\t"
+                    f"{MANEUVER_PUB}\t(none)\t198.51.100.10:51900\t10.11.0.2/32\t"
                     f"{int(NOW.timestamp())}\t50\t60\toff\n"
                 )
                 return ShellResult(dump, "", 0)
@@ -589,3 +589,85 @@ def test_run_step_exhausted_recovers_and_resets_p25(tmp_path, monkeypatch):
     mstate = maneuver_mod.load_maneuver_state(mpath)
     assert mstate["last_sample"]["consecutive_failures"] == 0  # P0-4: сброс серии
     assert mstate["state"] == "healthy"
+
+
+# --- P0-1 ревью 5513b68: run_switch(to=awg, apply=True) ---------------------
+
+class _FakeLock:
+    """Локальный fake (как в test_wstunnel): реальный flock не нужен."""
+
+    def __init__(self, *a, **kw):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_run_switch_to_awg_applies_and_resets_p25(tmp_path, monkeypatch):
+    """Ручной возврат на awg: route + сброс P25-серии ВНУТРИ lock, без NameError."""
+    from src.relay import maneuver
+
+    state_path = str(tmp_path / "p2p-carriers.json")
+    state = carriers.default_state(NOW)
+    state.update({"active": WSTUNNEL, "active_iface": "wg-ws0",
+                  "state": STATE_FALLBACK, "wg_ws0_installed": True,
+                  "fallback_since": NOW.isoformat()})
+    assert save_state(state, state_path)
+
+    mstate = {
+        "state": "cooldown", "exhausted": True,
+        "last_sample": {"consecutive_failures": 3},
+        "failed_ports": [51901], "current_port": 51900,
+    }
+    maneuver_path = tmp_path / "relay-maneuver.json"
+    maneuver_path.write_text(json.dumps(mstate), encoding="utf-8")
+
+    monkeypatch.setattr("src.core.lock.FileLock", _FakeLock)
+    monkeypatch.setattr(carriers.os, "geteuid", lambda: 0)
+    ip_calls: list[list[str]] = []
+
+    def fake_run(argv, timeout=None, check=False):
+        if argv[:2] == ["ip", "route"]:
+            ip_calls.append(list(argv))
+        return ShellResult("", "", 0)
+
+    monkeypatch.setattr(carriers, "run_list", fake_run)
+    monkeypatch.setattr(maneuver, "RELAY_MANEUVER_LOCK_FILE",
+                        str(tmp_path / "maneuver.lock"))
+    # reset_p25_state ходит в maneuver.load/save_maneuver_state — мокаем оба
+    # (save с p=None писал бы в реальный /var/lib/vds)
+    monkeypatch.setattr(
+        maneuver, "load_maneuver_state",
+        lambda p=None: json.loads(maneuver_path.read_text(encoding="utf-8")),
+    )
+    monkeypatch.setattr(
+        maneuver, "save_maneuver_state",
+        lambda st, p=None: maneuver_path.write_text(json.dumps(st, ensure_ascii=False))
+        or True,
+    )
+
+    code = carriers.run_switch(to=PRIMARY, apply=True, state_path=state_path)
+    assert code == 0
+    assert ip_calls == [["ip", "route", "replace", "default", "dev", "awg1",
+                         "table", "100"]]
+    st = load_state(state_path)
+    assert st["active"] == PRIMARY and st["state"] == STATE_PRIMARY
+    # P25-серия сброшена (правильные поля, внутри lock)
+    m = json.loads(maneuver_path.read_text(encoding="utf-8"))
+    assert m["state"] == "healthy" and m["exhausted"] is False
+    assert m["last_sample"]["consecutive_failures"] == 0
+
+
+def test_run_switch_dry_run_touches_nothing(tmp_path, monkeypatch):
+    state_path = str(tmp_path / "p2p-carriers.json")
+    state = carriers.default_state(NOW)
+    state.update({"active": WSTUNNEL, "wg_ws0_installed": True})
+    assert save_state(state, state_path)
+    monkeypatch.setattr(carriers.os, "geteuid", lambda: 1000)
+
+    code = carriers.run_switch(to=PRIMARY, apply=False, state_path=state_path)
+    assert code == 0
+    assert load_state(state_path)["active"] == WSTUNNEL  # dry-run: без изменений

@@ -519,7 +519,8 @@ awg1: в wg-ws0 уходят пакеты клиентов, а не 10.12.0.0/30
 maneuver (под его локом, без повторного захвата); `exhausted_recovery_check` —
 автовыход при живом любом носителе; сброс P25-серии при возврате — в
 `last_sample` (правильное поле); nft-policy перезаписывается атомарно после
-`nft -c -f`. Команды: `vds relay carrier status`,
+`nft -c -f`. Сбой `ip route` при автовыходе — `hold`, не краш. Команды:
+`vds relay carrier status`,
 `switch --to awg|wstunnel [--apply]`. AC-S4: `vds-relay-policy` через
 ExecStartPost `carrier-default-iface.sh` ставит table 100 по активному
 носителю из state (дефолт awg1, `ip link show` проверяется — юнит не падает).

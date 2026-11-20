@@ -123,7 +123,8 @@ def save_state(state: dict, path: Optional[str] = None) -> bool:
         os.replace(tmp, target)
         return True
     except OSError:
-        Path(tmp).unlink(missing_ok=True)
+        if tmp:  # mkstemp мог упасть до присвоения
+            Path(tmp).unlink(missing_ok=True)
         return False
 
 
@@ -259,7 +260,9 @@ def on_maneuver_rollback(
         return {"action": "noop", "reason": f"active={active_carrier(state)}"}
 
     # P0-1 (ревью 769a7eb): вызов через фолбэк — модульная probe, не затенение.
-    wstun_ok = (probe_fn or probe)(IFACES[WSTUNNEL], PEER_IPS[WSTUNNEL])
+    # P1-2 (ревью 5513b68): фолбэк единообразен с fallback_tick — с run=run.
+    run_probe = probe_fn or (lambda i, p: probe(i, p, run=run))
+    wstun_ok = run_probe(IFACES[WSTUNNEL], PEER_IPS[WSTUNNEL])
     if wstun_ok:
         try:
             _apply_switch(
@@ -393,26 +396,26 @@ def exhausted_recovery_check(
         return {"action": "noop"}
     # P0-1: параметр probe_fn — фолбэк на модульную probe (не затенённую).
     run_probe = probe_fn or (lambda i, p: probe(i, p, run=run))
-    if run_probe(IFACES[PRIMARY], PEER_IPS[PRIMARY]):
-        state["state"] = STATE_PRIMARY
-        state["active"] = PRIMARY
-        state["active_iface"] = IFACES[PRIMARY]
+    # P2-1 (ревью 5513b68): сбой ip route при автовыходе не пробрасывается —
+    # maneuver.py ловит только ManeuverError/OSError.
+    for carrier, state_name in (
+        (PRIMARY, STATE_PRIMARY),
+        (WSTUNNEL, STATE_FALLBACK),
+    ):
+        if not run_probe(IFACES[carrier], PEER_IPS[carrier]):
+            continue
+        state["state"] = state_name
+        state["active"] = carrier
+        state["active_iface"] = IFACES[carrier]
         state["exhausted_reason"] = ""
         state["wg_fail_streak"] = 0
         state["since"] = iso(moment)
-        _switch_route(IFACES[PRIMARY], run=run)
+        try:
+            _switch_route(IFACES[carrier], run=run)
+        except CarrierError as exc:
+            return {"action": "hold", "reason": str(exc)}
         save_state(state, state_path)
-        return {"action": "recovered", "to": PRIMARY}
-    if run_probe(IFACES[WSTUNNEL], PEER_IPS[WSTUNNEL]):
-        state["state"] = STATE_FALLBACK
-        state["active"] = WSTUNNEL
-        state["active_iface"] = IFACES[WSTUNNEL]
-        state["exhausted_reason"] = ""
-        state["wg_fail_streak"] = 0
-        state["since"] = iso(moment)
-        _switch_route(IFACES[WSTUNNEL], run=run)
-        save_state(state, state_path)
-        return {"action": "recovered", "to": WSTUNNEL}
+        return {"action": "recovered", "to": carrier}
     return {"action": "hold", "reason": "оба носителя всё ещё мертвы"}
 
 
@@ -472,11 +475,13 @@ def run_switch(to: str, apply: bool = False,
             _apply_switch(to, state=state, now=now,
                           reason="ручное переключение (carrier switch)",
                           state_path=state_path)
+            # P0-1 (ревью 5513b68): сброс P25-серии ВНУТРИ lock (гонка с таймером)
+            # и правильное имя (старое _reset_p25_state давало NameError).
+            if to == PRIMARY:
+                reset_p25_state(None)
     except (CarrierError, LockError, OSError) as exc:
         console.print(f"[error][carrier] {exc}[/error]")
         return 1
-    if to == PRIMARY:
-        _reset_p25_state(None)
     console.print(f"[success][carrier] table 100 → {IFACES[to]} ({to})[/success]")
     return 0
 
