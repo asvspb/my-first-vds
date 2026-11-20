@@ -398,6 +398,10 @@ def _patch_common(monkeypatch, tmp_path, *, restarts):
     monkeypatch.setattr("src.core.lock.FileLock", _FakeLock)
     monkeypatch.setattr("src.core.units.install_unit", lambda *a, **kw: True)
     monkeypatch.setattr(ws, "_restart_unit", lambda unit, run=None: restarts.append(unit))
+    # WP-P2P-4: exit-apply ставит deploy-hook — патчим пути в tmp
+    monkeypatch.setattr(ws, "RENEW_HOOKS_DIR", tmp_path / "renewal-hooks" / "deploy")
+    monkeypatch.setattr(ws, "RENEW_HOOK",
+                        tmp_path / "renewal-hooks" / "deploy" / "vds-wstunnel-reload.sh")
 
 
 def _lock_helper():
@@ -610,3 +614,61 @@ def test_relay_apply_policy_check_failure_cleans_tmp_and_keeps_live(monkeypatch,
     assert not list(tmp_path.glob(".nft-policy.*"))
     # fail-fast: проверка policy идёт ДО любых рестартов — ни один юнит не тронут
     assert restarts == []
+
+
+# --- WP-P2P-4: deploy-hook LE с фильтром $RENEWED_DOMAINS ------------------
+
+def test_renew_hook_filters_domain():
+    text = ws.render_renew_hook("ws.example.net")
+    assert 'case ",$RENEWED_DOMAINS," in' in text
+    assert "*,ws.example.net,*) systemctl try-restart vds-wstunnel-server.service" in text
+
+
+def test_renew_hook_rejects_ip():
+    with pytest.raises(ws.WstunnelError):
+        ws.render_renew_hook("203.0.113.10")
+
+
+def test_ensure_renew_hook_installed_0700(tmp_path, monkeypatch):
+    import stat as _stat
+
+    hooks = tmp_path / "renewal-hooks" / "deploy"
+    monkeypatch.setattr(ws, "RENEW_HOOKS_DIR", hooks)
+    monkeypatch.setattr(ws, "RENEW_HOOK", hooks / "vds-wstunnel-reload.sh")
+    path = ws.ensure_renew_hook("ws.example.net")
+    assert path.is_file()
+    assert path.stat().st_mode & 0o777 == 0o755
+    assert "ws.example.net" in path.read_text(encoding="utf-8")
+
+
+def test_p2_fallback_since_set_on_wstun_recovery(tmp_path, monkeypatch):
+    """P2 (ревью dfe7f2c): автовыход на wg-ws0 ставит fallback_since —
+    иначе prefer_primary в fallback_tick никогда не сработал бы."""
+    state_path = str(tmp_path / "p2p-carriers.json")
+    now = carriers.utcnow()
+    # wg_ws0_installed() проверяет ФАЙЛ (не state) — создаём его
+    ws_conf = tmp_path / "etc" / "amnezia" / "wg-ws0.conf"
+    ws_conf.parent.mkdir(parents=True, exist_ok=True)
+    ws_conf.write_text("[Interface]\nPrivateKey = FIXTURE_PW_WG_WS=\n", encoding="utf-8")
+    monkeypatch.setattr(carriers, "WG_WS_CONF", ws_conf)
+
+    state = carriers.default_state(now)
+    state.update({"active": "awg", "active_iface": "awg1",
+                  "state": "exhausted", "wg_ws0_installed": True,
+                  "exhausted_reason": "оба мертвы"})
+    assert carriers.save_state(state, state_path)
+
+    # P2-1: сбой route должен превращаться в hold — патчим run_list так,
+    # чтобы ip route заменялся успешно (проверяем happy-path автовыхода).
+    monkeypatch.setattr(
+        carriers, "run_list",
+        lambda argv, timeout=None, check=False: ShellResult("", "", 0),
+    )
+    result = carriers.exhausted_recovery_check(
+        state_path=state_path, now=now,
+        probe_fn=lambda iface, peer: peer.startswith("10.12."),
+    )
+    assert result["action"] == "recovered" and result["to"] == "wstunnel"
+    st = carriers.load_state(state_path)
+    assert st["fallback_since"] is not None  # теперь prefer_primary сработает
+    assert st["state"] == "fallback"

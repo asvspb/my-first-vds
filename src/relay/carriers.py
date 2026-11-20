@@ -410,6 +410,10 @@ def exhausted_recovery_check(
         state["exhausted_reason"] = ""
         state["wg_fail_streak"] = 0
         state["since"] = iso(moment)
+        # P2 (ревью dfe7f2c): без fallback_since на wstunnel условие
+        # min_age_ok в fallback_tick останется False — prefer_primary
+        # (возврат на awg1) никогда не сработал бы.
+        state["fallback_since"] = iso(moment) if carrier == WSTUNNEL else None
         try:
             _switch_route(IFACES[carrier], run=run)
         except CarrierError as exc:

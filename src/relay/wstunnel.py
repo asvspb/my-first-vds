@@ -670,6 +670,10 @@ def run_exit_install(
                                      "cert": str(cert), "key": str(key)}):
                 raise WstunnelError(f"юнит {WS_SERVER_UNIT} не установлен")
 
+            # WP-P2P-4: продление LE рестартирует только wstunnel (фильтр
+            # $RENEWED_DOMAINS), не hysteria (её hook не трогает нас).
+            ensure_renew_hook(host)
+
             # Порядок критичен: сначала nft/UFW (drop WG-порта вне lo должен
             # действовать ДО поднятия wg-ws0), затем интерфейс, затем сервер.
             for unit in (WS_NFT_UNIT, WG_WS_UNIT, WS_SERVER_UNIT):
@@ -896,6 +900,41 @@ def run_install(
     return 0
 
 
+RENEW_HOOKS_DIR = Path("/etc/letsencrypt/renewal-hooks/deploy")
+RENEW_HOOK = RENEW_HOOKS_DIR / "vds-wstunnel-reload.sh"
+
+
+def render_renew_hook(domain: str, unit: str = WS_SERVER_UNIT) -> str:
+    """Deploy-hook продления LE: рестарт **только** своего юнита.
+
+    Жёсткий фильтр по `$RENEWED_DOMAINS` (certbot передаёт домены через
+    запятую/пробел): продление `ws.<domain>` рестартирует wstunnel и не
+    трогает hysteria; продление основного домена — наоборот (её hook
+    vds-hysteria2-cert.sh срабатывает, но wstunnel не рестартует).
+    """
+    host = _validate_hostname(domain)
+    return (
+        "#!/bin/sh\n"
+        "# VDS wstunnel: reload после продления LE (WP-P2P-4, ADR-016).\n"
+        "# Фильтр $RENEWED_DOMAINS: обновление нашего домена — рестарт только\n"
+        f"# {unit}; продления других сертификатов (hysteria) не трогаем.\n"
+        "case \",$RENEWED_DOMAINS,\" in\n"
+        f'    *,{host},*) systemctl try-restart {unit} ;;\n'
+        "    *) exit 0 ;;\n"
+        "esac\n"
+    )
+
+
+def ensure_renew_hook(domain: str) -> Path:
+    """Установить deploy-hook 0755 (идемпотентно)."""
+    RENEW_HOOKS_DIR.mkdir(parents=True, exist_ok=True)
+    path = RENEW_HOOK
+    path.write_text(render_renew_hook(domain), encoding="utf-8")
+    os.chmod(path, 0o755)
+    console.print(f"[change][wstunnel] deploy-hook {path} установлен (0755).[/change]")
+    return path
+
+
 def run_status(run: Callable[..., ShellResult] = run_list) -> dict[str, object]:
     """Состояние вендоринга: версия, наличие env-файлов и юнитов."""
     env_server = WS_SERVER_ENV.is_file()
@@ -944,6 +983,10 @@ __all__ = [
     "render_exit_conf",
     "render_relay_conf",
     "render_exit_nft",
+    "RENEW_HOOKS_DIR",
+    "RENEW_HOOK",
+    "render_renew_hook",
+    "ensure_renew_hook",
     "render_server_env",
     "render_client_env",
     "server_argv",
