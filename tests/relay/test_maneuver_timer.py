@@ -97,6 +97,8 @@ class TestTemplates:
     def test_service_template_sandbox(self):
         text = self._render(maneuver.MANEUVER_SERVICE_TEMPLATE)
         # persist_endpoint/бэкап в /etc/amnezia → иначе EROFS под strict
+        # systemd создаёт каталог state до сборки namespace (иначе 226/NAMESPACE)
+        assert "StateDirectory=vds" in text
         assert "ReadWritePaths=/var/lib/vds /var/run /etc/amnezia" in text
         # awg show/set (netlink) + ping -I (raw)
         assert "CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW" in text

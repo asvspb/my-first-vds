@@ -23,6 +23,9 @@ ProtectSystem=strict
 # persist_endpoint и бэкап awg1.conf.bak-pre-maneuver лежат в /etc/amnezia —
 # без этого пути ProtectSystem=strict даёт EROFS; state манёвра — /var/lib/vds,
 # лок — /var/run.
+# systemd создаёт /var/lib/vds до сборки namespace (на релее каталога может
+# не быть, иначе 226/NAMESPACE на bind-mount ещё до запуска Python)
+StateDirectory=vds
 ReadWritePaths=/var/lib/vds /var/run /etc/amnezia
 ProtectHome=yes
 PrivateTmp=yes

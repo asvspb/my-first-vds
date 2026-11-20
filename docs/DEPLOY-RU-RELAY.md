@@ -290,7 +290,11 @@ vds relay maneuver tick --apply         # один тик таймера (ExecSt
 `awg1.conf.bak-pre-maneuver` 0600); откат по таймауту конфиг не трогает.
 Guard: команда отказывает на exit-узле и если текущий порт не из пула
 51900–51911 (до cutover). Anti-ping-pong: 600 с, ≤3/час. Триггер — **data-plane
-liveness**, не `handshake_age`. Состояние манёвра защищено `FileLock` (чтения state/ноги — под локом в
+liveness**, не `handshake_age`. Юнит объявляет `StateDirectory=vds` — systemd сам создаёт `/var/lib/vds` до
+сборки namespace (на релее каталога может не быть; иначе 226/NAMESPACE ещё
+до запуска Python).
+
+Состояние манёвра защищено `FileLock` (чтения state/ноги — под локом в
 apply-путях); после успешного шага/rollback счётчик подряд-отказов
 сбрасывается, `failed_ports` очищаются после истечения cooldown.
 
