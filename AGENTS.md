@@ -149,7 +149,8 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 `docs/SPLIT-TRANSPORTS.md` — системный split: AWG и аналоги (Reality/Hy2/XHTTP/CDN);
 `docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…016
 (ADR-016 — p2p link: несколько L4-ортогональных носителей между двумя узлами,
-draft до G2);
+draft до G2; селектор переключает носитель на **первом rollback** манёвра P25,
+`exhausted` (~22 мин) — только терминальное состояние);
 `TECHDEBT.md` — бэклог. Контракт схем guard: `docs/contracts/guard-schema-hashes.json`
 (источник правды — клиентский lock, D-17); решения vpn guard — D-16…D-24 в
 `docs/team/reports/DECISIONS-vpn-guard.md`, план v1.1 —
