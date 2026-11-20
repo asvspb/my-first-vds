@@ -54,7 +54,7 @@
 | UFW | **active** (harden --profile gateway, 2026-11-16): deny in / allow out / allow routed |
 | Порты | `49222/tcp LIMIT` (ssh, двухфазный перенос завершён), `443/tcp+udp`, `80/tcp` (ACME), `51825/udp`; после P24 — `51900/udp` **только с IP релея** (нога на `awg2`, пул 51900–51911 через nft REDIRECT; MASQUERADE `10.11.0.0/30` на WAN в той же nft-таблице, нужен `ip_forward=1`) |
 | SSH | **только 49222** (limit), ключи; `PasswordAuthentication` — как в образе |
-| Юниты | vds-xray, vds-hysteria2 (secure LE), vds-amneziawg + vds-amneziawg-nat, vds-probe-watch.timer (+ vds-gateway-health.timer, vds-probe-rucidr.timer — при установке); после P24 — `vds-awg-relay` (awg2) и `vds-awg-relay-pool` (nft REDIRECT); на релее opt-in — `vds-relay-maneuver.timer` + `vds-relay-maneuver.service` (`vds relay maneuver install`, WP-M4; `.service` enable=off, sandbox: `/etc/amnezia` в ReadWritePaths, `CAP_NET_ADMIN CAP_NET_RAW`, `AF_NETLINK`) |
+| Юниты | vds-xray, vds-hysteria2 (secure LE), vds-amneziawg + vds-amneziawg-nat, vds-probe-watch.timer (+ vds-gateway-health.timer, vds-probe-rucidr.timer — при установке); после P24 — `vds-awg-relay` (awg2) и `vds-awg-relay-pool` (nft REDIRECT); на релее opt-in — `vds-relay-maneuver.timer` + `vds-relay-maneuver.service` (`vds relay maneuver install`, WP-M4; `.service` enable=off, `StateDirectory=vds`, sandbox: `/etc/amnezia` в ReadWritePaths, `CAP_NET_ADMIN CAP_NET_RAW`, `AF_NETLINK`) |
 | Роль | основной AWG-exit ноутбука (`vpn start`), AWG-подсеть 10.9.0.0/24 |
 
 > asv1 удалён 2026-11-16; asv2 — единственный боевой exit (UFW gateway,
