@@ -645,3 +645,179 @@ class TestConfEndpoint:
     def test_idempotent_persist_when_unchanged(self, env):
         assert maneuver.persist_endpoint(env["conf"], EXIT_HOST, 51900) is False
         assert not env["conf"].with_name(env["conf"].name + ".bak-pre-maneuver").exists()
+
+
+# ---------------------------------------------------------------------------
+# P1: счётчик consecutive_failures после успеха
+# ---------------------------------------------------------------------------
+
+def _saved(env) -> dict:
+    return json.loads(
+        env["tmp"].joinpath("relay-maneuver.json").read_text(encoding="utf-8")
+    )
+
+
+class TestFailureCounterAfterSuccess:
+    def test_successful_maneuver_resets_counter(self, env):
+        st = maneuver.default_state()
+        st["state"] = "maneuvering"
+        st["last_sample"] = {"consecutive_failures": 3}
+        res = _run_tick(env, st=st, sample=make_sample(ok=False, fails=3, activity=True))
+        assert res["result"] == "ok"
+        saved = _saved(env)
+        assert saved["last_sample"]["consecutive_failures"] == 0
+
+        # Один потерянный ping после cooldown — только suspect (1/3), манёвра нет.
+        nxt = maneuver.collect_sample(
+            saved["last_sample"], now=NOW + 700, probe=lambda: (False, None)
+        )
+        assert nxt["consecutive_failures"] == 1
+        res2 = _run_tick(env, st=saved, sample=nxt, now=NOW + 700)
+        assert res2["state"] == "suspect" and res2["maneuver"] is False
+        assert res2["acted"] is False
+
+    def test_successful_rollback_resets_counter_and_exhausted(self, env):
+        monkeypatch = pytest.MonkeyPatch()
+        try:
+            monkeypatch.setattr(maneuver, "run_list", FakeRunner(port=51902))
+            monkeypatch.setattr(maneuver, "wait_liveness", lambda: (True, 47))
+            maneuver.save_maneuver_state(
+                {
+                    **maneuver.default_state(),
+                    "state": "exhausted",
+                    "exhausted": True,
+                    "previous_port": 51900,
+                    "current_port": 51902,
+                    "last_sample": {"consecutive_failures": 5},
+                },
+                env["maneuver_path"],
+            )
+            assert maneuver.run_rollback(
+                apply=True, state_path=env["state_path"],
+                maneuver_path=env["maneuver_path"],
+            ) == 0
+        finally:
+            monkeypatch.undo()
+        saved = _saved(env)
+        assert saved["last_sample"]["consecutive_failures"] == 0
+        assert saved["exhausted"] is False
+        assert saved["state"] == "cooldown"
+
+
+# ---------------------------------------------------------------------------
+# P1: лимит «3/час» согласован с decide() (>=, не >)
+# ---------------------------------------------------------------------------
+
+class TestHourlyLimitConsistency:
+    def test_third_rollback_within_hour_sets_exhausted(self, env):
+        st = maneuver.default_state()
+        st["state"] = "maneuvering"
+        st["attempts"] = [
+            {"ts": maneuver._now_iso(NOW - 60 * i), "from": 51900, "to": 51900 + i,
+             "result": "rollback", "liveness_ms": None}
+            for i in (1, 2)
+        ]
+        assert maneuver.hourly_attempts(st, NOW) == 2
+        res = _run_tick(
+            env, st=st, sample=make_sample(ok=False, fails=3, activity=True),
+            wait=(False, None),
+        )
+        assert res["result"] == "rollback"
+        assert res["exhausted"] is True
+        saved = _saved(env)
+        assert saved["state"] == "exhausted"
+        assert saved["exhausted"] is True
+        assert maneuver.hourly_attempts(saved, NOW) == 3
+
+
+# ---------------------------------------------------------------------------
+# P1: failed_ports/liveness_ms на здоровом канале
+# ---------------------------------------------------------------------------
+
+class TestHealthyRefreshesPortState:
+    def test_expired_cooldown_clears_failed_ports(self, env):
+        st = maneuver.default_state()
+        st["state"] = "cooldown"
+        st["cooldown_until"] = maneuver._now_iso(NOW - 1)
+        st["failed_ports"] = [51901, 51902]
+        st["liveness_ms"] = None
+        res = _run_tick(env, st=st, sample=make_sample(ok=True))
+        assert res["state"] == "healthy" and res["maneuver"] is False
+        saved = _saved(env)
+        assert saved["failed_ports"] == []
+        assert saved["liveness_ms"] == 47
+
+    def test_active_cooldown_keeps_failed_ports(self, env):
+        st = maneuver.default_state()
+        st["state"] = "cooldown"
+        st["cooldown_until"] = maneuver._now_iso(NOW + 600)
+        st["failed_ports"] = [51901]
+        st["liveness_ms"] = None
+        res = _run_tick(env, st=st, sample=make_sample(ok=True), now=NOW + 60)
+        assert res["state"] == "healthy"
+        saved = _saved(env)
+        assert saved["failed_ports"] == [51901]
+        assert saved["liveness_ms"] == 47
+
+
+# ---------------------------------------------------------------------------
+# P1: FileLock берётся ДО чтения state/ноги (TOCTOU)
+# ---------------------------------------------------------------------------
+
+class TestLockOrdering:
+    @staticmethod
+    def _journal(monkeypatch) -> list[str]:
+        journal: list[str] = []
+        real_load = maneuver.load_maneuver_state
+        real_read = maneuver.read_leg
+
+        class JournalLock:
+            def __init__(self, path: str):
+                self.path = path
+
+            def __enter__(self):
+                journal.append("lock_enter")
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                journal.append("lock_exit")
+                return False
+
+        def load_spy(path=None):
+            journal.append("load")
+            return real_load(path)
+
+        def read_spy(iface=maneuver.RELAY_EXIT_IFACE):
+            journal.append("read_leg")
+            return real_read(iface)
+
+        monkeypatch.setattr(maneuver, "FileLock", JournalLock)
+        monkeypatch.setattr(maneuver, "load_maneuver_state", load_spy)
+        monkeypatch.setattr(maneuver, "read_leg", read_spy)
+        monkeypatch.setattr(maneuver, "wait_liveness", lambda: (True, 47))
+        return journal
+
+    def test_run_step_locks_before_reads(self, env, monkeypatch):
+        journal = self._journal(monkeypatch)
+        assert maneuver.run_step(
+            apply=True, state_path=env["state_path"], maneuver_path=env["maneuver_path"]
+        ) == 0
+        assert journal[0] == "lock_enter"
+        assert journal.count("load") == 1 and journal.count("read_leg") == 1
+        assert journal.index("load") > journal.index("lock_enter")
+        assert journal.index("read_leg") > journal.index("lock_enter")
+
+    def test_run_rollback_locks_before_reads(self, env, monkeypatch):
+        monkeypatch.setattr(maneuver, "run_list", FakeRunner(port=51902))
+        maneuver.save_maneuver_state(
+            {**maneuver.default_state(), "previous_port": 51900, "current_port": 51902},
+            env["maneuver_path"],
+        )
+        journal = self._journal(monkeypatch)
+        assert maneuver.run_rollback(
+            apply=True, state_path=env["state_path"], maneuver_path=env["maneuver_path"]
+        ) == 0
+        assert journal[0] == "lock_enter"
+        assert journal.count("load") == 1 and journal.count("read_leg") == 1
+        assert journal.index("load") > journal.index("lock_enter")
+        assert journal.index("read_leg") > journal.index("lock_enter")

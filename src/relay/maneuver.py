@@ -667,10 +667,15 @@ def tick(
         st["state"] = decision.state
         if decision.state == "exhausted":
             st["exhausted"] = True
-        if decision.state == "healthy" and st.get("exhausted"):
+        if decision.state == "healthy":
+            # Здоровый канал: свежая задержка всегда; отказавшие порты забываем,
+            # только если инцидент закрыт (exhausted) или cooldown истёк.
+            # В активном cooldown список сохраняется (защита от флаппинга 600 с).
+            st["liveness_ms"] = sample.get("liveness_ms")
+            if st.get("exhausted") or now >= cooldown_epoch(st):
+                st["failed_ports"] = []
             # Автовыход exhausted→healthy: инцидент закрыт, пул снова доступен.
             st["exhausted"] = False
-            st["failed_ports"] = []
         if not save_maneuver_state(st, state_path):
             raise ManeuverError("не удалось сохранить state манёвра (0600).")
         return result
@@ -705,6 +710,9 @@ def tick(
         st["state"] = "cooldown"
         st["cooldown_until"] = _now_iso(now + COOLDOWN_S)
         st["failed_ports"] = []
+        # Канал ожил: серия отказов закрыта — иначе один потерянный ping после
+        # cooldown сразу дал бы 4/3 и спровоцировал новый манёвр.
+        st["last_sample"]["consecutive_failures"] = 0
         _append_attempt(st, now, current, candidate, "ok", liveness_ms)
         result.update(acted=True, result="ok")
     else:
@@ -718,7 +726,7 @@ def tick(
         _append_attempt(st, now, current, candidate, "rollback", None)
         if (
             next_port(current, ports, st["failed_ports"]) is None
-            or hourly_attempts(st, now) > MAX_ATTEMPTS_PER_HOUR
+            or hourly_attempts(st, now) >= MAX_ATTEMPTS_PER_HOUR
         ):
             st["state"] = "exhausted"
             st["exhausted"] = True
@@ -744,25 +752,28 @@ def run_step(
     try:
         gstate = load_state(state_path)
         violation = relay_node_violation(gstate)
-        if violation:
-            console.print(f"[error][relay] {violation}[/error]")
-            return 1
-        leg = read_leg()
-        ports = pool_ports()
-        guard_leg_port(leg["endpoint_port"], ports)
-    except (ManeuverError, StoreError) as exc:
+    except StoreError as exc:
         console.print(f"[error][relay] {exc}[/error]")
         return 1
-
-    st = load_maneuver_state(maneuver_path)
-    # Runtime — источник правды (в state.protocols["relay"] порт может быть старый).
-    if int(st.get("current_port") or 0) != leg["endpoint_port"]:
-        st["current_port"] = leg["endpoint_port"]
-
-    now = time.time()
-    sample = collect_sample(st.get("last_sample"), now=now, probe=probe_liveness)
+    if violation:
+        console.print(f"[error][relay] {violation}[/error]")
+        return 1
 
     if not apply:
+        # Dry-run: только чтение. Лок не нужен — мутаций нет.
+        try:
+            leg = read_leg()
+            ports = pool_ports()
+            guard_leg_port(leg["endpoint_port"], ports)
+        except ManeuverError as exc:
+            console.print(f"[error][relay] {exc}[/error]")
+            return 1
+        st = load_maneuver_state(maneuver_path)
+        # Runtime — источник правды (в state.protocols["relay"] порт может быть старый).
+        if int(st.get("current_port") or 0) != leg["endpoint_port"]:
+            st["current_port"] = leg["endpoint_port"]
+        now = time.time()
+        sample = collect_sample(st.get("last_sample"), now=now, probe=probe_liveness)
         try:
             result = tick(
                 st=st, leg=leg, sample=sample, now=now, apply=False,
@@ -788,8 +799,22 @@ def run_step(
         console.print("[error][relay] --apply требует root (запустите через sudo).[/error]")
         return 1
 
+    # TOCTOU: state/нога/сэмпл читаются ВНУТРИ лока — иначе между чтением и
+    # `awg set` состояние могло бы смениться другим процессом, а сэмпл был бы
+    # снят по устаревшим счётчикам.
     try:
         with FileLock(RELAY_MANEUVER_LOCK_FILE):
+            st = load_maneuver_state(maneuver_path)
+            leg = read_leg()
+            ports = pool_ports()
+            guard_leg_port(leg["endpoint_port"], ports)
+            # Runtime — источник правды (в state.protocols["relay"] порт старый).
+            if int(st.get("current_port") or 0) != leg["endpoint_port"]:
+                st["current_port"] = leg["endpoint_port"]
+            now = time.time()
+            sample = collect_sample(
+                st.get("last_sample"), now=now, probe=probe_liveness
+            )
             result = tick(
                 st=st, leg=leg, sample=sample, now=now, apply=True,
                 force=force, state_path=maneuver_path,
@@ -926,31 +951,35 @@ def run_rollback(
     try:
         gstate = load_state(state_path)
         violation = relay_node_violation(gstate)
-        if violation:
-            console.print(f"[error][relay] {violation}[/error]")
-            return 1
-        leg = read_leg()
-        ports = pool_ports()
-        guard_leg_port(leg["endpoint_port"], ports)
-    except (ManeuverError, StoreError) as exc:
+    except StoreError as exc:
         console.print(f"[error][relay] {exc}[/error]")
         return 1
+    if violation:
+        console.print(f"[error][relay] {violation}[/error]")
+        return 1
 
-    st = load_maneuver_state(maneuver_path)
-    current = int(leg["endpoint_port"])
-    previous = int(st.get("previous_port") or current)
-    if previous == current or previous not in ports:
-        console.print(
-            "[info][relay] предыдущий порт совпадает с текущим (или вне пула) — "
-            "откатывать нечего.[/info]"
-        )
-        return 0
-
-    console.print(
-        f"[info][relay] План отката: endpoint {leg['endpoint_host']}:{current} → "
-        f"{leg['endpoint_host']}:{previous} (runtime awg set; конфиг — только при liveness).[/info]"
-    )
     if not apply:
+        # Dry-run: только чтение, без лока и мутаций.
+        try:
+            leg = read_leg()
+            ports = pool_ports()
+            guard_leg_port(leg["endpoint_port"], ports)
+        except ManeuverError as exc:
+            console.print(f"[error][relay] {exc}[/error]")
+            return 1
+        st = load_maneuver_state(maneuver_path)
+        current = int(leg["endpoint_port"])
+        previous = int(st.get("previous_port") or current)
+        if previous == current or previous not in ports:
+            console.print(
+                "[info][relay] предыдущий порт совпадает с текущим (или вне пула) — "
+                "откатывать нечего.[/info]"
+            )
+            return 0
+        console.print(
+            f"[info][relay] План отката: endpoint {leg['endpoint_host']}:{current} → "
+            f"{leg['endpoint_host']}:{previous} (runtime awg set; конфиг — только при liveness).[/info]"
+        )
         console.print("[info][relay] Dry-run: мутаций нет. Реальное исполнение — --apply.[/info]")
         return 0
 
@@ -958,9 +987,28 @@ def run_rollback(
         console.print("[error][relay] --apply требует root (запустите через sudo).[/error]")
         return 1
 
-    now = time.time()
     try:
+        # TOCTOU: state и нога читаются под локом — решение об откате и
+        # `awg set` опираются на одно и то же наблюдение.
         with FileLock(RELAY_MANEUVER_LOCK_FILE):
+            st = load_maneuver_state(maneuver_path)
+            leg = read_leg()
+            ports = pool_ports()
+            guard_leg_port(leg["endpoint_port"], ports)
+            current = int(leg["endpoint_port"])
+            previous = int(st.get("previous_port") or current)
+            if previous == current or previous not in ports:
+                console.print(
+                    "[info][relay] предыдущий порт совпадает с текущим (или вне "
+                    "пула) — откатывать нечего.[/info]"
+                )
+                return 0
+            console.print(
+                f"[info][relay] План отката: endpoint {leg['endpoint_host']}:{current} → "
+                f"{leg['endpoint_host']}:{previous} (runtime awg set; конфиг — только "
+                "при liveness).[/info]"
+            )
+            now = time.time()
             switched = _actuate_set(leg["peer_public_key"], leg["endpoint_host"], previous)
             if not getattr(switched, "ok", False):
                 console.print(
@@ -971,6 +1019,10 @@ def run_rollback(
             alive, liveness_ms = wait_liveness()
             if alive:
                 persist_endpoint(Path(RELAY_EXIT_CONFIG_PATH), leg["endpoint_host"], previous)
+                # Канал ожил: серия отказов закрыта, exhausted снят.
+                if isinstance(st.get("last_sample"), dict):
+                    st["last_sample"]["consecutive_failures"] = 0
+                st["exhausted"] = False
             st["state"] = "cooldown" if alive else "suspect"
             st["cooldown_until"] = _now_iso(now + COOLDOWN_S) if alive else None
             st["previous_port"] = current
