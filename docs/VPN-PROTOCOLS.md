@@ -3,7 +3,9 @@
 > Дата: 2026-11-07, актуализировано 2026-11-16. Справочный документ: состояние
 > протоколов на сегодня, серверная реализация на VDS (что уже в оркестраторе — §3).
 > Связанные документы: [../TECHDEBT.md](../TECHDEBT.md),
-> [CENSORSHIP-ROADMAP.md](CENSORSHIP-ROADMAP.md) — пошаговый roadmap внедрения.
+> [CENSORSHIP-ROADMAP.md](CENSORSHIP-ROADMAP.md) — пошаговый roadmap внедрения;
+> матрица «угроза → транспорт» (какую угрозу закрывает каждый протокол) —
+> [team/reports/REVIEW-20261120-protocols-threat-matrix.md](team/reports/REVIEW-20261120-protocols-threat-matrix.md).
 
 ---
 
