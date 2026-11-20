@@ -5,6 +5,23 @@
 > Счётчики тестов в исторических записях — моментальные снимки (OQ-9):
 > актуальный baseline — `pytest -q`, число в живых доках не хранится.
 
+## Активный цикл: P24/P25 — манёвр ноги relay↔exit (2026-11-20)
+
+- **ADR-015** + **SPEC-20261120** (G2 APPROVED): изоляция порта exit (`awg2`,
+  пул 51900–51911 через nft REDIRECT) и манёвр ноги; триггер P25 — **data-plane
+  liveness**, не `handshake_age` (WP-M0: handshake 5 ч при живом трафике).
+- **WP-M0** (факты, [TEST-20261120-relay-leg-diag](reports/TEST-20261120-relay-leg-diag.md)):
+  35 эпизодов/7 д, медиана **7 мин** (прежние 32 — артефакт cooldown alert-watch),
+  IPv6-нога 47 мс, `PersistentKeepalive` на awg1 отсутствовал.
+- **P24 — ✅ ВЫПОЛНЕНО И ПРИНЯТО 2026-11-20**
+  ([ACCEPT-20261120-p24-exit-leg](reports/ACCEPT-20261120-p24-exit-leg.md)):
+  `awg2`+пул+MASQUERADE на exit, cutover релея на `213.108.23.119:51900`,
+  REDIRECT проверен через `:51901`, внешний скан пула молчит, `awg0` не тронут,
+  сторож переведён на `ALERT_RELAY_IFACE=awg2` (peer_found, ok).
+- **Осталось:** WP-M3 (ядро P25 — `maneuver.py`: state-machine, liveness, anti-ping-pong,
+  `awg set`), WP-M4 (opt-in таймер), WP-M5 (ребут-тест, живой ТСПУ-блок, docsync strict).
+  Страховка: старый пир релея на `awg0` держать ≥24 ч.
+
 ## Активный цикл: alert-watch + fast alerts/scout (2026-11-17)
 - **SPEC:** [SPEC-20261117-alert-watch](specs/SPEC-20261117-alert-watch.md) — G2 APPROVED;
   **WP-1…WP-7 реализованы и запушены** (`4af69c6..2782349`; код + тесты + доки).
