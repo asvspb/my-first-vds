@@ -117,6 +117,20 @@
 - Уточнено (P1-1 из прошлого ревью): `save_state` tmp уже инициализирован;
   cleanup дополнительно защищён `if tmp:`.
 
+## 2026-11-20: WP-P2P-4 — deploy-hook LE + fallback_since (готово к ревью, `333d3e4`)
+
+- **Deploy-hook** `/etc/letsencrypt/renewal-hooks/deploy/vds-wstunnel-reload.sh`
+  (0755): case по `$RENEWED_DOMAINS` — продление `ws.<domain>` рестартирует
+  только `vds-wstunnel-server.service`; hysteria (свой hook
+  `vds-hysteria2-cert.sh`) и wstunnel не задевают друг друга. Ставится в
+  `run_exit_install`.
+- **P2 (dfe7f2c):** `exhausted_recovery_check` при автовыходе на wg-ws0
+  выставляет `fallback_since` — иначе `min_age_ok` в fallback_tick остаётся
+  False и prefer_primary никогда бы не вернул awg1. Плюс: сбой `ip route`
+  при автовыходе → `hold`, не проброс.
+- **Тесты:** фильтр домена, отказ IP, права 0755, fallback_since на
+  wstun-восстановлении.
+
 ## 2026-11-20: WP-P2P-3 — P0×5/P1×4 фикс (ревизия, готово к ревью)
 
 Ревью 769a7eb поймало 5 P0 (краши/потеря state на живом релее — тесты
