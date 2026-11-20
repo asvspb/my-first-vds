@@ -809,6 +809,23 @@ best-effort (ошибка/нет каталога — молча пропуск�
 
 ## 9. Корреляция, уверенность, инциденты
 
+### 9.0.0 Контракт `schema_hash` между репозиториями (D-17, DECISION Q1)
+
+Источник правды — клиент: `scripts/vpn-manager/vpnm/guard/schemas/schema_hashes.json`
+(`schema_id → sha256:<64 hex>` + `source_commit`), обновляется только вместе с
+правкой схемы. Сервер не копирует тела схем, а вендорит lock в
+`docs/contracts/guard-schema-hashes.json` и проверяет:
+
+- `tests/gateway/test_guard_verdict_contract.py` — 7 ключей, формат хэшей,
+  покрытие полей `vds gateway probe-watch watch --json` (включая опциональный
+  `stage`), и при заданном `VPN_MANAGER_REPO` — сверка с живым клиентом 1-в-1
+  (офлайн, без сети);
+- на клиенте — тест, падающий при правке схемы без обновления lock.
+
+Транспорт через `.github/workflows` сознательно не используется: в обоих репо
+каталога нет, а сеть в тестах запрещена (AGENTS §6). Когда CI появится, те же
+два pytest-теста подключаются без переделки контракта.
+
 ### 9.0 Возраст серверного вердикта (ревью G2)
 
 `finding.server` обязан нести `data_age_s` (или `window`): `fresh` по
@@ -1289,7 +1306,7 @@ vpn guard sync --host root@asv2
 | RSK-4 | Шумный user-journal (другие юниты) | фильтр по префиксу, bounded queue, drop info, CPU-бюджет |
 | RSK-5 | Дублирование с `monitor`/`doctor` | чёткое разделение: guard не делает проб; action ссылается на monitor |
 | RSK-6 | Утечка секретов через evidence | маскирование до записи, сниппеты off, пост-сканер, экспорт-блокировка |
-| RSK-7 | Кросс-репо дрейф схем | схемы + hash в обоих CI, аддитивность, ADR-014 |
+| RSK-7 | Кросс-репо дрейф схем | **закрыт контрактом D-17 (DECISION Q1)**: источник правды — клиентский lock `vpnm/guard/schemas/schema_hashes.json`; сервер вендорит его в `docs/contracts/guard-schema-hashes.json` и проверяет локальными тестами (без сети) — структура lock, поля `probe-watch watch --json`, при `VPN_MANAGER_REPO` сверка хэшей 1-в-1; `.github/` не нужен |
 | RSK-8 | Guard усиливает флап (нагрузка/рестарты) | read-only, Nice/CPUQuota, G-10 suppression, никаких systemctl из правил |
 | RSK-9 | Скачок часов/сон ноутбука | mono-время, skew-детект, G-12; suspend-пауза окон |
 | RSK-10 | Пользователь ждёт «само починится» | явно: v1 только диагностика; авто-действия — отдельный ADR |

@@ -5,7 +5,9 @@
 > Счётчики тестов в исторических записях — моментальные снимки (OQ-9):
 > актуальный baseline — `pytest -q`, число в живых доках не хранится.
 
-## 2026-11-20: DECISION Q8 — docsync `warn` → `block`
+## 2026-11-20: DECISION Q8 + WP-Q1a — docsync `block` и контракт schema_hash
+
+### WP-Q8 — docsync `warn` → `block` ✅
 
 - **Решение владельца:** перевести `mode` в `docs/doc-sync.json` в `block`
   досрочно (не ждать 2026-11-30): критерий «один цикл `warn`» выполнен по существу
@@ -19,6 +21,21 @@
 - **Контроль:** staged-правка `src/main.py` без доков → exit 1; с валидным
   `Docs: none — … (TECHDEBT P26)` → exit 0.
 - **Откат:** `"mode": "warn"` коммитом либо `git config --unset core.hooksPath`.
+
+### WP-Q1a — контракт `schema_hash` между репо (D-17) ✅
+
+- **D-17 зафиксирован** (DECISION Q1): источник правды — клиентский lock
+  `vpnm/guard/schemas/schema_hashes.json`; сервер вендорит только хэши.
+- **Сервер:** `docs/contracts/guard-schema-hashes.json` (7 контрактов,
+  `source_commit` `1e54011`) + `tests/gateway/test_guard_verdict_contract.py`
+  (структура lock, поля `probe-watch watch --json`, сверка с клиентом при
+  `VPN_MANAGER_REPO`, без сети). Негативный контроль: подмена хэша → тест падает
+  с явным diff `только_клиент`/`только_сервер`.
+- **D-16…D-21** записаны в `DECISIONS-vpn-guard.md` (реестровая дыра BRIEF §13
+  закрыта); RSK-7 в SPEC переведён в «закрыт контрактом», добавлен §9.0.0.
+- **Осталось (WP-Q1b, ubuntuInstaller):** lock-файл + тест в клиенте — коммит
+  после WP-Q1a, установка pipx/рестарт демона заблокированы до 2026-11-24
+  15:24 MSK (окно G6).
 
 ## Активный цикл: P24/P25 — манёвр ноги relay↔exit (2026-11-20)
 
