@@ -5,8 +5,26 @@
 > Счётчики тестов в исторических записях — моментальные снимки (OQ-9):
 > актуальный baseline — `pytest -q`, число в живых доках не хранится.
 
-## 2026-11-20: DECISION Q8 + WP-Q1a — docsync `block` и контракт schema_hash
+## 2026-11-20: DECISION Q6 — CDN-канал переведён в «холодный резерв»
 
+- **Решение владельца:** код CDN (`src/xray/cdn.py`, обвязка `gateway/`, клиентские
+  `vpnm/channels.py`, `guard/rules.py`) **не удаляется и не поднимается** на asv2;
+  канал — dormant capability. Роль выживания при L3-блоке IP exit закрыта лучше
+  (Reality+Hy2+AWG на asv2 + RU-relay с ногой `awg2`, P24/P25), потолок CF доказан
+  полем (2026-11-13).
+- **Отрицательный баланс включения:** литерал `/cdnws`, UFW `2053/tcp` на
+  `Anywhere` вместо подсетей CF, отсутствие fallback у origin, LE на апексе
+  сцепляет домен с IP, anti-DDoS хостера к AS13335.
+- **Прекондишны реактивации:** (1) отказ связки «asv2 + RU-relay» либо CDN с PoP в
+  РФ; (2) закрыть `tspu-blindspots §2` — рандомизированный `ws_path`, UFW только
+  подсетями CF, отдельный домен.
+- **Доки:** ADR-006 §Дополнение 2026-11-20, CDN-FRONTS (статус-блок), ROADMAP
+  (матрица §2.1, таблица транспортов, раскладка портов), GROWTH-POINTS GR-08 →
+  «заморожен (P3)», SERVER-BASELINE (§5.2, §5.12, §6); старый буллит WP-5 в цикле
+  doc-sync снят.
+- **Код не менялся.** `vds gateway status`/UFW на asv2 — без `:2053`.
+
+## 2026-11-20: DECISION Q8 + WP-Q1a — docsync `block` и контракт schema_hash
 ### WP-Q8 — docsync `warn` → `block` ✅
 
 - **Решение владельца:** перевести `mode` в `docs/doc-sync.json` в `block`
@@ -95,8 +113,9 @@
 ## Цикл doc-sync (SPEC-20261116-doc-sync) — WP-1…WP-4 закрыты
 - **SPEC:** [SPEC-20261116-doc-sync](specs/SPEC-20261116-doc-sync.md) (G2; `tools/docsync.py`,
   `docs/doc-sync.json`, хуки `.githooks`, агентские DoD — коммит `26cdbf8`).
-- **Осталось:** WP-5 — переход `mode: warn → block` после подтверждения владельца
-  (после ~2026-11-30); до этого нарушения печатаются, но не блокируют.
+- **WP-5 выполнен досрочно:** режим `mode: block` включён 2026-11-20
+  (DECISION Q8, см. верхний блок) — нарушения блокируют коммит, откат —
+  `"mode": "warn"` коммитом или `git config --unset core.hooksPath`.
 
 ## Предложение на G2: survivability (SPEC-20261116-survivability)
 - **SPEC:** [SPEC-20261116-survivability](specs/SPEC-20261116-survivability.md) —

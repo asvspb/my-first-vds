@@ -170,7 +170,8 @@ allow-набора → сервисные порты по `state.protocols` → 
 `443/tcp+udp`, `80/tcp`, `51825/udp` (+v6-дубли).
 **Целевой профиль asv1 (harden ещё НЕ применён — сейчас UFW inactive, ssh 22,
 полевка после TSPU-окна):** `22→limit→49222`, `443/tcp` Reality, `443/udp`
-Hy2, `8443/tcp` XHTTP(LE), `2053/tcp` CF-WS CDN, `51825/udp` AWG (пиры живы),
+Hy2, `8443/tcp` XHTTP(LE), `51825/udp` AWG (пиры живы); `2053/tcp` CDN —
+🧊 холодный резерв (DECISION Q6), не открывается,
 `20000-20500/udp` hop (в бою с 2026-11-13).
 
 Примечание к `exit-cascade`: порты `51825/udp`, `8443/tcp`, `2053/tcp`, `80`
@@ -186,7 +187,7 @@ Hy2, `8443/tcp` XHTTP(LE), `2053/tcp` CF-WS CDN, `51825/udp` AWG (пиры жи�
 | 51825/udp | AmneziaWG | ✔ (install уже открыл) | — | ✔ |
 | 51826/udp | obfs salamander | ✔ | — | ✔ |
 | 8443/tcp | XHTTP | ✔ | — | ✔ |
-| 2053/tcp | CDN origin (CF) | ✔ (только CIDR Cloudflare, SPEC-20261116-surface-hardening) | — | ✔ |
+| 2053/tcp | CDN origin (CF) — 🧊 холодный резерв (Q6) | не открывается, origin не развёрнут | — | — |
 | 80/tcp | ACME HTTP-01 | ✔ | — | ✔ |
 | 20000:20500/udp | hop (если включён) | ✔ | — | ✔ |
 | FORWARD / ip_forward | маршрутизация | ACCEPT + проверка | ACCEPT + проверка | ACCEPT + проверка |
@@ -372,7 +373,7 @@ sudo vds system ufw lock-443 --unlock --apply             # откат = одн�
 sudo vds gateway probe-watch config --auto-lockdown on --lockdown-allow IP --apply  # авто-лок при high (default off)
 ```
 
-Лок не трогает AWG 51825/CDN 2053/ssh; Hy2-hop (asv1) остаётся открытым с
+Лок не трогает AWG 51825/ssh (`2053/tcp` CDN и так не открыт — холодный резерв, Q6); Hy2-hop (asv1) остаётся открытым с
 warning; TTL обязателен (default 48h, 1h..168h) — забытый лок невозможен
 (auto-unlock тиком probe-watch). При downgrade лок НЕ снимается автоматически
 («мигалка» опаснее, §10 OQ-3). `harden` при активном локе отказывает
@@ -382,8 +383,9 @@ warning; TTL обязателен (default 48h, 1h..168h) — забытый л�
 `threat_reason`, `lockdown{active,since,ttl_until,allow_from}`, `ru_syn_new`);
 `nft list set inet vds_probe probers4`.
 **Откат (манёвр уклонения, на клиенте):** `vpn` переключение профиля с AWG
-asv2 на Hysteria2 (asv1, port hopping + salamander) / VLESS+WS :2053
-(Cloudflare) / транзитный RU-relay (`185.80.91.135`, развёрнут 2026-11-17).
+asv2 на Hysteria2 (port hopping + salamander) / транзитный RU-relay
+(`185.80.91.135`, развёрнут 2026-11-17). CDN `:2053` в этом списке больше нет —
+канал в холодном резерве (DECISION Q6), origin на asv2 не развёрнут.
 
 ### 5.13 Съём эталонного дампа пробы ТСПУ (при RU-PROBE-SUSPECT)
 
@@ -489,8 +491,8 @@ keepalive (И44), поэтому свежесть handshake в простое н
 
 | Что | Как | Проверка |
 |---|---|---|
-| Провайдерский файрвол | панель хостера: открыть TCP 22/80/443/8443/2053, UDP 443/51825/51826 (+hop) | `nc` с внешней точки; `traceroute` |
-| Anti-DDoS / geo-фильтр | панель хостера. **Факт asv1:** TCP с не-РФ ASN получает `refused/timeout`, ICMP проходит. ⚠️ CDN origin `:2053` должен быть достижим с ASN Cloudflare (AS13335, не-РФ) — CDN на asv1 работает ⇒ подсети CF проходят; при смене панели/фильтра внести [cloudflare.com/ips-v4](https://www.cloudflare.com/ips-v4/) в белый список, иначе 521/522 | `check-host.net`: ICMP vs TCP; `curl -I https://<cdn>:2053/` |
+| Провайдерский файрвол | панель хостера: открыть TCP 22/80/443/8443, UDP 443/51825/51826 (+hop); `2053/tcp` — только при реактивации CDN (Q6) | `nc` с внешней точки; `traceroute` |
+| Anti-DDoS / geo-фильтр | панель хостера. **Факт asv1:** TCP с не-РФ ASN получает `refused/timeout`, ICMP проходит. ⚠️ Только при реактивации CDN (Q6): origin `:2053` должен быть достижим с ASN Cloudflare (AS13335, не-РФ) — на asv1 подсети CF проходили; при смене панели/фильтра внести [cloudflare.com/ips-v4](https://www.cloudflare.com/ips-v4/) в белый список, иначе 521/522 | `check-host.net`: ICMP vs TCP; `curl -I https://<cdn>:2053/` |
 | Cloudflare DNS (apex) | A → IP сервера, proxied для CDN (orange), иначе DNS-only | `dig +short <домен>` |
 | LE-сертификаты | `vds acme issue --domain <домен> --email <email>` (после A-записи) | `openssl x509 -enddate`; `certbot renew --dry-run` |
 | CDN-запись | origin-домен + порт 2053, Full (strict) | `curl -I https://<cdn-домен>:2053/` |

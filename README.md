@@ -17,7 +17,8 @@ share-линки через `vpn profile pull`. Копии репозитори�
 - **Gateway-протоколы против блокировок** (основной сценарий): Xray VLESS
   Reality (TCP 443), VLESS XHTTP (инблэнд 8443 за SNI-фолбэком Reality;
   сервер — `mode: auto` + `xPaddingBytes: 100-1000`, GR-25),
-  VLESS+WS за CDN/Cloudflare (origin 2053), Hysteria2 (QUIC, UDP 443) с port
+  VLESS+WS за CDN/Cloudflare (origin 2053 — **холодный резерв**, DECISION Q6: код
+  сохранён, на asv2 не развёрнут), Hysteria2 (QUIC, UDP 443) с port
   hopping (`vds-hysteria2-hop`) и obfs salamander (`vds-hysteria2-obfs`),
   AmneziaWG (обфусцированный WireGuard, UDP 51825); общее хранилище клиентов
   (`vds gateway`), ACME/Let's Encrypt по домену
@@ -226,6 +227,7 @@ vds xray add-transport              # XHTTP-инблэнд за SNI-фолбэк
 vds xray remove-transport           # Снять XHTTP (инблэнд + XHTTP-клиенты)
 vds xray use-domain --domain vpn.example.ru   # Reality-ссылки по домену (state.domain)
 vds xray add-cdn --domain cdn.example.ru      # CDN-транспорт VLESS+WS+TLS (ADR-006); ws-path — случайный
+                                     # ⚠️ холодный резерв (Q6): прекондишны реактивации — ADR-006 §Дополнение
                                      # секрет; 2053/tcp открыт только для CIDR Cloudflare (ips-v4)
 vds xray add-cdn-client <name>      # CDN-клиент + ссылка (--front — фронт пула)
 vds xray add-cdn-front <domain>     # Фронт в пул CDN (сертификат в инблэнде)

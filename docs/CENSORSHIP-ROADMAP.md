@@ -34,7 +34,7 @@
 |---|---|---|
 | DPI-детект по фингерпринту | ТСПУ ловит TLS/WS-паттерны | Reality ✅, XHTTP ✅, Hysteria2+obfs ✅ |
 | Троттлинг по протоколу | скорость ≈0 при живом соединении | смена L4-типа ✅ (TCP/UDP), hop — W4 |
-| Блокировка по IP | IP сервера в реестре | CDN-фронт ✅ (один домен), пул фронтов — W4 |
+| Блокировка по IP | IP сервера в реестре | 🧊 CDN-фронт — холодный резерв (Q6, origin снят), пул фронтов — W4 |
 | Active probing | цензор сам стучится в порт | Reality fallback ✅, decoy-маска Hysteria2 ✅, probe-тест — W6 |
 | Блокировка UDP целиком | QUIC/AWG мёртв | TCP-резерв ✅ (Reality/XHTTP/CDN) |
 | Блокировка TCP 443 | Reality/XHTTP/CDN мёртв | UDP-резерв ✅ (Hysteria2/AWG) |
@@ -100,7 +100,7 @@ CDN-транспорт — отдельный origin-инблэнд на TCP 205
 
 | Слой | Компонент | Состояние |
 |---|---|---|
-| Транспорт | Xray (Reality/XHTTP/CDN), Hysteria2 (+obfs/hop), AWG | ✅ работает на asv1 |
+| Транспорт | Xray (Reality/XHTTP), Hysteria2 (+obfs/hop), AWG | ✅ Reality/Hy2/AWG на **asv2** (asv1 выведен 2026-11-16); CDN — холодный резерв (Q6) |
 | Мультиплексирование | Xray fallbacks (SNI), отдельные порты | ✅ |
 | Оркестрация | `src/gateway/` (state, links, blockcheck, init) | ✅; `gateway init` реализован (GR-16), hub-подписки — нет (W5) |
 | Наблюдаемость | `src/sysinfo/`, `status`-команды, healthcheck-таймер, probe-watch | ✅ health (W1: `vds-gateway-health.timer`) + probe-watch v3 (W1-1 SPEC-probe-coverage: probers4 на tcp/{443,8443,2053} + 5-мин FAST-CONTOUR-тег в сэмплере); метрики/alerts — нет (W5) |
@@ -117,7 +117,7 @@ CDN-транспорт — отдельный origin-инблэнд на TCP 205
 | 2 | Hysteria2 | UDP 443 QUIC | mobile, потери, скорость | P0 | ✅ на asv1 |
 | 3 | Hysteria2 + obfs (salamander) | UDP 51826 | прячется голый QUIC | P0 | ✅ на asv1 |
 | 4 | Hysteria2 + port hopping | UDP 20k–20.5k → 443 | троттлинг по порту | P1 | ⚠️ код есть, не включён (W4) |
-| 5 | VLESS + WS + TLS за CDN | TCP 2053 (origin) | блок IP / fronting | P1 | ✅ на asv1 (1 фронт) |
+| 5 | VLESS + WS + TLS за CDN | TCP 2053 (origin) | блок IP / fronting | P3 | 🧊 холодный резерв (Q6): origin не развёрнут; прекондишны — ADR-006 |
 | 6 | VLESS XHTTP (fallback) | TCP 8443 (loopback) | TCP-резерв для Xray-клиентов | P1 | ✅, но клиенты ограничены |
 | 7 | AmneziaWG | UDP 51825 | деградация Xray/QUIC | P1 | ✅ на asv1 |
 | 8 | NaiveProxy / HTTP2 CONNECT | TCP 443 | ловля Reality по фингерпринту | P2 | ❌ |
@@ -133,7 +133,7 @@ CDN-транспорт — отдельный origin-инблэнд на TCP 205
 | 0 Фундамент | core/*, adapter, store | ✅ core, protocol, store, units, secrets, lock | — |
 | 1 Reality | install/clients/status | ✅ Reality на asv1 | update-путь (W4) |
 | 2 Hysteria2 | install/clients/sysctl | ✅ + obfs + hop-код | per-user auth (W2), hop включить (W4) |
-| 3 XHTTP + CDN | SNI-мультиплексор, CF | ✅ XHTTP-fallback, CDN origin 2053 | пул фронтов + проверка (W4) |
+| 3 XHTTP + CDN | SNI-мультиплексор, CF | ✅ XHTTP-fallback; CDN origin — 🧊 холодный резерв (Q6) | пул фронтов + проверка (W4) |
 | 4 AmneziaWG | install/conf/QR | ✅ install/conf/status | QR (W3), ротация/purge (W6) |
 | 5 Hub + подписки | init, sub, reconcile | ✅ `gateway init` (fresh-install-v3, G4 2026-11-14); sub/reconcile — нет | W3 (export/sub), W5 |
 | 6 Hardening | ACME, decoy, rotate, UFW | ✅ ACME HTTP-01 (hook закрыт), UFW harden/ssh-port/lock-443 (ADR-011, asv2) | DNS-01 (W5), rotate (W2/W6) |
@@ -266,7 +266,7 @@ tests/               unit (есть) + e2e/ Docker (W6)
 |---|---|---|
 | TCP 443 | Xray Reality (+ fallbacks на XHTTP) | основной TCP-транспорт |
 | TCP 8443 | Xray XHTTP | **только loopback**, снаружи не слушается |
-| TCP 2053 | CDN origin (VLESS+WS+TLS) | CF HTTPS-порт; edge-порт = origin |
+| TCP 2053 | CDN origin (VLESS+WS+TLS) | 🧊 не развёрнут на asv2 (Q6); CF HTTPS-порт, edge = origin |
 | TCP 80 | ACME HTTP-01 | только на время выдачи/продления |
 | UDP 443 | Hysteria2 | основной UDP-транспорт |
 | UDP 20000–20500 | hop-диапазон → REDIRECT на 443 | nat-цепочка `VDS_HY2_HOP` (W4) |

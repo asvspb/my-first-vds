@@ -7,7 +7,8 @@
 ## 1. О проекте
 
 **VDS Orchestrator** — Python CLI для управления выделенным сервером (Ubuntu 24.04):
-gateway-протоколы против блокировок (Xray VLESS Reality/XHTTP/CDN, Hysteria2 с port
+gateway-протоколы против блокировок (Xray VLESS Reality/XHTTP + CDN в холодном резерве
+по DECISION Q6, ADR-006, Hysteria2 с port
 hopping и obfs salamander, AmneziaWG), ACME/Let's Encrypt, общее хранилище клиентов
 (`vds gateway links`), плюс ZeroTier + ZTNET Panel (Docker), WireGuard, Coturn
 (архив/опционально), системный dashboard, первичная настройка и очистка.
