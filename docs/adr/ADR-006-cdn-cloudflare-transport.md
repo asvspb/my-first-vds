@@ -146,14 +146,20 @@ OQ-3 (порт 2053) и архитектура §2 — без изменений
 XHTTP через CF 0/2, cloudflared bulk = 0) — выигрыша в скорости нет; роль
 выживания при блоке IP exit уже закрыта лучше: Reality + Hy2 (hop+obfs) + AWG
 на asv2 и RU-relay с изолированной ногой `awg2` и манёвром пула (P24/P25).
-Отрицательный баланс безопасности при включении сейчас: литерал
-`CDN_WS_PATH = "/cdnws"`, `2053/tcp` открывался бы на `Anywhere` вместо подсетей
-CF, у origin нет fallback, LE на апексе сцепляет домен с IP asv2, плюс
-anti-DDoS гео-фильтр хостера к AS13335 (см. `ARCH-20261116-tspu-blindspots` §2,
-SERVER-BASELINE §риски).
+**Что уже закрыто кодом (SPEC-20261116-surface-hardening §2.2):**
+`add_cdn()` берёт `ws_path` через `gen_secret_path()` (`src/xray/cdn.py:857`);
+`/cdnws` (`CDN_WS_PATH`) остался только legacy-дефолтом для профилей,
+созданных до hardening. UFW-правило строится по `CLOUDFLARE_CIDRS_V4`
+(15 подсетей CF) через `cf_cidr_specs()`/`snapshot_cf_covered()`
+(`src/system/ufw.py:57,119–130`), а не `Anywhere`.
+
+**Что остаётся риском при включении:** у origin нет fallback; LE на апексе
+сцепляет домен с IP asv2; anti-DDoS гео-фильтр хостера к AS13335
+(`ARCH-20261116-tspu-blindspots` §2, SERVER-BASELINE §риски).
 
 **Прекондишны реактивации** (оба, до подъёма на боевом exit):
 1. реальный отказ связки «прямой IP asv2 + RU-relay» **или** CDN с PoP в РФ;
-2. закрыть `tspu-blindspots §2`: рандомизированный `ws_path` (убрать `/cdnws`),
-   `2053/tcp` в UFW **только подсетями CF**, отдельный домен/поддомен без
-   сцепки с SNI основного exit.
+2. **проверить на живом хосте** (не «закрыть» — код уже это делает):
+   `ws_path != "/cdnws"` у профиля, `2053/tcp` покрыт строго
+   `CLOUDFLARE_CIDRS_V4`, домен/поддомен не сцеплен с SNI основного exit,
+   у origin учтено отсутствие fallback, anti-DDoS хостера пропускает AS13335.

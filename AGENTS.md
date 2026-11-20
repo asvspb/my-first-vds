@@ -148,7 +148,11 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 `docs/SERVER-BASELINE.md` — настройки ОС/сервера: авто vs вручную, чеклист восстановления;
 `docs/SPLIT-TRANSPORTS.md` — системный split: AWG и аналоги (Reality/Hy2/XHTTP/CDN);
 `docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…015;
-`TECHDEBT.md` — бэклог. При изменении поведения обновлять соответствующий документ
+`TECHDEBT.md` — бэклог. Контракт схем guard: `docs/contracts/guard-schema-hashes.json`
+(источник правды — клиентский lock, D-17); решения vpn guard — D-16…D-24 в
+`docs/team/reports/DECISIONS-vpn-guard.md`, план v1.1 —
+`docs/team/specs/SPEC-20261120-vpn-guard-v1.1.md` (draft, G2 после окна G6).
+При изменении поведения обновлять соответствующий документ
 (новый протокол/транспорт — ADR + VPN-PROTOCOLS + README + AGENTS).
 
 ## 9. Документация — часть изменения

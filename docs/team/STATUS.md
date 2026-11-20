@@ -5,6 +5,26 @@
 > Счётчики тестов в исторических записях — моментальные снимки (OQ-9):
 > актуальный baseline — `pytest -q`, число в живых доках не хранится.
 
+## 2026-11-20: все 8 вопросов §6 vpn guard закрыты (Q1…Q8)
+
+| # | Решение | Где |
+|---|---|---|
+| Q1 | контракт `schema_hash` между репо (клиент — источник правды) | D-17, `docs/contracts/guard-schema-hashes.json` |
+| Q2 | v1.1 — каркас SPEC (S4 netlink, G-13, G-14, `server:`, D4) | [SPEC-v1.1](specs/SPEC-20261120-vpn-guard-v1.1.md) |
+| Q3 | мост v1.2 `export → vds logs analyze --client-report` | **D-22** |
+| Q4 | v2.0 Smart Failover: 4 критерия входа, границы, fail-safe | **D-24** |
+| Q5 | P24/P25 — нога и манёвр (закрыты ранее) | ACCEPT P24/P25 |
+| Q6 | CDN `:2053` — холодный резерв | ADR-006 §Дополнение, `f5794ce` |
+| Q7 | политика эшелонов: две оси, источник `vpnm/scout/rank.py`; формат `server:` | **D-23** (закрывает OQ-V11-3) |
+| Q8 | docsync `warn → block` | `d3c3840` |
+
+**P1-поправка к `f5794ce` (факт кода):** `add_cdn()` уже берёт `ws_path` через
+`gen_secret_path()` (`src/xray/cdn.py:857`), UFW уже строится по
+`CLOUDFLARE_CIDRS_V4` (15 подсетей) через `cf_cidr_specs()`
+(`src/system/ufw.py:57,119-130`) — прекондишн (2) переформулирован как
+**проверка на живом хосте**, а не «закрыть». README: разорванный комментарий
+склеен.
+
 ## 2026-11-20: WP-Q2-SPEC — каркас SPEC vpn guard v1.1 (draft)
 
 - **Документ:** [SPEC-20261120-vpn-guard-v1.1](specs/SPEC-20261120-vpn-guard-v1.1.md)
@@ -29,12 +49,15 @@
   канал — dormant capability. Роль выживания при L3-блоке IP exit закрыта лучше
   (Reality+Hy2+AWG на asv2 + RU-relay с ногой `awg2`, P24/P25), потолок CF доказан
   полем (2026-11-13).
-- **Отрицательный баланс включения:** литерал `/cdnws`, UFW `2053/tcp` на
-  `Anywhere` вместо подсетей CF, отсутствие fallback у origin, LE на апексе
-  сцепляет домен с IP, anti-DDoS хостера к AS13335.
+- **Уже закрыто кодом (surface-hardening §2.2):** `add_cdn()` берёт `ws_path`
+  через `gen_secret_path()` (`src/xray/cdn.py:857`), `/cdnws` — legacy-дефолт
+  старых профилей; UFW строится по `CLOUDFLARE_CIDRS_V4` (15 подсетей) через
+  `cf_cidr_specs()` (`src/system/ufw.py:57,119-130`). Остаются риски: нет fallback
+  у origin, LE на апексе сцепляет домен с IP, anti-DDoS хостера к AS13335.
 - **Прекондишны реактивации:** (1) отказ связки «asv2 + RU-relay» либо CDN с PoP в
-  РФ; (2) закрыть `tspu-blindspots §2` — рандомизированный `ws_path`, UFW только
-  подсетями CF, отдельный домен.
+  РФ; (2) **проверить на живом хосте** (не «закрыть»): `ws_path != "/cdnws"`,
+  `2053/tcp` покрыт `CLOUDFLARE_CIDRS_V4`, домен не сцеплен с SNI, нет fallback,
+  anti-DDoS пропускает AS13335.
 - **Доки:** ADR-006 §Дополнение 2026-11-20, CDN-FRONTS (статус-блок), ROADMAP
   (матрица §2.1, таблица транспортов, раскладка портов), GROWTH-POINTS GR-08 →
   «заморожен (P3)», SERVER-BASELINE (§5.2, §5.12, §6); старый буллит WP-5 в цикле

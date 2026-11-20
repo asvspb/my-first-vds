@@ -188,6 +188,138 @@ block»), серверный тест контракта допускает от
 подтвердила: серверные доки уходили первыми, клиентские правки — отдельным
 коммитом со своим тестом.
 
+## D-22. Мост v1.2: `vpn guard export` → `vds logs analyze --client-report` (DECISION Q3)
+
+**Решение.** В v1.2 переиспользовать существующий обезличенный бандл
+`guard.bundle/1` (`vpnm/guard/store.py:build_export`) как вход расширенной
+команды `vds logs analyze --client-report <file>` — **только по ручной команде**,
+без таймера и без сетевого push. `guard.bundle/1` становится 8-й схемой в
+lock-контракте D-17; сервер читает её строго по privacy-allowlist в уже
+заложенный источник `client_report` (`src/logs/detect.py:88`).
+
+**Allowlist.** Разрешено: `manifest` (schema/created/since/keep_hosts/findings/
+counts/rules_hash/config_hash/findings_sha256/coverage_sha256/schemas);
+`findings[]` (id, rule, severity, confidence, category, stage_hint,
+**нормализованный** proto: amneziawg|xray-reality|xray-xhttp|xray-cdn-ws|
+hysteria2 — без имени профиля, window, count, expected_lockdown, cross_vantage,
+enum-идентификаторы fp_checks, числовые/enum агрегаты evidence); `coverage`
+(status, unparsed_ratio, dropped, blind[], redaction_hits).
+**Запрещено:** IP третьих сторон (top/ru_top/new_ru_ips), реальные хосты и
+домены (`endpoint.host → <host>`), SNI, ws/xhttp path, UUID, пароли/ключи/obfs,
+share-ссылки, **полные пути ФС с именем пользователя** (только basename),
+snippets, сырые строки логов; свободный текст `hypothesis`/`action`/`alternatives`
+на сервере отбрасывается при импорте.
+
+**Триггер.** Вручную: `vpn guard export --since 24h -o client-guard.json`
+(≤ 5 МБ, `keep_hosts=false`) → `scp` во временный путь (вне git) →
+`vds logs analyze --live --since 24h --client-report /tmp/…` → удалить файл.
+
+**Куда пишется.** По умолчанию 100 % read-only (stdout/`--json`). При явном
+`--apply`/`--out` — только `/var/lib/vds/forensics/reports/report-YYYYMMDD-client.json`
+(0600, TTL 90 дн, ADR-012); клиентский файл в `/var/lib/vds/telemetry` и git не
+сохраняется. Совпадение UTC-окна (±10 мин) → `coverage.client_report=ok` и
+`client_confirmed=true` (повышает confidence; **пересчёт порогов T-01…T-23
+запрещён** — детерминизм `rules_hash`), локальный G-06/G-07 в том же окне
+помечает серверный `effect_only` как `client_local_fault`.
+
+**Отклонено:** новый формат `client_report/1` (дубль `guard.bundle/1`);
+таймер/авто-push при `high` (ломает 0-socket и создаёт корреляционный маяк);
+авто-пересчёт весов T-* по клиентскому отчёту (отравление порогов единичным FP).
+
+**Проверка (AC v1.2):** фикстурный `guard.bundle/1` → `client_report=ok`,
+`client_confirmed=true`; `keep_hosts=true` без `--allow-hosts` / битый
+`findings_sha256` / > 5 МБ → exit 2; подставленный секрет в `hypothesis` не
+попадает в вывод; lock D-17 (8 схем) зелёный в обоих репо.
+
+## D-23. Политика эшелонов в v1.1 — две независимые оси (DECISION Q7)
+
+**Решение.** Ось A (сервер): `threat_level ∈ {quiet,elevated,high}` + `lockdown`
++ `stage`. Ось B (клиентские эшелоны): единый источник правды — уже
+существующая матрица `vpnm/scout/rank.py` (`BASE_SCORES` + `pre_score`), без
+дублирующей таблицы в guard:
+`direct+awg 90 → direct+reality 88 → direct+hy2 85` (Эшелон 1, прямой asv2);
+`relay+awg 82 → relay+reality/hy2 80` (Эшелон 2, обход прямого IP через релей);
+`xhttp 75 → cdn 65` (Эшелон 3, холодный резерв — только если профиль в store).
+Смешивать оси нельзя: при `threat=high` + `lockdown=on` закрыт direct:443, но
+`direct+awg` и релей полностью рабочие.
+
+**Эскалация (только рекомендации, 0 авто-действий).** Жёсткое подавление при
+активных G-06/G-07/G-12 или в окне подавления S4 netlink — переключение
+эшелона не рекомендуется (`action: vpn doctor`). Штрафы в окне
+`RECENT_FINDINGS_S=30 мин` (офлайн `pre_score`, 0 сокетов): G-04 −60 (есть),
+**G-13 −45** (уводит с AWG на Reality/relay), **G-14 −25** (уводит с
+затронутого TCP на AWG/Hy2/relay), G-01/G-03 −12 (есть). Никогда не
+эскалируют без свежего серверного вердикта: lock-443 (уже `LOCKDOWN_BONUS=10`,
+`TSPU_RELAY_BONUS=15`) — только при `lockdown.active=true` и `fresh`
+(≤ 65 мин для диагностики guard, ≤ 10 мин `VERDICT_FRESH_S` для выбора
+маршрута); `cross_vantage=true` — только при свежем `threat_level ∈
+{elevated,high}`.
+
+**Формат строки `server:`** (закрывает OQ-V11-3, схема `guard.status/1` не
+меняется). Нет/битый вердикт: `server: none (запустите vpn guard sync)`.
+Валидный: `server: verdict=<v> threat=<t> lockdown=<on|off> age=<compact>
+(<fresh|stale>) stage=<s|n/a>`, где compact = `<N>s` (<60 с), `<N>m` (<2 ч),
+`<N>h` (≥2 ч); пример: `server: verdict=PROBE-BURST threat=elevated
+lockdown=off age=41m (fresh) stage=n/a`. При `lockdown=on` и fresh —
+доп. строка `hint: lock-443 активен — direct:443 закрыт, используйте
+AWG/Hy2/relay (vpn scout)`.
+
+**Отклонено:** статическая цепочка AWG→XHTTP→Hy2-obfs→CDN внутри
+`guard/rules.py` (дублирует `scout/rank.py`, устарела: XHTTP на asv2 нет, CDN в
+холодном резерве, релей не учтён); сетевой `vpn scout` из guard (нарушает
+0-сокет, ADR-014 §8); отложить политику до v2.0 (лишает 30-дневной сверки).
+
+**Проверка:** юнит-тесты `tests/guard` на 4 состояния строки `server:` при
+неизменном hash `guard.status/1`; `tests/scout` на штрафы G-13/G-14 в
+`pre_score` (0 сокетов) и подавление при G-06/G-07.
+
+## D-24. v2.0 Smart Failover — критерии входа в ADR, границы, fail-safe (DECISION Q4)
+
+**Решение.** Smart Failover остаётся строго в v2.0 под отдельным ADR-016+.
+Роли разделены: `vpn-guard.service` — read-only детектор (ADR-014 §6/§8 не
+меняются); актуатор — **отдельный opt-in компонент `vpn failover`**,
+`auto=off` по умолчанию, `--dry-run` по умолчанию.
+
+**Критерии входа в ADR (все 4 одновременно):** ≥ 30 календарных дней поля (из
+них ≥ 14 на v1.1 с откалиброванным G-13 и протестированным S4 netlink);
+≥ 5 реальных эпизодов деградации + ≥ 3 реальных роуминга, где рекомендация
+`scout/rank.py` совпала с ручным выбором владельца; FP = 0 за последние 14 дней
+по всем правилам-триггерам (G-01/G-03/G-04/G-13/G-14) на `confidence=high`;
+работает механизм свежести вердикта ≤ 10 мин (`VERDICT_FRESH_S`), а не часовой
+lock-443.
+
+**Разрешено актуатору** (только `confidence=high` И не G-06/G-07/G-12 И не
+`netlink_cooldown` И `coverage ∉ {blind,insufficient_data}`): смена
+схемы/профиля **внутри уже установленных профилей** по рангу `scout/rank.py`;
+синхронизация локального sysproxy; запись аудита + уведомление владельцу о
+каждом действии и откате.
+
+**Запрещено без человека:** любые действия на сервере (ssh, ufw, lock-443,
+`vds relay maneuver`); правка конфигов профилей, ключей, `guard.json`,
+systemd-юнитов, DoH/DNS, zapret, NetworkManager; новые sudo-действия;
+переключение при G-06/G-07 или `insufficient_data`; активация
+отсутствующих/холодных эшелонов (CDN/XHTTP без профиля).
+
+**Fail-safe (по образцу P25/`vpnm/doh.py`):** до переключения атомарный снимок
+`previous_scheme/previous_profile/sysproxy` в
+`~/.local/share/vpn-manager/failover-state.json` (0600). Провал = ненулевой exit
+подъёма, ИЛИ нет data-plane liveness за 20 с (реальный проход трафика, не
+`systemctl is-active`), ИЛИ срабатывание G-01/G-03/G-04 на новом профиле в окне
+верификации. Откат: профиль в `failed_profiles` на 600 с, немедленный
+детерминированный возврат на `previous_scheme` (если жив) или следующий
+кандидат; бюджет — cooldown 600 с после успеха, ≤ 3 попытки в час, затем
+`exhausted` с уведомлением; `vpn failover disable` гасит автопилот мгновенно,
+не трогая `vpn-guard.service`.
+
+**Отклонено:** встроить авто-свитч в `vpn-guard.service` (ломает read-only
+sandbox); ранний `--auto` в v1.1 (нарушает заморозку ADR-014 §5 и даст
+флап-шторм при роуминге — RSK-8).
+
+**Проверка (гейт открытия ADR-016):** в шапке ADR — ≥ 30-дневный полевой отчёт
+(≥ 5 инцидентов, ≥ 3 роуминга, FP = 0 на high); sandbox `vpn-guard.service`
+неизменён. Примечание: в `vpnm/doh.py` функции `_rollback` нет — откат через
+`disable()` + обратимый `mv` drop-in (`DROPIN ↔ DROPIN_DISABLED`).
+
 ---
 
 ## Остаток (WP-G6)

@@ -227,8 +227,8 @@ vds xray add-transport              # XHTTP-инблэнд за SNI-фолбэк
 vds xray remove-transport           # Снять XHTTP (инблэнд + XHTTP-клиенты)
 vds xray use-domain --domain vpn.example.ru   # Reality-ссылки по домену (state.domain)
 vds xray add-cdn --domain cdn.example.ru      # CDN-транспорт VLESS+WS+TLS (ADR-006); ws-path — случайный
-                                     # ⚠️ холодный резерв (Q6): прекондишны реактивации — ADR-006 §Дополнение
                                      # секрет; 2053/tcp открыт только для CIDR Cloudflare (ips-v4)
+                                     # ⚠️ холодный резерв (Q6): прекондишны реактивации — ADR-006 §Дополнение
 vds xray add-cdn-client <name>      # CDN-клиент + ссылка (--front — фронт пула)
 vds xray add-cdn-front <domain>     # Фронт в пул CDN (сертификат в инблэнде)
 vds xray remove-cdn-front <domain>  # Снять фронт из пула (LE-cert остаётся; dry-run)

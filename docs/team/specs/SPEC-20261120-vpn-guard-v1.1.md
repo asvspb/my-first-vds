@@ -4,6 +4,9 @@
   v1.1 — **только после** закрытия окна WP-G6 (2026-11-24 15:24 MSK) и деплоя
   фиксов D1/D3/D6. Пороги G-13/G-14 калибруются по 7-дневному полевому дампу G6
   и в этой ревизии стоят плейсхолдерами.
+- **Решения:** D-22 (Q3, мост v1.2), D-23 (Q7, эшелоны + формат `server:`),
+  D-24 (Q4, критерии v2.0) — в
+  [DECISIONS-vpn-guard](../reports/DECISIONS-vpn-guard.md).
 - **Связанные:** [ADR-014](SPEC-20261116-vpn-guard.md) ·
   [SPEC-20261116-vpn-guard](SPEC-20261116-vpn-guard.md) · D-16…D-21 в
   [DECISIONS-vpn-guard](../reports/DECISIONS-vpn-guard.md) ·
@@ -90,12 +93,37 @@ baseline → G-14 «TCP-шейпинг» (severity low/medium), evidence стр�
 
 ### Гигиена из поля G6
 
-- **`server:` в человекочитаемом `vpn guard status`:** строка
-  `server: verdict=… threat=…` (возраст вердикта — `age_s`), **без** изменения
-  схемы `guard.status/1` (ARCH §6 п. 2).
-- **D4 (P27):** `file_parse_error` получает TTL и атрибуцию к конкретному файлу,
-  всплывшему в TEST-t33; TTL — чтобы «вечный» битый файл не держал подавление
-  бесконечно, атрибуция — чтобы фикс был адресным.
+- **`server:` в человекочитаемом `vpn guard status`** (формат закрыт D-23,
+  OQ-V11-3): нет/битый вердикт → `server: none (запустите vpn guard sync)`;
+  валидный → `server: verdict=<v> threat=<t> lockdown=<on|off> age=<compact>
+  (<fresh|stale>) stage=<s|n/a>`, где compact = `<N>s` (<60 с), `<N>m` (<2 ч),
+  `<N>h` (≥ 2 ч). Пример: `server: verdict=PROBE-BURST threat=elevated
+  lockdown=off age=41m (fresh) stage=n/a`. При `lockdown=on` и fresh —
+  доп. строка `hint: lock-443 активен — direct:443 закрыт, используйте
+  AWG/Hy2/relay (vpn scout)`. Схема `guard.status/1` не меняется.
+- **D4 (P27):** `file_parse_error` получает TTL и атрибуцию к файлу, всплывшему
+  в TEST-t33; TTL — чтобы «вечный» битый файл не держал подавление бесконечно.
+  **Атрибуция — только basename/относительное имя (`last-speed.json`), без
+  `/home/<user>/…`** (privacy ADR-014 §7).
+
+### 2.5 Политика эшелонов (D-23, DECISION Q7)
+
+Единый источник — уже существующая матрица `vpnm/scout/rank.py`
+(`BASE_SCORES` + `pre_score`, офлайн, 0 сокетов); guard не создаёт дубль.
+
+- **Эшелон 1** (прямой asv2): `direct+awg 90 → direct+reality 88 → direct+hy2 85`.
+- **Эшелон 2** (обход прямого IP): `relay+awg 82 → relay+reality/hy2 80`.
+- **Эшелон 3** (холодный резерв, только при профиле в store): `xhttp 75 → cdn 65`.
+
+Ось сервера (`threat_level`/`lockdown`/`stage`) и ось клиентских эшелонов —
+**независимы**: при `lockdown=on` закрыт только direct:443, а `direct+awg` и
+релей живы. Штрафы в окне 30 мин: G-04 −60, **G-13 −45**, **G-14 −25**,
+G-01/G-03 −12. Жёсткое подавление рекомендации — при G-06/G-07/G-12 и в окне
+S4 netlink. Эскалация без свежего серверного вердикта запрещена
+(`LOCKDOWN_BONUS=10`, `TSPU_RELAY_BONUS=15` — только при fresh).
+
+**v1.1:** в guard добавляются штрафы G-13/G-14 в `pre_score` и подавление;
+авто-действий нет (они — v2.0, D-24).
 
 ## 3. Схемы и контракт
 
@@ -113,8 +141,8 @@ baseline → G-14 «TCP-шейпинг» (severity low/medium), evidence стр�
 | Что | Почему / когда |
 |---|---|
 | Ленивый sync из `vpn guard explain` / `vpn doctor` (ARCH §2.3) | ждёт серверный 5-мин сэмплер W1-1: при часовом `vds-probe-watch.timer` лишний SSH даёт лишь часовой снимок + риск RST-бана |
-| Мост `vpn guard export` → `vds logs analyze --client-report` | v1.2 (DECISION Q3): нужен privacy-allowlist и потребитель на сервере |
-| Smart Failover / любые авто-действия | v2.0 (DECISION Q4): отдельный ADR после ≥ 30 дней поля |
+| Мост `vpn guard export` → `vds logs analyze --client-report` | v1.2 — **[D-22](../reports/DECISIONS-vpn-guard.md)**: ручная команда, allowlist, `guard.bundle/1` как 8-я схема lock |
+| Smart Failover / любые авто-действия | v2.0 — **[D-24](../reports/DECISIONS-vpn-guard.md)**: отдельный ADR-016+ после 4 критериев входа (≥30 дней поля, ≥5 инцидентов, FP=0, свежесть ≤10 мин) |
 
 ## 5. Риски
 
@@ -132,7 +160,7 @@ baseline → G-14 «TCP-шейпинг» (severity low/medium), evidence стр�
 | V11-1 | G-13 + пороги из G6-дампа + тесты | 0 FP на эталонной выборке, ловит синтетику |
 | V11-2 | S4 netlink end-to-end (листенер → `note_route_change`) | FP роуминга исчезают, opt-in=false нейтрален |
 | V11-3 | G-14 opt-in + privacy-тест | чужой PID/IP не в evidence |
-| V11-4 | `server:` строка + D4 (P27) + TTL | TTL и имя файла в finding/статусе |
+| V11-4 | `server:` строка (формат D-23) + D4 (P27) + TTL | TTL и **basename** файла в finding/статусе (без путей пользователя) |
 | V11-5 | Обновление схем/lock, прогон `tests/guard`, G2-ревью | `audit --strict` OK, lock синхронен |
 
 ## 7. Открытые вопросы (OQ)
@@ -141,4 +169,5 @@ baseline → G-14 «TCP-шейпинг» (severity low/medium), evidence стр�
 |---|---|---|
 | OQ-V11-1 | Точные пороги G-13 по G6-дампу | ждёт 7-дневный дамп (до 2026-11-24) |
 | OQ-V11-2 | Нужен ли G-14 в v1.1, если baseline шейпинга не наберётся | решается по дампу; при отсутствии сигнала — перенос в v1.2 |
-| OQ-V11-3 | Формат `server:` строки (subject к Q7-политике эшелонов) | после DECISION Q7 |
+| OQ-V11-3 | Формат строки `server:` | ✅ **закрыт D-23** (DECISION Q7, 2026-11-20) — формат в §2, схема не меняется |
+| OQ-V11-4 | Структура `thresholds` в `guard.config/1` (плоские ключи vs вложенные `{g13,g14}`) | сверить с фактической схемой клиента перед G2 |
