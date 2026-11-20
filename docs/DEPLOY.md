@@ -296,6 +296,25 @@ vds-alert-watch` (теги `ALERT-SENT`/`ALERT-FAILED`/`ALERT-SKIP`).
 
 ---
 
+## Изолированная нога relay→exit (P24, ADR-015)
+
+Ставится на **exit-узле**, клиентский `awg0` (51825) не затрагивается:
+
+```bash
+# на релее — публичный ключ ноги awg1:
+awg show awg1 public-key
+# на exit: dry-run → apply
+sudo vds relay exit-leg install --relay-ip <relay-ip> --public-key <awg1-pub>
+sudo vds relay exit-leg install --relay-ip <relay-ip> --public-key <awg1-pub> --apply
+```
+
+Проверка: `systemctl is-active vds-awg-relay vds-awg-relay-pool`, `awg show awg2`
+(peer релея), `ufw status | grep 51900` (только с IP релея), внешний скан портов
+пула 51900–51911 с чужого IP — тишина. Откат: `sudo vds relay exit-leg remove --apply`.
+Подробности и порядок с `relay init` — `docs/DEPLOY-RU-RELAY.md` §4.1.
+
+---
+
 ## Пробы при приёмке: серийно, с паузами (И26)
 
 Не запускайте параллельно `openssl s_client`, `ssh` и клиентские пробы к

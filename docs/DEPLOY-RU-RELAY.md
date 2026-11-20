@@ -218,6 +218,30 @@ handshake на exit-узле законно стареет часами и пу�
 gateway `state.json`; на релее с битым/пустым state отказ не сработает — проверьте
 вручную.
 
+### 4.1 Изолированная нога на exit (`awg2`, P24/ADR-015)
+
+Пока не включено в бою: `awg2` и пул портов ставятся отдельной командой на
+exit-узле, клиентский `awg0` (51825) при этом не трогается.
+
+```bash
+# 1) на релее — уже есть awg1 после §4; взять публичный ключ ноги:
+awg show awg1 public-key
+
+# 2) на exit (asv2): поставить выделенную ногу и пул 51900-51911
+sudo vds relay exit-leg install \
+  --relay-ip 185.80.91.135 --public-key <awg1-pub>        # dry-run: план
+sudo vds relay exit-leg install \
+  --relay-ip 185.80.91.135 --public-key <awg1-pub> --apply
+
+# 3) на релее — перевести endpoint ноги на порт пула (WP-M3, ручной шаг):
+awg set awg1 peer <exit-pub> endpoint 213.108.23.119:51900
+awg show awg1 latest-handshakes      # свежий handshake = нога жива
+```
+
+Инвариант: UFW открывает ровно `51900/udp` и только с IP релея; остальные порты
+пула доступны лишь через nft REDIRECT (`saddr == relay-ip`), с чужого адреса —
+тихий drop. Откат: `sudo vds relay exit-leg remove --apply`.
+
 ### 5. ip_forward + MASQUERADE + UFW
 
 ```bash
