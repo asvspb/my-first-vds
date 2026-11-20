@@ -191,6 +191,12 @@ def render_deploy_hook(domain: str) -> str:
     try-restart для остальных (vds-xray — LE-сертификат CDN-origin;
     vds-hysteria2-obfs — опциональный инстанс, отсутствующий юнит или
     неактивный пропускается, hook не падает при `set -e`).
+
+    Фильтр `$RENEWED_DOMAINS` (TECHDEBT P28, ADR-016): hook рестартует
+    hysteria ТОЛЬКО при продлении СВОЕГО сертификата; продление второго
+    сертификата `ws.<domain>` (носитель wstunnel, WP-P2P-4) его не трогает.
+    certbot передаёт домены ЧЕРЕЗ ПРОБЕЛ — пробельный матч; пустой/чужой
+    `$RENEWED_DOMAINS` → fail-safe exit 0 до любых мутаций.
     """
     extra_units = " ".join(_HOOK_EXTRA_UNITS)
     return (
@@ -204,6 +210,14 @@ def render_deploy_hook(domain: str) -> str:
         f'HYS_CERT="{HYSTERIA2_CERT_PATH}"\n'
         f'HYS_KEY="{HYSTERIA2_KEY_PATH}"\n'
         f'UNIT="{HYSTERIA2_UNIT}"\n'
+        "\n"
+        "# P28 (ADR-016): продление нашего сертификата — работаем; чужого\n"
+        "# (например ws.<domain>, hook wstunnel) или пустой env — ничего не делаем.\n"
+        "# certbot передаёт домены ЧЕРЕЗ ПРОБЕЛ (мульти-SAN) — пробельный матч.\n"
+        'case " $RENEWED_DOMAINS " in\n'
+        '    *" $DOMAIN "*) ;;\n'
+        "    *) exit 0 ;;\n"
+        "esac\n"
         "\n"
         "mkdir -p \"$(dirname \"$HYS_CERT\")\"\n"
         "# Бэкап текущих (self-signed) файлов перед подменой — путь отката WP-2.\n"

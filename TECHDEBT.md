@@ -571,6 +571,13 @@ TTL — снимать подавление и пере-парсить. Схем
 
 ## P28 — hysteria2 deploy-hook без фильтра $RENEWED_DOMAINS (2026-11-20, открыт)
 
+**Статус (2026-11-20/21):** код закрыт — фильтр в `render_deploy_hook`
+(`src/acme/install.py`) + тесты пробельного матча и sh-семантики +
+mapped-доки (README/VPN-PROTOCOLS/DEPLOY)
+в коммите этого цикла. Осталось: регенерировать hook на exit-узле в утреннем
+окне 2026-11-21 (идемпотентный путь — `vds acme issue` того же домена) вместе
+с Хвостом 1 (P24), после чего запись закрывается.
+
 **Факт.** `/etc/letsencrypt/renewal-hooks/deploy/vds-hysteria2-cert.sh`
 (`src/acme/install.py`) копирует сертификат и рестартует `vds-hysteria2`
 на **любое** продление. После добавления второго сертификата `ws.<domain>`

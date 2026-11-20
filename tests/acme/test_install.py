@@ -244,6 +244,42 @@ class TestPureFunctions:
         # отсутствующий юнит (obfs опционален) не роняет hook при set -e
         assert 'systemctl cat "$EXTRA_UNIT" >/dev/null 2>&1' in hook
 
+    def test_render_deploy_hook_renewed_domains_filter_p28(self) -> None:
+        """P28 (ADR-016): hook работает только на продление своего сертификата."""
+        hook = acme.render_deploy_hook(DOMAIN_OK)
+        # пробельный матч certbot (мульти-SAN) + fail-safe exit 0
+        assert 'case " $RENEWED_DOMAINS " in' in hook
+        assert '*" $DOMAIN "*' in hook
+        assert "*) exit 0 ;;" in hook
+        # фильтр стоит ДО любых мутаций: чужое продление ничего не копирует
+        assert hook.index('case " $RENEWED_DOMAINS " in') < hook.index("mkdir -p")
+
+    def test_renewed_domains_filter_sh_semantics_p28(self) -> None:
+        """P28: поведение пробельного матча в sh — свой домен проходит,
+        чужой/пустой $RENEWED_DOMAINS → exit 0 без мутаций."""
+        import subprocess
+
+        snippet = (
+            'DOMAIN="vpn.example.com"\n'
+            'case " $RENEWED_DOMAINS " in *" $DOMAIN "*) ;; *) exit 3 ;; esac\n'
+            "echo PASSED\n"
+        )
+        cases = {
+            "own": ("vpn.example.com ws.example.com", 0),
+            "other": ("ws.example.com", 3),
+            "empty": ("", 3),
+        }
+        for label, (renewed, expected_rc) in cases.items():
+            proc = subprocess.run(
+                ["sh", "-c", snippet],
+                env={"RENEWED_DOMAINS": renewed},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert proc.returncode == expected_rc, label
+            assert proc.stdout.strip() == ("PASSED" if expected_rc == 0 else ""), label
+
     def test_certbot_issue_args_idempotent_flag(self) -> None:
         args = acme._certbot_issue_args(DOMAIN_OK, EMAIL)
         assert args[0] == "certbot" and "--standalone" in args

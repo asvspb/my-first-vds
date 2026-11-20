@@ -210,7 +210,10 @@ obfs:
 Код ACME — SPEC-20261109/ADR-004, нового кода в WP-1 нет; фактический флоу:
 
 1. `vds acme issue --domain <домен> --email <email>` — LE-сертификат
-   (HTTP-01) + deploy-hook на продление.
+   (HTTP-01) + deploy-hook на продление (P28: hook с фильтром
+   `$RENEWED_DOMAINS` — срабатывает только на продление своего сертификата;
+   продление второго сертификата `ws.<domain>` (ADR-016) hysteria не
+   рестартует, hook wstunnel — наоборот).
 2. `vds hysteria2 apply-cert --apply` — подмена self-signed на LE (бэкап
    `.bak-pre-le`), рестарт.
 3. `vds hysteria2 add-client NAME` — ссылка БЕЗ `insecure=1`, sni=домен.
