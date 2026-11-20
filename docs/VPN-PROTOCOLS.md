@@ -299,7 +299,7 @@ add-client`). Существующие конфиги не переписыва�
 **Изолированная нога relay→exit (P24, ADR-015):** на exit-узле нога релея
 вынесена на отдельный `awg2` (10.11.0.0/30) с базовым портом `51900/udp`;
 пул `51900–51911` доступен только с IP релея через nft REDIRECT, клиентский
-`awg0` (51825) не затрагивается. Ставится на exit: `vds relay exit-leg install
+`awg0` (51825) не затрагивается; для подсети ноги включён MASQUERADE на WAN (nft postrouting, требуется `ip_forward=1`). Ставится на exit: `vds relay exit-leg install
 --relay-ip <ip> --public-key <awg1-pub> --apply`. Диагностика: `awg show awg2`
 на exit, `awg show awg1` на релее. ⚠️ Возраст handshake **не** равен
 недоступности: при живом трафике AmneziaWG держит сессию со старым handshake

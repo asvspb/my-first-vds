@@ -266,6 +266,8 @@ vds relay exit-leg install --relay-ip <relay-ip> --public-key <awg1-pub>
                                      # UFW только с IP релея, пул 51900-51911 (nft REDIRECT);
                                      # dry-run по умолчанию, повторный --apply = no-op
 vds relay exit-leg remove [--apply]  # снять awg2/пул/правила/юниты/state exit-ноги
+                                     # install проверяет ip_forward и занятость портов,
+                                     # пишет клиентский шаблон relay-exit-leg.conf (0600)
 vds relay add-client phone --keepalive 25 --qr
                                      # Пир awg0: .conf (0600), endpoint relay-домен:443,
                                      # DNS = 1.1.1.1,1.0.0.1, AllowedIPs 0.0.0.0/0 (v4-only)
