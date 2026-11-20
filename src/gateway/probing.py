@@ -1464,8 +1464,17 @@ def _load_seen_ru(snapshot: dict[str, object], now_dt: datetime) -> dict[str, da
 
 
 def _seen_ru_payload(seen: dict[str, datetime]) -> dict[str, str]:
-    """Сериализация кэша: не больше SEEN_RU_CAP самых свежих записей."""
-    newest = sorted(seen.items(), key=lambda kv: kv[1], reverse=True)[:SEEN_RU_CAP]
+    """Сериализация кэша: не больше SEEN_RU_CAP самых свежих записей.
+
+    Ключ сортировки принудительно приводится к aware UTC: naive-значение,
+    просочившееся из внешнего кода, не должно ронять сервис сравниванием
+    aware/naive (P0 ревью 2026-11-20).
+    """
+    def _key(item: tuple[str, datetime]) -> datetime:
+        dt = item[1]
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+    newest = sorted(seen.items(), key=_key, reverse=True)[:SEEN_RU_CAP]
     return {ip: dt.isoformat(timespec="seconds") for ip, dt in newest}
 
 
@@ -1524,7 +1533,10 @@ def build_report(
 
     ru_networks = load_ru_cidrs()
     end = now()
-    seen_ru = _load_seen_ru(snapshot, end)
+    # Кэш seen_ru хранит ТОЛЬКО aware UTC: `now()` бывает naive (прод и тесты),
+    # а `_parse_iso_dt` всегда отдаёт aware — смесь типов валит sorted().
+    end_utc = end if end.tzinfo is not None else end.replace(tzinfo=timezone.utc)
+    seen_ru = _load_seen_ru(snapshot, end_utc)
     geo_cache: dict[str, str] = {}
     new_ru_ips: list[str] = []
     ru_hits: list[RuIpHit] = []
@@ -1559,7 +1571,7 @@ def build_report(
             # фоновый сканер считается один раз в сутки, а не каждый час.
             if not returned and ip not in seen_ru:
                 new_ru_ips.append(ip)
-            seen_ru[ip] = end
+            seen_ru[ip] = end_utc
 
     new_ru_set = set(new_ru_ips)
     new_ru_delta = sum(h.delta for h in ru_hits if h.ip in new_ru_set)

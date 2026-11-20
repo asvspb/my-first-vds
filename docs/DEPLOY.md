@@ -278,7 +278,8 @@ vds gateway probe-watch ru-cidr install --apply    # RU-CIDR без релея: 
 4. `sudo vds alert test` (или `--channel smtp` — быстрая проверка почты) —
    реальная отправка, **без** записи state.
 5. Каденция уведомлений: повтор того же уровня — `ALERT_COOLDOWN_MIN` (30 мин),
-   «всё ещё high» — `ALERT_HIGH_REMINDER_H` (6 ч, диапазон 1..24), напоминание о
+   «всё ещё high» — `ALERT_HIGH_REMINDER_H` (6 ч, диапазон 1..24; имя ключа видно
+   в плане `vds alert install`), напоминание о
    локе — 6 ч; переходы уровня и снятие лока — мгновенно. Подавленные `*_still`
    не порождают сводку.
 

@@ -185,6 +185,7 @@ vds gateway probe-watch ru-cidr install --apply  # RU-CIDR без релея: в
 vds gateway probe-watch ru-cidr update --apply   # Разово обновить RU-CIDR из ipdeny (root; иначе — таймер)
 vds gateway probe-watch config           # конфиг auto-lockdown (default off; on = авто-лок 443 при threat high)
 vds gateway probe-watch remove --apply   # Демонтаж nft-таблицы vds_probe + юнитов (dry-run по умолчанию)
+# Кэш seen_ru_ips в снапшоте хранится в aware-UTC (naive не допускается).
 # probe-watch исключает своих из probers4 и без AWG: verified_session_ips
 # (ss/conntrack, двусторонний трафик, кэш 24 ч); `--auto-lockdown on`
 # требует непустого allow-списка (allow-ips.txt / --lockdown-allow), иначе exit 1
@@ -202,7 +203,8 @@ vds logs capture status             # Статус активного capture
 vds logs capture stop               # Остановить capture, собрать бандл
 vds logs remove --apply             # Демонтаж таймеров/данных лог-конвейера (dry-run)
 
-vds alert install                   # Сторож угрозы на exit-узле: план установки (dry-run)
+vds alert install                   # Сторож угрозы на exit-узле: план установки (dry-run,
+                                     #   печатает имена ключей alert.env, включая ALERT_HIGH_REMINDER_H)
 vds alert install --apply           # Юниты vds-alert-watch + /etc/vds/alert.env (0600)
 vds alert install --channel smtp --apply   # только почта (без --channel — авто по парам ключей)
 vds alert install --interval 2m --handshake-threshold 300s --heartbeat 24h  # тик/пульс/dead-man

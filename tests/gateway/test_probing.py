@@ -1773,3 +1773,67 @@ class TestProbeTuning:
         self._ru_file(tmp_path, monkeypatch)
         report = self._report(tmp_path, {"203.0.113.11": 4, "203.0.113.12": 4})
         assert report.verdict.name == "RU-PROBE-SUSPECT"
+
+
+class TestSeenRuRegression:
+    """P0 ревью 2026-11-20: смешанные naive/aware в кэше валили сервис."""
+
+    def _ru_file(self, tmp_path, monkeypatch):
+        ru_file = tmp_path / "ru-cidrs.txt"
+        ru_file.write_text("203.0.113.0/24\n", encoding="utf-8")
+        monkeypatch.setattr(probing, "RU_CIDR_FILE", ru_file)
+
+    def test_old_aware_and_new_naive_ip_do_not_crash(self, tmp_path, monkeypatch):
+        """Старый aware-IP в снапшоте + новый RU-IP в окне при naive now.
+
+        До фикса: seen_ru[A] оставался aware, seen_ru[B] = naive end →
+        sorted() падал TypeError и ронял vds-probe-watch.service.
+        """
+        self._ru_file(tmp_path, monkeypatch)
+        snap_path = tmp_path / "snap.json"
+        assert probing.write_snapshot_payload({
+            "version": 2, "ts": "t", "syn_bare": 0, "syn_valid": 0, "udp_443": 0,
+            "probers": {}, "config": {}, "own_ips": {},
+            "seen_ru_ips": {"203.0.113.11": "2026-11-20T11:00:00+00:00"},
+        }, snap_path)
+        current = probing.NftState(
+            syn_bare=10, syn_valid=5, udp_443=0,
+            probers={"203.0.113.12": 2}, per_element_counters=True,
+        )
+        report = probing.build_report(
+            current, run=lambda args, **kw: _shell_result(),
+            snapshot_path=snap_path, server_ip="",
+            now=lambda: probing.datetime(2026, 11, 20, 12, 0, 0),  # naive!
+        )
+        seen = getattr(report, "_seen_ru_ips", {})
+        assert set(seen) == {"203.0.113.11", "203.0.113.12"}
+        assert seen["203.0.113.12"].startswith("2026-11-20T12:00:00")
+        assert "203.0.113.12" in report.new_ru_ips
+
+    def test_seen_cache_evicts_oldest_over_cap(self, tmp_path, monkeypatch):
+        """P2: при превышении SEEN_RU_CAP остаются самые свежие записи."""
+        self._ru_file(tmp_path, monkeypatch)
+        monkeypatch.setattr(probing, "SEEN_RU_CAP", 2)
+        snap_path = tmp_path / "snap.json"
+        assert probing.write_snapshot_payload({
+            "version": 2, "ts": "t", "syn_bare": 0, "syn_valid": 0, "udp_443": 0,
+            "probers": {}, "config": {}, "own_ips": {},
+            "seen_ru_ips": {
+                "203.0.113.11": "2026-11-20T08:00:00+00:00",
+                "203.0.113.12": "2026-11-20T09:00:00+00:00",
+                "203.0.113.13": "2026-11-20T10:00:00+00:00",
+            },
+        }, snap_path)
+        current = probing.NftState(
+            syn_bare=10, syn_valid=5, udp_443=0,
+            probers={"203.0.113.14": 2}, per_element_counters=True,
+        )
+        report = probing.build_report(
+            current, run=lambda args, **kw: _shell_result(),
+            snapshot_path=snap_path, server_ip="",
+            now=lambda: probing.datetime(2026, 11, 20, 12, 0, 0),
+        )
+        seen = getattr(report, "_seen_ru_ips", {})
+        assert len(seen) == 2
+        assert "203.0.113.14" in seen  # самый свежий остался
+        assert "203.0.113.11" not in seen  # самый старый вытеснен

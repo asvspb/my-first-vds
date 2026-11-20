@@ -191,7 +191,7 @@ xray/hysteria2 (access-log/loglevel — отдельное решение вла
   окон агрегируются в threat-level `quiet/elevated/high` (high = RU-SUSPECT
   2 окна подряд; BURST-максимум elevated; выход high = **24 окна без
   RU-PROBE-SUSPECT**; «новизна» RU-IP — окно 24 ч, порог Σ delta ≥ 6 при
-  per-element счётчиках; выход — `elevated` → 3 тихих → `quiet`; decay
+  per-element счётчиках; кэш «новизны» — aware-UTC; выход — `elevated` → 3 тихих → `quiet`; decay
   заморожен при активном локе — лок ослепляет syn_valid;
   состояние в снапшоте, переживает рестарт). Свои клиенты исключаются:
   endpoint-IP активных AWG-пиров (`awg show`, кэш в снапшоте) + серверный
