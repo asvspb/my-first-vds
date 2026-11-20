@@ -18,8 +18,20 @@
   `awg2`+пул+MASQUERADE на exit, cutover релея на `213.108.23.119:51900`,
   REDIRECT проверен через `:51901`, внешний скан пула молчит, `awg0` не тронут,
   сторож переведён на `ALERT_RELAY_IFACE=awg2` (peer_found, ok).
-- **Осталось:** WP-M3 (ядро P25 — `maneuver.py`: state-machine, liveness, anti-ping-pong,
-  `awg set`), WP-M4 (opt-in таймер), WP-M5 (ребут-тест, живой ТСПУ-блок, docsync strict).
+- **WP-M3 (ядро) + WP-M4 (opt-in таймер) — ЗАПУШЕНЫ и APPROVED**
+  (`008b346`+`ee2b50f` M3; `add24c7`+`b7036c4`/`dd0b289` M4; `9335580` P2 to=):
+  state-machine 6 состояний, liveness-окно 20 с, activity gate (шум keepalive
+  отфильтрован: 92 Б/60 с ≪ 4096), anti-ping-pong 600 с/≤3 в час, `awg set
+  listen-port 0 … endpoint` (полный 4-кортеж), `StateDirectory=vds` (иначе
+  226/NAMESPACE на релее), `install_unit(enable=False)` для auto=off.
+- **WP-M5 — ✅ ПРИНЯТ 2026-11-20**
+  ([ACCEPT-20261120-p25-maneuver](reports/ACCEPT-20261120-p25-maneuver.md)):
+  M3+M4 выкачаны на релей (полный rsync src/+systemd/, md5 сверен; auto=off,
+  интервал 60s); живой блок `ct original proto-dst 51900` → 3/3 + activity →
+  51901 за ~7 с после 3/3 (<60 с AC); rollback CLI вернул 51900.
+- **Осталось:** ребут-тест (окно ТО); soak 24 ч → удалить старый пир релея с
+  `awg0` asv2; `--enable-auto` — решение владельца после первого живого эпизода
+  с клиентом за релеем (live-валидация ветки gate по `awg0`).
   Страховка: старый пир релея на `awg0` держать ≥24 ч.
 
 ## Активный цикл: alert-watch + fast alerts/scout (2026-11-17)

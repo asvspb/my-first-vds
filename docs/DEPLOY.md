@@ -313,6 +313,11 @@ sudo vds relay exit-leg install --relay-ip <relay-ip> --public-key <awg1-pub> --
 пула 51900–51911 с чужого IP — тишина. Откат: `sudo vds relay exit-leg remove --apply`.
 Подробности и порядок с `relay init` — `docs/DEPLOY-RU-RELAY.md` §4.1.
 
+Манёвр ноги (P25, ADR-015): `vds relay maneuver status|step|rollback` на релее;
+opt-in таймер `vds relay maneuver install --apply [--enable-auto] [--interval 60s]`
+(auto=off по умолчанию; детекция ≈180 с при 60s, реакция актуатора <60 с).
+Подробности — `docs/DEPLOY-RU-RELAY.md` §4.2.
+
 ---
 
 ## Пробы при приёмке: серийно, с паузами (И26)

@@ -324,7 +324,8 @@ sudo vds relay maneuver remove --apply
 при liveness-окне 20 с). Юнит всегда завершается exit 0: guard, `ManeuverError`,
 `StoreError`, занятый `FileLock` перехватываются, в journal печатается одна
 строка `[relay-maneuver] state=… port=… liveness=… ms=… activity=… fails=n/3
-acted=… result=…`. Секретов в юните и выводе нет.
+acted=… result=…`. Секретов в юните и выводе нет. Живой тест 2026-11-20: блок `ct original proto-dst 51900` → манёвр
+51900→51901 за ~7 с после 3/3; приёмка — `docs/team/reports/ACCEPT-20261120-p25-maneuver.md`.
 
 ### 5. ip_forward + MASQUERADE + UFW
 
