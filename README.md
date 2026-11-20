@@ -353,9 +353,10 @@ vds relay add-client phone --keepalive 25 --qr
 
 > **Hysteria2 TLS/ACME:** без домена — self-signed сертификат и `insecure=1`
 > в клиентской ссылке. С доменом: `vds acme issue <domain>` (HTTP-01,
-> deploy-hook `vds-hysteria2-cert.sh` — фильтр `$RENEWED_DOMAINS` (P28):
-> рестарт только при продлении своего сертификата, продление `ws.<domain>`
-> wstunnel-носителя hysteria не трогает) → `vds hysteria2 apply-cert`; новые
+> deploy-hook `vds-hysteria2-cert.sh` — фильтр `${RENEWED_DOMAINS:-}` (P28,
+> POSIX-guard: unset не роняет hook и при set -u): рестарт только при
+> продлении своего сертификата, продление `ws.<domain>` wstunnel-носителя
+> hysteria не трогает) → `vds hysteria2 apply-cert`; новые
 > клиентские ссылки рендерятся без `insecure=1`, `sni=<домен>`.
 > Port hopping и obfs salamander добавляются поверх любого TLS-режима и
 > попадают в ссылку параметрами `mport=` и `obfs=salamander&obfs-password=`.

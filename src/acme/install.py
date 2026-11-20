@@ -212,9 +212,11 @@ def render_deploy_hook(domain: str) -> str:
         f'UNIT="{HYSTERIA2_UNIT}"\n'
         "\n"
         "# P28 (ADR-016): продление нашего сертификата — работаем; чужого\n"
-        "# (например ws.<domain>, hook wstunnel) или пустой env — ничего не делаем.\n"
-        "# certbot передаёт домены ЧЕРЕЗ ПРОБЕЛ (мульти-SAN) — пробельный матч.\n"
-        'case " $RENEWED_DOMAINS " in\n'
+        "# (например ws.<domain>, hook wstunnel) или пустого/UNSET env — ничего\n"
+        "# не делаем. certbot передаёт домены ЧЕРЕЗ ПРОБЕЛ (мульти-SAN) —\n"
+        "# пробельный матч; ${RENEWED_DOMAINS:-} — POSIX-guard: не падает и при\n"
+        "# set -u, если certbot не задал переменную.\n"
+        'case " ${RENEWED_DOMAINS:-} " in\n'
         '    *" $DOMAIN "*) ;;\n'
         "    *) exit 0 ;;\n"
         "esac\n"

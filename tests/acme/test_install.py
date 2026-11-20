@@ -247,12 +247,14 @@ class TestPureFunctions:
     def test_render_deploy_hook_renewed_domains_filter_p28(self) -> None:
         """P28 (ADR-016): hook работает только на продление своего сертификата."""
         hook = acme.render_deploy_hook(DOMAIN_OK)
-        # пробельный матч certbot (мульти-SAN) + fail-safe exit 0
-        assert 'case " $RENEWED_DOMAINS " in' in hook
+        # POSIX-guard ${RENEWED_DOMAINS:-} (P1-1): безопасно и при set -u
+        assert 'case " ${RENEWED_DOMAINS:-} " in' in hook
+        # DOMAIN объявлен выше фильтра (матч ссылается на него)
+        assert hook.index('DOMAIN="') < hook.index('case " ${RENEWED_DOMAINS:-} " in')
         assert '*" $DOMAIN "*' in hook
         assert "*) exit 0 ;;" in hook
         # фильтр стоит ДО любых мутаций: чужое продление ничего не копирует
-        assert hook.index('case " $RENEWED_DOMAINS " in') < hook.index("mkdir -p")
+        assert hook.index('case " ${RENEWED_DOMAINS:-} " in') < hook.index("mkdir -p")
 
     def test_renewed_domains_filter_sh_semantics_p28(self) -> None:
         """P28: поведение пробельного матча в sh — свой домен проходит,
@@ -261,7 +263,7 @@ class TestPureFunctions:
 
         snippet = (
             'DOMAIN="vpn.example.com"\n'
-            'case " $RENEWED_DOMAINS " in *" $DOMAIN "*) ;; *) exit 3 ;; esac\n'
+            'case " ${RENEWED_DOMAINS:-} " in *" $DOMAIN "*) ;; *) exit 3 ;; esac\n'
             "echo PASSED\n"
         )
         cases = {
@@ -279,6 +281,30 @@ class TestPureFunctions:
             )
             assert proc.returncode == expected_rc, label
             assert proc.stdout.strip() == ("PASSED" if expected_rc == 0 else ""), label
+
+    def test_renewed_domains_filter_full_script_unset_p28(self, tmp_path, monkeypatch):
+        """P1-1: UNSET RENEWED_DOMAINS на ВСЁМ отрендеренном hook (реальная шапка
+        `set -e`) → exit 0 (а не unbound variable), и выполнение останавливается
+        ДО мутаций (каталог HYS_CERT не создаётся). Пути monkeypatch на tmp —
+        даже сломанный фильтр не трогал бы реальную машину."""
+        import subprocess
+
+        monkeypatch.setattr(acme, "HYSTERIA2_CERT_PATH", str(tmp_path / "hys" / "cert.pem"))
+        monkeypatch.setattr(acme, "HYSTERIA2_KEY_PATH", str(tmp_path / "hys" / "key.pem"))
+        hook = acme.render_deploy_hook(DOMAIN_OK)
+        script = tmp_path / "hook.sh"
+        script.write_text(hook, encoding="utf-8")
+        proc = subprocess.run(
+            ["sh", str(script)],
+            env={},  # RENEWED_DOMAINS не задан вовсе (unset, не "")
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, (proc.returncode, proc.stderr)
+        assert proc.stdout == "", proc.stdout
+        # фильтр сработал до mkdir: каталог сертификата не появился
+        assert not (tmp_path / "hys").exists()
 
     def test_certbot_issue_args_idempotent_flag(self) -> None:
         args = acme._certbot_issue_args(DOMAIN_OK, EMAIL)

@@ -137,7 +137,8 @@ vds xray use-domain --domain example.com
 ```
 
 - `acme issue` — выпуск LE-сертификата + deploy-hook (P28: фильтр
-  `$RENEWED_DOMAINS` — рестарт только своего сертификата); «уже выдан» → exit 0.
+  `${RENEWED_DOMAINS:-}` — рестарт только своего сертификата, skip-ветка
+  «уже выдан» hook всё равно перегенерирует); «уже выдан» → exit 0.
 - `add-transport xhttp`:
   - `--mode port` — XHTTP на публичном порту **8443** (рекомендуется при DPI-давлении);
   - `--mode fallback` — SNI-разделение за Reality на 443;

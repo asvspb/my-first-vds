@@ -211,9 +211,10 @@ obfs:
 
 1. `vds acme issue --domain <домен> --email <email>` — LE-сертификат
    (HTTP-01) + deploy-hook на продление (P28: hook с фильтром
-   `$RENEWED_DOMAINS` — срабатывает только на продление своего сертификата;
-   продление второго сертификата `ws.<domain>` (ADR-016) hysteria не
-   рестартует, hook wstunnel — наоборот).
+   `${RENEWED_DOMAINS:-}` — срабатывает только на продление своего
+   сертификата, unset/чужой домен → exit 0 без мутаций; продление второго
+   сертификата `ws.<domain>` (ADR-016) hysteria не рестартует, hook
+   wstunnel — наоборот).
 2. `vds hysteria2 apply-cert --apply` — подмена self-signed на LE (бэкап
    `.bak-pre-le`), рестарт.
 3. `vds hysteria2 add-client NAME` — ссылка БЕЗ `insecure=1`, sni=домен.
