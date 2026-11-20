@@ -305,6 +305,9 @@ add-client`). Существующие конфиги не переписыва�
 недоступности: при живом трафике AmneziaWG держит сессию со старым handshake
 (WP-M0, `TEST-20261120-relay-leg-diag.md`), поэтому liveness проверяют
 пингом/трафиком внутри туннеля, а не по `latest handshake`.
+Манёвр порта (P25): `vds relay maneuver step --apply` — runtime-смена
+`listen-port 0` + endpoint по пулу, с liveness-окном 20 с и откатом; авто-таймер
+opt-in в WP-M4.
 
 ## 3. План добавления в VDS Orchestrator
 

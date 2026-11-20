@@ -73,5 +73,14 @@ EXIT_LEG_LOCK_FILE = "/var/run/vds-relay-exit-leg.lock"
 # ключ релея в шаблоне — плейсхолдер; ключ exit никогда не покидает exit.
 EXIT_LEG_CLIENT_TEMPLATE_PATH = GATEWAY_DIR / "clients" / "relay-exit-leg.conf"
 
+# --- Манёвр ноги relay→exit (ADR-015, TECHDEBT P25, WP-M3) ---
+# state и lock манёвра живут на релее (WP-M3); exit-сторона (awg2 + пул) —
+# WP-M2/`vds relay exit-leg`. Пул и P_base берутся из EXIT_LEG_* выше: это те
+# же порты, с которыми релей согласует свой endpoint.
+RELAY_MANEUVER_STATE_PATH = Path("/var/lib/vds/relay-maneuver.json")
+RELAY_MANEUVER_LOCK_FILE = "/var/run/vds-relay-maneuver.lock"
+# Бэкап конфига ноги перед персистом Endpoint (рядом с awg1.conf, 0600).
+RELAY_MANEUVER_BACKUP_SUFFIX = ".bak-pre-maneuver"
+
 # Блокировка мутаций (конвенция AGENTS.md §5.3).
 LOCK_FILE = "/var/run/vds-relay.lock"

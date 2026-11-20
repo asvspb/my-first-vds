@@ -32,7 +32,15 @@ relay_exit_leg_app = typer.Typer(
     ),
     no_args_is_help=True,
 )
+relay_maneuver_app = typer.Typer(
+    help=(
+        "Локальный манёвр ноги relay→exit (ADR-015, P25): runtime awg set, "
+        "liveness, anti-ping-pong; dry-run по умолчанию"
+    ),
+    no_args_is_help=True,
+)
 relay_app.add_typer(relay_exit_leg_app, name="exit-leg")
+relay_app.add_typer(relay_maneuver_app, name="maneuver")
 probe_watch_app = typer.Typer(
     help="Монитор активного зондирования tcp/443 (И33 v1: nft counters + journal)"
 )
@@ -1385,6 +1393,63 @@ def relay_exit_leg_remove(
     from src.relay.exit_leg import run_remove
 
     raise typer.Exit(run_remove(apply=apply))
+
+
+@relay_maneuver_app.command("status")
+def relay_maneuver_status(
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable вывод"),
+):
+    """Статус манёвра ноги: state-machine, текущий/предыдущий порт, cooldown,
+    exhausted, failed_ports, runtime endpoint. Read-only, без секретов.
+
+    Пример: sudo vds relay maneuver status --json"""
+    from src.relay.maneuver import run_status
+
+    raise typer.Exit(run_status(json_output=json_output))
+
+
+@relay_maneuver_app.command("history")
+def relay_maneuver_history(
+    limit: int = typer.Option(10, "--limit", help="Сколько последних попыток показать"),
+):
+    """История попыток манёвра (ts, from→to, ok/rollback, liveness_ms).
+
+    Пример: sudo vds relay maneuver history --limit 20"""
+    from src.relay.maneuver import run_history
+
+    raise typer.Exit(run_history(limit=limit))
+
+
+@relay_maneuver_app.command("step")
+def relay_maneuver_step(
+    apply: bool = typer.Option(False, "--apply", help="Исполнить манёвр (по умолчанию dry-run)"),
+    force: bool = typer.Option(
+        False, "--force",
+        help="Обойти ТОЛЬКО cooldown (guard роли/пула и лимит 3/час сохраняются)",
+    ),
+):
+    """Один тик автомата: при мёртвом liveness и живом трафике — runtime-смена
+    endpoint (`awg set awg1 listen-port 0 peer … endpoint …`), окно liveness 20 с,
+    персист Endpoint только при успехе, откат на прежний порт по таймауту.
+    awg-quick/рестарты юнитов не используются; exit-сторона не трогается.
+
+    Пример: sudo vds relay maneuver step --apply"""
+    from src.relay.maneuver import run_step
+
+    raise typer.Exit(run_step(apply=apply, force=force))
+
+
+@relay_maneuver_app.command("rollback")
+def relay_maneuver_rollback(
+    apply: bool = typer.Option(False, "--apply", help="Выполнить откат (по умолчанию dry-run)"),
+):
+    """Вернуть endpoint на предыдущий порт (previous_port). Идемпотентно:
+    предыдущий == текущий → exit 0. Конфиг персистится только при liveness.
+
+    Пример: sudo vds relay maneuver rollback --apply"""
+    from src.relay.maneuver import run_rollback
+
+    raise typer.Exit(run_rollback(apply=apply))
 
 
 @acme_app.command("issue")

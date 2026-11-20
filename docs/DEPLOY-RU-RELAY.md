@@ -272,6 +272,24 @@ curl --interface awg1 -I https://ifconfig.me   # IP exit (213.108.23.119)
 адрес не совпадут и нога не поднимется. Откат: `sudo vds relay exit-leg remove
 --apply` на exit (клиентский awg0 не трогается).
 
+### 4.2 Манёвр ноги (P25, WP-M3) — только локально на релее
+
+```bash
+vds relay maneuver status [--json]      # состояние, порт, cooldown, failed_ports
+vds relay maneuver history --limit 20   # ts, from→to, ok/rollback, liveness_ms
+vds relay maneuver step                 # dry-run: что сделал бы автомат
+vds relay maneuver step --apply         # один шаг (liveness 20 с)
+vds relay maneuver rollback --apply     # вернуть previous_port
+```
+
+Инварианты: смена только runtime (`awg set awg1 listen-port 0 peer … endpoint …`),
+никаких `awg-quick`/рестартов `vds-relay-exit`; `awg1.conf` правится **только**
+после подтверждённого liveness и только строкой `Endpoint` (бэкап
+`awg1.conf.bak-pre-maneuver` 0600); откат по таймауту конфиг не трогает.
+Guard: команда отказывает на exit-узле и если текущий порт не из пула
+51900–51911 (до cutover). Anti-ping-pong: 600 с, ≤3/час. Триггер — **data-plane
+liveness**, не `handshake_age`. Авто-таймер — WP-M4 (opt-in).
+
 ### 5. ip_forward + MASQUERADE + UFW
 
 ```bash

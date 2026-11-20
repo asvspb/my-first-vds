@@ -268,6 +268,14 @@ vds relay exit-leg install --relay-ip <relay-ip> --public-key <awg1-pub>
 vds relay exit-leg remove [--apply]  # снять awg2/пул/правила/юниты/state exit-ноги
                                      # install проверяет ip_forward и занятость портов,
                                      # пишет клиентский шаблон relay-exit-leg.conf (0600)
+vds relay maneuver status [--json]    # P25/ADR-015: состояние автомата, порт, cooldown,
+                                      # failed_ports, exhausted; runtime endpoint; без секретов
+vds relay maneuver history [--limit N]# последние попытки: ts, from→to, ok/rollback, liveness_ms
+vds relay maneuver step [--apply] [--force]
+                                      # один тик: liveness 20 с + activity gate → runtime
+                                      # `awg set awg1 listen-port 0 ... endpoint ...` (dry-run
+                                      # по умолчанию; --force обходит только cooldown)
+vds relay maneuver rollback [--apply] # вернуть previous_port (идемпотентно, если он же текущий)
 vds relay add-client phone --keepalive 25 --qr
                                      # Пир awg0: .conf (0600), endpoint relay-домен:443,
                                      # DNS = 1.1.1.1,1.0.0.1, AllowedIPs 0.0.0.0/0 (v4-only)
