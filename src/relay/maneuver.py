@@ -1350,12 +1350,16 @@ def run_tick(
         liveness_ms = sample.get("liveness_ms")
         activity = bool(sample.get("activity"))
         fails = int(sample.get("consecutive_failures") or 0)
+    tag = _journal_tag(
+        state=state_name, port=port, liveness_ok=liveness_ok,
+        liveness_ms=liveness_ms, activity=activity, fails=fails,
+        acted=acted, result=result_name,
+    )
+    target = result.get("target_port") if isinstance(result, dict) else None
+    if acted and target is not None:
+        tag += f" to={target}"
     console.print(
-        _journal_tag(
-            state=state_name, port=port, liveness_ok=liveness_ok,
-            liveness_ms=liveness_ms, activity=activity, fails=fails,
-            acted=acted, result=result_name,
-        ),
+        tag,
         markup=False,
         highlight=False,
         soft_wrap=True,

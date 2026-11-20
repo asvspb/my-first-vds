@@ -615,6 +615,38 @@ class TestCli:
         for secret in ("PrivateKey", "PresharedKey", PRIV, PEER_PSK):
             assert secret not in out
 
+    def test_tick_journal_tag_has_to_on_success(self, env, monkeypatch, capsys):
+        """P2 (M5): при acted=1 тег дополняется to=<target_port>."""
+        monkeypatch.setattr(maneuver, "probe_liveness", lambda: (False, None))
+        monkeypatch.setattr(maneuver, "wait_liveness", lambda: (True, 47))
+        # transfer-счётчики «выросли» относительно засеянного baseline (activity=1)
+        monkeypatch.setattr(maneuver, "_transfer_sums", lambda iface: (60_000, 80_000))
+        st = maneuver.default_state()
+        # свежий state: первый тик — baseline (fails=1). Чтобы за один тик дойти
+        # до манёвра, seed'им baseline с fails=2 и низкими счётчиками.
+        st["last_sample"] = {
+            **make_sample(ok=False, fails=2, activity=True,
+                          awg0_rx=10, awg0_tx=10, awg1_rx=0, awg1_tx=10),
+        }
+        st["state"] = "suspect"
+        maneuver.save_maneuver_state(st, env["maneuver_path"])
+        assert maneuver.run_tick(
+            apply=True, state_path=env["state_path"], maneuver_path=env["maneuver_path"]
+        ) == 0
+        out = capsys.readouterr().out
+        assert "acted=1 result=ok to=51901" in out
+
+    def test_tick_journal_tag_no_to_without_maneuver(self, env, monkeypatch, capsys):
+        monkeypatch.setattr(maneuver, "probe_liveness", lambda: (True, 31))
+        st = maneuver.default_state()
+        maneuver.save_maneuver_state(st, env["maneuver_path"])
+        assert maneuver.run_tick(
+            apply=True, state_path=env["state_path"], maneuver_path=env["maneuver_path"]
+        ) == 0
+        out = capsys.readouterr().out
+        assert "acted=0 result=none" in out and "to=" not in out
+
+
     def test_rollback_is_idempotent_when_previous_equals_current(self, env, capsys):
         st = maneuver.default_state()  # previous == current == 51900
         maneuver.save_maneuver_state(st, env["maneuver_path"])
