@@ -268,6 +268,8 @@ vds amneziawg add-client laptop --keepalive 113   # И44: keepalive по умо�
                                     # (радиомолчание в простое; 113 — только для NAT-дырки)
 vds amneziawg status                # Юнит, DKMS-версия, UDP-порт, peers (секреты скрыты)
 vds amneziawg remove-client <name>  # Удалить клиента (dry-run; --apply применяет)
+                                    # живое awg set peer remove — БЕЗ рестарта awg0,
+                                    # остальные пиры не теряют handshake (P24)
 vds amneziawg remove --apply        # Удалить сервис (пакеты PPA — вручную)
 
 vds acme issue --domain vpn.example.ru --email admin@example.ru   # LE (HTTP-01) + deploy-hook

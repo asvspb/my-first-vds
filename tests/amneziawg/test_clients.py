@@ -48,6 +48,8 @@ class Env:
         self.state_path = str(tmp_path / "state.json")
         self.lock_file = str(tmp_path / "clients.lock")
         self.restart_fails = False
+        self.set_remove_fails = False
+        self.live_peers = FIX_CLI_PUB  # пир «alpha/beta» числится живым по умолчанию
 
     @property
     def awg_meta(self) -> dict:
@@ -73,6 +75,12 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
     def _run_list(args: list[str], timeout: int = 10) -> ShellResult:
         e.calls.append(args)
         key = " ".join(args)
+        if args == ["awg", "show", "awg0", "peers"]:
+            return ShellResult(stdout=e.live_peers, stderr="", returncode=0)
+        if args[:3] == ["awg", "set", "awg0"] and args[-1] == "remove":
+            if e.set_remove_fails:
+                return ShellResult(stdout="", stderr="mock awg set remove failure", returncode=1)
+            return ShellResult(stdout="", stderr="", returncode=0)
         if args[:2] == ["systemctl", "restart"]:
             if e.restart_fails:
                 return ShellResult(stdout="", stderr="mock restart failure", returncode=1)
@@ -304,6 +312,7 @@ class TestRemoveClient:
 
     def test_apply_removes_peer_conf_and_state(self, env: Env) -> None:
         self._add_two(env)
+        env.calls.clear()  # рестарты add-фазы не считаем — смотрим только remove
         result = clients.remove_client("alpha", apply=True, state_path=env.state_path)
         assert result["dry_run"] is False
 
@@ -315,7 +324,10 @@ class TestRemoveClient:
         assert not (env.clients_dir / "alpha.conf").exists()
         assert (env.clients_dir / "beta.conf").exists()
         assert [c["name"] for c in _awg_clients(_read_state(env.state_path))] == ["beta"]
-        assert ["systemctl", "restart", "vds-amneziawg.service"] in env.calls
+        # P24: живое удаление пира — БЕЗ рестарта юнита (остальные пиры не
+        # теряют handshake); соседний peer beta в conf не тронут (выше).
+        assert ["awg", "set", "awg0", "peer", FIX_CLI_PUB, "remove"] in env.calls
+        assert ["systemctl", "restart", "vds-amneziawg.service"] not in env.calls
 
     def test_apply_missing_peer_in_conf_fails_clean(self, env: Env) -> None:
         clients.add_client("alpha", state_path=env.state_path)
@@ -331,8 +343,52 @@ class TestRemoveClient:
         with pytest.raises(clients.AWGClientError, match="не найден"):
             clients.remove_client("ghost", state_path=env.state_path)
 
-    def test_remove_restarts_unit(self, env: Env) -> None:
+    def test_remove_live_peer_removal_no_restart(self, env: Env) -> None:
+        """P24: remove-client не рестартует awg0 — только живое awg set remove."""
         clients.add_client("alpha", state_path=env.state_path)
         env.calls.clear()
         clients.remove_client("alpha", apply=True, state_path=env.state_path)
-        assert ["systemctl", "restart", "vds-amneziawg.service"] in env.calls
+        assert ["awg", "show", "awg0", "peers"] in env.calls
+        assert ["awg", "set", "awg0", "peer", FIX_CLI_PUB, "remove"] in env.calls
+        assert ["systemctl", "restart", "vds-amneziawg.service"] not in env.calls
+
+    def test_remove_peer_not_on_iface_conf_only(self, env: Env) -> None:
+        """P24: stale-пир (нет на интерфейсе) — conf-only, awg set не вызывается."""
+        clients.add_client("alpha", state_path=env.state_path)
+        env.calls.clear()
+        env.live_peers = ""  # пира на интерфейсе нет
+        clients.remove_client("alpha", apply=True, state_path=env.state_path)
+        assert ["awg", "show", "awg0", "peers"] in env.calls
+        assert ["awg", "set", "awg0", "peer", FIX_CLI_PUB, "remove"] not in env.calls
+        assert "# alpha" not in env.server_conf.read_text(encoding="utf-8")
+        assert [c["name"] for c in _awg_clients(_read_state(env.state_path))] == []
+
+    def test_apply_live_removal_failure_restores_conf(self, env: Env) -> None:
+        """P24: сбой живого удаления — откат awg0.conf, state не тронут."""
+        clients.add_client("alpha", state_path=env.state_path)
+        env.calls.clear()
+        env.set_remove_fails = True
+        with pytest.raises(clients.AWGClientError, match="живым awg set"):
+            clients.remove_client("alpha", apply=True, state_path=env.state_path)
+        assert "# alpha" in env.server_conf.read_text(encoding="utf-8")
+        assert [c["name"] for c in _awg_clients(_read_state(env.state_path))] == ["alpha"]
+
+    def test_remove_missing_public_key_refused(self, env: Env) -> None:
+        """P24: PublicKey пира не найден в блоке — отказ ДО мутаций."""
+        clients.add_client("alpha", state_path=env.state_path)
+        text = env.server_conf.read_text(encoding="utf-8")
+        # вырезаем строку PublicKey у пира alpha (блок начинается с "# alpha")
+        lines = text.split("\n")
+        out, in_alpha = [], False
+        for ln in lines:
+            if ln.strip() == "# alpha":
+                in_alpha = True
+            elif ln.strip() == "[Peer]" and out and out[-1].strip() == "":
+                in_alpha = False
+            if in_alpha and ln.strip().startswith("PublicKey = "):
+                continue
+            out.append(ln)
+        env.server_conf.write_text("\n".join(out), encoding="utf-8")
+        with pytest.raises(clients.AWGClientError, match="PublicKey"):
+            clients.remove_client("alpha", apply=True, state_path=env.state_path)
+        assert ["awg", "set", "awg0", "peer"] not in [c[:4] for c in env.calls]

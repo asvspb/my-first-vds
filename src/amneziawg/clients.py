@@ -11,6 +11,11 @@ state-меты, свои J-параметры, Endpoint = state.domain | пуб�
 (SPEC §2: единственный допустимый downtime; при сбое — откат конфига и
 удаление клиентского .conf) → сохранение state.
 
+Поток remove_client: сухой план → [Peer]-блок из awg0.conf + клиентский
+.conf + запись из state + **живое удаление пира** `awg set awg0 peer <pub>
+remove` — рестарт юнита НЕ нужен (остальные пиры не теряют handshake,
+P24-инвариант владельца); при сбое живого удаления — откат конфига.
+
 Секреты: клиентский private_key и PSK — только в state.json (0600) и
 клиентском .conf (0600); в stdout/выводе — только пути и адреса (SPEC §5).
 
@@ -39,6 +44,7 @@ from src.core.shell import ShellResult, run_list
 from src.gateway.paths import (
     AWG_CLIENTS_DIR,
     AWG_CONFIG_PATH,
+    AWG_IFACE,
     AWG_UNIT,
 )
 from src.gateway.store import (
@@ -190,6 +196,47 @@ def _remove_peer(server_conf_text: str, name: str) -> str:
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
+def _peer_public_key(server_conf_text: str, name: str) -> str:
+    """PublicKey удаляемого пира из его [Peer]-блока (для `awg set … remove`).
+
+    Нет блока или строки PublicKey — отказ ДО мутаций: живое удаление без
+    ключа невозможно, а вслепую рестартовать интерфейс нельзя (P24-инвариант).
+    """
+    bounds = _peer_block_bounds(server_conf_text, name)
+    if bounds is None:
+        raise AWGClientError(
+            f"Peer-секция клиента '{name}' не найдена в {AWG_CONFIG_PATH}. "
+            "Изменения не выполнялись."
+        )
+    for ln in server_conf_text.split("\n")[bounds[0]:bounds[1]]:
+        if ln.strip().startswith("PublicKey = "):
+            return ln.split("=", 1)[1].strip()
+    raise AWGClientError(
+        f"PublicKey пира '{name}' не найден в {AWG_CONFIG_PATH}. "
+        "Изменения не выполнялись."
+    )
+
+
+def _remove_peer_live(iface: str, pubkey: str) -> bool:
+    """Живое удаление пира из поднятого интерфейса — БЕЗ рестарта юнита.
+
+    Остальные пиры (и их handshakes) не затрагиваются — P24-инвариант
+    владельца: клиенты (mobile/Windows/laptop) не теряют handshake.
+    Пира на интерфейсе нет (stale) или интерфейс не поднят — conf-only
+    удаление, True не требуется (новый conf применит `awg-quick up`).
+    """
+    dump = run_list(["awg", "show", iface, "peers"], timeout=10)
+    if pubkey not in dump.stdout.split():
+        return False  # stale-пир / интерфейс не поднят — правка conf достаточна
+    result = run_list(["awg", "set", iface, "peer", pubkey, "remove"], timeout=10)
+    if not result.ok:
+        raise AWGClientError(
+            f"Не удалось удалить пир из {iface} живым awg set: "
+            f"{result.stderr.strip()}"
+        )
+    return True
+
+
 def _restart_unit() -> None:
     result = run_list(["systemctl", "restart", AWG_UNIT], timeout=30)
     if not result.ok:
@@ -313,7 +360,8 @@ def remove_client(
 ) -> dict:
     """Удалить amneziawg-клиента. Dry-run по умолчанию (SPEC §5): план без
     изменений; apply=True — [Peer] из серверного .conf, клиентский .conf,
-    запись из state, рестарт юнита (откат конфига при сбое)."""
+    запись из state и ЖИВОЕ удаление пира `awg set … remove` (без рестарта
+    юнита: остальные пиры не теряют handshake — P24; откат конфига при сбое)."""
     if os.geteuid() != 0:
         raise AWGClientError("Требуется root (запустите через sudo).")
 
@@ -331,7 +379,8 @@ def remove_client(
         f"peer '{name}' ({address}) из {AWG_CONFIG_PATH}",
         f"конфиг {conf_path}" if conf_path else "клиентский .conf (путь не записан)",
         f"запись '{name}' из state.json",
-        f"рестарт {AWG_UNIT}",
+        f"живое удаление пира из {AWG_IFACE} (awg set … peer … remove) — "
+        "БЕЗ рестарта юнита, остальные пиры не теряют handshake (P24)",
     ]
     if not apply:
         return {"name": name, "dry_run": True, "plan": plan, "conf_path": conf_path}
@@ -339,6 +388,7 @@ def remove_client(
     with FileLock(LOCK_FILE):
         server_text = AWG_CONFIG_PATH.read_text(encoding="utf-8")
         _validate_server_conf(server_text)
+        pubkey = _peer_public_key(server_text, name)
         new_server_text = _remove_peer(server_text, name)
 
         backup_path = AWG_CONFIG_PATH.with_name(AWG_CONFIG_PATH.name + BACKUP_SUFFIX)
@@ -348,7 +398,7 @@ def remove_client(
         if conf_path:
             Path(conf_path).unlink(missing_ok=True)
         try:
-            _restart_unit()
+            _remove_peer_live(AWG_IFACE, pubkey)
         except AWGClientError:
             write_secret_atomic(str(AWG_CONFIG_PATH), server_text, mode=0o600)
             raise
