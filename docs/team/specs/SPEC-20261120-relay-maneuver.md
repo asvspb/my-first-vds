@@ -43,11 +43,18 @@
 ```
 ufw allow from <relay-ip> to any port 51900 proto udp   # только P_base
 nft: table inet vds_relay_leg {
-  chain prerouting { type nat hook prerouting priority dstnat; }
-  # udp dport 51900-51911 ip saddr <relay-ip> redirect to :51900
+  chain prerouting  { type nat hook prerouting priority dstnat; }
+  #   ip saddr <relay-ip> udp dport 51901-51911 redirect to :51900
+  #   (сам 51900 не матчится — петли нет)
+  chain postrouting { type nat hook postrouting priority srcnat; }
+  #   ip saddr 10.11.0.0/30 oifname "<wan>" masquerade
+  chain input { type filter hook input priority filter - 1; policy accept; }
+  #   ip saddr != <relay-ip> udp dport 51900-51911 drop
+  #   meta nfproto ipv6 udp dport 51900-51911 drop
 }
 ```
-С чужого IP — тихий drop (без ICMP). Правила — oneshot-юнит (переживают reboot).
+`net.ipv4.ip_forward = 1` обязателен (install проверяет и отказывает иначе).
+Правила — oneshot-юнит (переживают reboot); перед apply — `nft -c -f`.
 
 ### 3.3 State (exit)
 
@@ -56,7 +63,11 @@ nft: table inet vds_relay_leg {
 ```json
 {"iface": "awg2", "subnet": "10.11.0.0/30", "exit_ip": "10.11.0.1",
  "peer_ip": "10.11.0.2", "base_port": 51900, "pool": "51900-51911",
- "relay_ip": "185.80.91.135", "public_key": "<peer pub>", "installed": true}
+ "relay_ip": "185.80.91.135", "public_key": "<pub релея>",
+ "exit_public_key": "<pub awg2 — для клиентского шаблона>",
+ "obfuscation": {"Jc": 0, "Jmin": 0, "Jmax": 0, "S1": 0, "S2": 0,
+                 "H1": 0, "H2": 0, "H3": 0, "H4": 0},
+ "exit_public_ip": "213.108.23.119", "wan_iface": "enp0s3", "installed": true}
 ```
 
 ### 3.4 State и история манёвра (релей)
@@ -76,7 +87,7 @@ nft: table inet vds_relay_leg {
 `suspect`, если одновременно:
 
 1. liveness-проба внутри туннеля падает N≥3 раза подряд
-   (`ping -I awg1 10.11.0.2` и/или TCP до exit через туннель);
+   (`ping -I awg1 10.11.0.1` и/или TCP до exit через туннель);
 2. есть активный трафик: прирост `tx` пиров `awg0` за окно или растущий счётчик
    `awg1.tx` при нулевом `rx`-приросте;
 3. `handshake_age` **не используется** как триггер (только для отчёта).

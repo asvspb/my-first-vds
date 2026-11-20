@@ -19,7 +19,9 @@ from src.amneziawg.config import gen_obfuscation_params
 from src.core.shell import ShellResult
 from src.relay.exit_leg import (
     ExitLegError,
+    leg_key_conflict,
     parse_pool,
+    render_exit_leg_client_conf,
     render_exit_leg_conf,
     render_nft_leg,
     render_pool_script,
@@ -39,6 +41,13 @@ from src.relay.paths import (
 RELAY_IP = "203.0.113.7"  # RFC 5737 — фикстура, не реальный адрес
 RELAY_PUB = "FIXTURE_PUBKEY_RELAY_AWG1_000000000000="
 EXIT_LEG_PRIV = "FIXTURE_PRIVKEY_AWG2_000000000000000000="
+EXIT_PUB = "FIXTURE_PUBKEY_AWG2_NODE_0000000000="
+EXIT_PUBLIC_IP = "198.51.100.77"  # RFC 5737 (TEST-NET-2)
+WAN_IFACE = "eth0"
+ROUTE_OUTPUT = (
+    f"1.1.1.1 via 203.0.113.1 dev {WAN_IFACE} src {EXIT_PUBLIC_IP} uid 0\n"
+    "    cache\n"
+)
 
 
 def _obf() -> dict:
@@ -75,29 +84,78 @@ class TestRenderConf:
         assert first == second
 
 
+class TestRenderClientTemplate:
+    def test_client_leg_template_contract(self):
+        obf = _obf()
+        text = render_exit_leg_client_conf(
+            exit_public_key=EXIT_PUB, exit_ip=EXIT_PUBLIC_IP, obf=obf
+        )
+        assert f"Address = {EXIT_LEG_PEER_IP}/32" in text
+        assert "Table = off" in text
+        assert f"MTU = {exit_leg.EXIT_LEG_MTU}" in text
+        assert f"PublicKey = {EXIT_PUB}" in text
+        assert f"Endpoint = {EXIT_PUBLIC_IP}:{EXIT_LEG_BASE_PORT}" in text
+        assert "AllowedIPs = 0.0.0.0/0" in text
+        assert "PersistentKeepalive = 25" in text
+        assert "PrivateKey = <вставьте приватный ключ релея>" in text
+        # Обфускация — точно от awg2 (все 9 параметров), иначе handshake мёртв.
+        for key in ("Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"):
+            assert f"{key} = {obf[key]}" in text
+
+    def test_rejects_bad_exit_ip(self):
+        with pytest.raises(ExitLegError):
+            render_exit_leg_client_conf(
+                exit_public_key=EXIT_PUB, exit_ip="not-an-ip", obf=_obf()
+            )
+
+
 class TestRenderNft:
-    def test_redirect_from_relay_and_silent_drop(self):
-        text = render_nft_leg(RELAY_IP)
+    def _text(self) -> str:
+        return render_nft_leg(RELAY_IP, wan_iface=WAN_IFACE)
+
+    def test_redirect_only_pool_without_base_port(self):
+        text = self._text()
         assert f"table inet {exit_leg.EXIT_LEG_NFT_TABLE}" in text
         assert "type nat hook prerouting priority dstnat" in text
+        # REDIRECT матчит 51901–51911, но НЕ сам P_base (нет петли).
         assert (
-            f"ip saddr {RELAY_IP} udp dport {EXIT_LEG_POOL} "
+            f"ip saddr {RELAY_IP} udp dport 51901-51911 "
             f"redirect to :{EXIT_LEG_BASE_PORT}"
         ) in text
-        assert f"udp dport {EXIT_LEG_POOL} drop" in text
-        # REDIRECT только на P_base — пул не слушается напрямую.
+        assert f"udp dport {EXIT_LEG_POOL} redirect" not in text
         assert text.count("redirect to") == 1
 
-    def test_external_ip_not_in_redirect(self):
-        text = render_nft_leg(RELAY_IP)
-        assert "198.51.100.9" not in text
-        assert text.count(RELAY_IP) == 1
+    def test_drop_is_filter_input_not_nat(self):
+        text = self._text()
+        prerouting, rest = text.split("chain postrouting", 1)
+        assert "drop" not in prerouting  # drop не живёт в nat-цепочке
+        assert "type filter hook input priority filter - 1" in text
+        assert f"ip saddr != {RELAY_IP} udp dport {EXIT_LEG_POOL} drop" in text
+        # ip6-вариант: пул не светится по v6.
+        assert f"meta nfproto ipv6 udp dport {EXIT_LEG_POOL} drop" in rest
 
-    def test_bad_ip_rejected(self):
+    def test_postrouting_masquerade_for_leg_subnet(self):
+        text = self._text()
+        assert "type nat hook postrouting priority srcnat" in text
+        assert (
+            f'ip saddr {EXIT_LEG_SUBNET} oifname "{WAN_IFACE}" masquerade' in text
+        )
+
+    def test_external_ip_not_in_rules(self):
+        text = self._text()
+        assert "198.51.100.9" not in text
+        # Релей упомянут ровно дважды: redirect и negative-drop.
+        assert text.count(RELAY_IP) == 2
+
+    def test_bad_ip_or_wan_rejected(self):
         with pytest.raises(ExitLegError):
-            render_nft_leg("not-an-ip")
+            render_nft_leg("not-an-ip", wan_iface=WAN_IFACE)
         with pytest.raises(ExitLegError):
-            render_nft_leg("2001:db8::1")
+            render_nft_leg("2001:db8::1", wan_iface=WAN_IFACE)
+        with pytest.raises(ExitLegError):
+            render_nft_leg(RELAY_IP, wan_iface="")
+        with pytest.raises(ExitLegError):
+            render_nft_leg(RELAY_IP, wan_iface="eth0; rm -rf /")
 
 
 class TestRenderPoolScript:
@@ -105,7 +163,10 @@ class TestRenderPoolScript:
         text = render_pool_script(RELAY_IP)
         assert text.startswith("#!/bin/sh")
         assert "set -eu" in text
-        assert f"nft -f {exit_leg.EXIT_LEG_NFT_FILE}" in text
+        # Сначала синтаксическая проверка файла, затем apply (P0-3).
+        check_at = text.index(f"nft -c -f {exit_leg.EXIT_LEG_NFT_FILE}")
+        apply_at = text.index(f"nft -f {exit_leg.EXIT_LEG_NFT_FILE}")
+        assert check_at < apply_at
         assert (
             f"ufw allow from {RELAY_IP} to any port {EXIT_LEG_BASE_PORT} proto udp"
         ) in text
@@ -200,12 +261,21 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(exit_leg, "AWG_CONFIG_PATH", awg0)
     monkeypatch.setattr(exit_leg, "RELAY_EXIT_CONFIG_PATH", tmp_path / "awg1.conf")
     monkeypatch.setattr(exit_leg, "EXIT_LEG_CONFIG_PATH", tmp_path / "amnezia" / "awg2.conf")
+    template = tmp_path / "gateway" / "clients" / "relay-exit-leg.conf"
+    monkeypatch.setattr(exit_leg, "EXIT_LEG_CLIENT_TEMPLATE_PATH", template)
     monkeypatch.setattr(exit_leg, "EXIT_LEG_NFT_FILE", tmp_path / "relay-leg.nft")
     monkeypatch.setattr(exit_leg, "EXIT_LEG_POOL_SCRIPT", tmp_path / "pool-apply.sh")
     monkeypatch.setattr(exit_leg, "EXIT_LEG_LOCK_FILE", str(tmp_path / "leg.lock"))
     monkeypatch.setattr(exit_leg.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(exit_leg, "command_exists", lambda name: True)
 
-    runner = FakeRunner(FakeSystemd())
+    runner = FakeRunner(
+        FakeSystemd(),
+        mapping={
+            ("ip", "route", "get"): ShellResult(ROUTE_OUTPUT, "", 0),
+            ("sysctl", "-n", "net.ipv4.ip_forward"): ShellResult("1\n", "", 0),
+        },
+    )
     systemd = runner.systemd
     monkeypatch.setattr(exit_leg, "run_list", runner)
     monkeypatch.setattr(exit_leg, "install_unit", systemd.install)
@@ -217,7 +287,7 @@ def env(tmp_path, monkeypatch):
 
     def fake_keys():
         keys.append(1)
-        return EXIT_LEG_PRIV, "FIXTURE_PUBKEY_AWG2_NODE_0000000000="
+        return EXIT_LEG_PRIV, EXIT_PUB
 
     monkeypatch.setattr(exit_leg, "_gen_server_keys", fake_keys)
 
@@ -228,6 +298,7 @@ def env(tmp_path, monkeypatch):
         "keys": keys,
         "state": str(tmp_path / "state.json"),
         "awg0": awg0,
+        "template": template,
     }
 
 
@@ -272,19 +343,43 @@ class TestInstall:
 
         state = json.loads(Path(env["state"]).read_text(encoding="utf-8"))
         leg = state["protocols"]["relay_leg"]
-        assert leg == {
-            "iface": "awg2",
-            "subnet": "10.11.0.0/30",
-            "exit_ip": "10.11.0.1",
-            "peer_ip": "10.11.0.2",
-            "base_port": 51900,
-            "pool": "51900-51911",
-            "relay_ip": RELAY_IP,
-            "public_key": RELAY_PUB,
-            "installed": True,
+        assert leg["iface"] == "awg2"
+        assert leg["subnet"] == "10.11.0.0/30"
+        assert leg["exit_ip"] == "10.11.0.1"
+        assert leg["peer_ip"] == "10.11.0.2"
+        assert leg["base_port"] == 51900
+        assert leg["pool"] == "51900-51911"
+        assert leg["relay_ip"] == RELAY_IP
+        assert leg["public_key"] == RELAY_PUB
+        # P0-1: релей должен получить ключ exit и точную обфускацию awg2.
+        assert leg["exit_public_key"] == EXIT_PUB
+        assert set(leg["obfuscation"]) == {
+            "Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"
         }
+        assert leg["exit_public_ip"] == EXIT_PUBLIC_IP
+        assert leg["wan_iface"] == WAN_IFACE
+        assert leg["installed"] is True
         # Приватный ключ — только в .conf (0600), не в state.
         assert EXIT_LEG_PRIV not in Path(env["state"]).read_text(encoding="utf-8")
+
+        # Клиентский шаблон ноги: 0600, ключ exit, плейсхолдер приватного ключа.
+        tpl = Path(exit_leg.EXIT_LEG_CLIENT_TEMPLATE_PATH)
+        assert tpl.is_file()
+        assert stat.S_IMODE(tpl.stat().st_mode) == 0o600
+        body_tpl = tpl.read_text(encoding="utf-8")
+        assert f"Address = {EXIT_LEG_PEER_IP}/32" in body_tpl
+        assert "Table = off" in body_tpl
+        assert f"PublicKey = {EXIT_PUB}" in body_tpl
+        assert f"Endpoint = {EXIT_PUBLIC_IP}:{EXIT_LEG_BASE_PORT}" in body_tpl
+        assert "AllowedIPs = 0.0.0.0/0" in body_tpl
+        assert "PersistentKeepalive = 25" in body_tpl
+        assert EXIT_LEG_PRIV not in body_tpl
+        # Обфускация шаблона совпадает с awg2.conf.
+        conf_body = Path(exit_leg.EXIT_LEG_CONFIG_PATH).read_text(encoding="utf-8")
+        for key in ("Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"):
+            value = leg["obfuscation"][key]
+            assert f"{key} = {value}" in conf_body
+            assert f"{key} = {value}" in body_tpl
 
         ufw_calls = env["runner"].commands("ufw", "allow")
         assert ufw_calls and ufw_calls[0] == [
@@ -322,6 +417,56 @@ class TestInstall:
         assert _install(env) == 0
         assert Path(exit_leg.EXIT_LEG_CONFIG_PATH).is_file()
         assert len(env["keys"]) == 2  # конфига не было — ключи новые
+
+
+class TestGuards:
+    def test_key_change_on_existing_conf_refused(self, env):
+        """P1-3: новый --public-key поверх существующего awg2.conf — отказ."""
+        assert _install(env) == 0
+        conf_before = Path(exit_leg.EXIT_LEG_CONFIG_PATH).read_text(encoding="utf-8")
+        state_before = Path(env["state"]).read_text(encoding="utf-8")
+        env["runner"].calls.clear()
+
+        new_key = "FIXTURE_PUBKEY_RELAY_OTHER_0000000000="
+        rc = run_install(RELAY_IP, new_key, apply=True, state_path=env["state"])
+        assert rc == 1
+        # Ни конфиг, ни state не тронуты; мутаций нет.
+        assert Path(exit_leg.EXIT_LEG_CONFIG_PATH).read_text(encoding="utf-8") == conf_before
+        assert Path(env["state"]).read_text(encoding="utf-8") == state_before
+        assert env["runner"].calls == []
+
+    def test_leg_key_conflict_helper(self, env, tmp_path):
+        state = exit_leg.load_state(env["state"])
+        state.protocols["relay_leg"] = {"public_key": RELAY_PUB, "installed": True}
+        assert leg_key_conflict(RELAY_PUB, state) is None
+        msg = leg_key_conflict("OTHER_KEY", state)
+        assert msg and "remove --apply" in msg
+
+    def test_busy_pool_port_refuses_first_install(self, env):
+        """P1-1: занятый чужим процессом порт пула — отказ до изменений."""
+        env["runner"].mapping[("ss", "-ulnp")] = ShellResult(
+            'UNCONN 0 0 0.0.0.0:51900 0.0.0.0:* users:(("nginx",pid=42,fd=6))\n',
+            "",
+            0,
+        )
+        assert _install(env) == 1
+        assert env["keys"] == []  # до генерации ключей не дошли
+        assert not Path(exit_leg.EXIT_LEG_CONFIG_PATH).exists()
+        assert env["systemd"].installed == []
+
+    def test_free_pool_passes_preflight(self, env):
+        env["runner"].mapping[("ss", "-ulnp")] = ShellResult("", "", 0)
+        assert _install(env) == 0
+        assert env["keys"] == [1]
+
+    def test_ip_forward_disabled_refused(self, env):
+        """P0-2: без ip_forward=1 нога не маршрутизирует — явный отказ."""
+        env["runner"].mapping[("sysctl", "-n", "net.ipv4.ip_forward")] = ShellResult(
+            "0\n", "", 0
+        )
+        assert _install(env) == 1
+        assert not Path(exit_leg.EXIT_LEG_CONFIG_PATH).exists()
+        assert env["keys"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +535,7 @@ class TestRemove:
         assert not Path(exit_leg.EXIT_LEG_CONFIG_PATH).exists()
         assert not Path(exit_leg.EXIT_LEG_NFT_FILE).exists()
         assert not Path(exit_leg.EXIT_LEG_POOL_SCRIPT).exists()
+        assert not Path(exit_leg.EXIT_LEG_CLIENT_TEMPLATE_PATH).exists()
         state = json.loads(Path(env["state"]).read_text(encoding="utf-8"))
         assert "relay_leg" not in state["protocols"]
         # Клиентский awg0 не тронут remove'ом.

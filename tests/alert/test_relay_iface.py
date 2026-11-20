@@ -60,6 +60,31 @@ def _state_file(tmp_path, *, pub: str = PEER_PUB, addr: str = f"{PEER_IP}/32") -
     return str(path)
 
 
+def _leg_state_file(tmp_path, *, pub: str = PEER_PUB, peer_ip: str = "10.11.0.2") -> str:
+    """Exit с выделенной ногой: пира в clients[] НЕТ, есть protocols.relay_leg."""
+    path = tmp_path / "state-leg.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "clients": [],
+                "protocols": {
+                    "relay_leg": {
+                        "iface": "awg2",
+                        "public_key": pub,
+                        "peer_ip": peer_ip,
+                        "relay_ip": "203.0.113.7",
+                        "installed": True,
+                    }
+                },
+                "ufw_lockdown": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
 def _dump(epoch: int, public_key: str = PEER_PUB, address: str = PEER_IP) -> str:
     return (
         "iface-priv\tiface-pub\t51825\toff\n"
@@ -136,6 +161,49 @@ def test_peer_found_by_public_key_not_iface(tmp_path):
     )
     assert signal.peer_found
     assert signal.classification == "ok"
+
+
+def test_peer_found_from_relay_leg_without_clients(tmp_path):
+    """P0-5: state.clients пуст, личность пира — из protocols.relay_leg."""
+    run = RecordingRunner(
+        _dump(FRESH_EPOCH, public_key=PEER_PUB, address="10.11.0.2")
+    )
+    signal = read_relay_signal(
+        cfg=_cfg(relay_iface="awg2"), prev_state={}, now=NOW, run=run,
+        state_path=_leg_state_file(tmp_path), tcp_probe=lambda *a: None,
+    )
+    assert run.calls[0] == ["awg", "show", "awg2", "dump"]
+    assert signal.peer_found is True
+    assert signal.classification == "ok"
+
+
+def test_relay_leg_fallback_to_clients_when_key_missing(tmp_path):
+    # relay_leg есть, но без public_key → фолбэк на clients[].
+    path = tmp_path / "state-leg-empty.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "clients": [
+                    {
+                        "name": "relay",
+                        "protocol": "amneziawg",
+                        "port": 51825,
+                        "extra": {"address": "10.9.0.5/32", "public_key": PEER_PUB},
+                    }
+                ],
+                "protocols": {"relay_leg": {"iface": "awg2", "installed": True}},
+                "ufw_lockdown": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    run = RecordingRunner(_dump(FRESH_EPOCH, address="10.9.0.5"))
+    signal = read_relay_signal(
+        cfg=_cfg(relay_iface="awg2"), prev_state={}, now=NOW, run=run,
+        state_path=str(path), tcp_probe=lambda *a: None,
+    )
+    assert signal.peer_found is True
 
 
 def test_missing_peer_is_inconclusive(tmp_path):

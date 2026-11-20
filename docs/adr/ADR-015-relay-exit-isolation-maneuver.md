@@ -30,7 +30,7 @@ WP-M0 показал: **возраст handshake не эквивалентен �
    `vds-relay-exit`, без разрыва `table 100`/policy-routing), затем атомарная
    запись `Endpoint` в `/etc/amnezia/awg1.conf` (0600, `.bak-pre-maneuver`).
 4. **Триггер — data-plane liveness, не handshake**: проба внутри туннеля
-   (`ping -I awg1 10.11.0.2` и/или TCP до exit через туннель) + отсутствие
+   (`ping -I awg1 10.11.0.1` и/или TCP до exit через туннель) + отсутствие
    прироста `rx` при живом трафике на `awg0`. Activity gate: простой без трафика
    никогда не триггерит манёвр.
 5. **Базовая митигация**: `PersistentKeepalive = 25` на `awg1` (и на `awg2`-пире

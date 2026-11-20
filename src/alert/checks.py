@@ -255,6 +255,41 @@ def _signal(
     )
 
 
+def _relay_peer_identity(
+    gateway_state, cfg: AlertConfig, iface: str
+) -> tuple[str, str]:
+    """(public_key, address_ip) пира релея для выбранного интерфейса.
+
+    Выделенная нога (ADR-015): при `ALERT_RELAY_IFACE` = iface из
+    `state.protocols["relay_leg"]` (или любом не-`awg0`) личность пира берётся
+    из `relay_leg` — `exit_leg` пишет туда, а не в `clients`. Фолбэк на
+    `clients[]` (`protocol=amneziawg`, `name=relay_peer`) сохраняет обратную
+    совместимость для клиентского awg0.
+    """
+    leg = (getattr(gateway_state, "protocols", None) or {}).get("relay_leg") or {}
+    leg_iface = str(leg.get("iface") or "")
+    use_leg = bool(leg) and (iface == leg_iface or iface != "awg0")
+    if use_leg:
+        public_key = str(leg.get("public_key") or "")
+        peer_ip = str(leg.get("peer_ip") or "").split("/")[0].strip()
+        if public_key:
+            return public_key, peer_ip
+
+    peer = next(
+        (
+            c
+            for c in gateway_state.clients
+            if c.name == cfg.relay_peer and c.protocol == "amneziawg"
+        ),
+        None,
+    )
+    if peer is None:
+        return "", ""
+    public_key = str(peer.extra.get("public_key") or "")
+    address_ip = str(peer.extra.get("address") or "").split("/")[0].strip()
+    return public_key, address_ip
+
+
 def read_relay_signal(
     *,
     cfg: AlertConfig,
@@ -266,8 +301,9 @@ def read_relay_signal(
 ) -> RelaySignal:
     """Пульс плеча relay→exit: `awg show <ALERT_RELAY_IFACE> dump` + пир из gateway state.
 
-    Пир-релей на exit-узле — это **AWG-клиент** (`clients[]`, `protocol ==
-    "amneziawg"`, `name == cfg.relay_peer`), а не `state.protocols["relay"]`
+    Пир-релей на exit-узле — либо **AWG-клиент** (`clients[]`, `protocol ==
+    "amneziawg"`, `name == cfg.relay_peer`), либо пир выделенной ноги
+    `state.protocols["relay_leg"]` (ADR-015), а не `state.protocols["relay"]`
     (SPEC §3.1). Интерфейс читается из `ALERT_RELAY_IFACE` (default `awg0`;
     на exit с выделенной ногой — `awg2`, ADR-015); пир ищется по публичному
     ключу из state, а не по имени iface — имя интерфейса лишь выбирает источник
@@ -280,22 +316,11 @@ def read_relay_signal(
     except Exception:  # StoreError и любые ошибки чтения — «слеп», не алерт
         return _signal("inconclusive", "state_unreadable")
 
-    peer = next(
-        (
-            c
-            for c in gateway_state.clients
-            if c.name == cfg.relay_peer and c.protocol == "amneziawg"
-        ),
-        None,
-    )
-    if peer is None:
+    iface = (getattr(cfg, "relay_iface", "") or "awg0").strip() or "awg0"
+    public_key, address_ip = _relay_peer_identity(gateway_state, cfg, iface)
+    if not public_key and not address_ip:
         return _signal("inconclusive", "peer_not_found")
 
-    public_key = str(peer.extra.get("public_key") or "")
-    address = str(peer.extra.get("address") or "")
-    address_ip = address.split("/")[0].strip()
-
-    iface = (getattr(cfg, "relay_iface", "") or "awg0").strip() or "awg0"
     result = run(["awg", "show", iface, "dump"], timeout=5)
     if not result.ok:
         return _signal("inconclusive", "awg_unavailable", peer_found=False)

@@ -188,6 +188,36 @@ def test_hop_ports_hyphen_from_state_is_normalized_to_colon() -> None:
     assert "20000-20500/udp" not in specs
 
 
+def test_relay_leg_adds_from_rule_and_covers_listener() -> None:
+    """P1-2: нога relay→exit даёт from-правило P_base и не даёт warning."""
+    st = _gateway_state()
+    st.protocols["relay_leg"] = {
+        "installed": True, "relay_ip": "203.0.113.7", "base_port": 51900,
+    }
+    specs, _ = ufw.profile_service_specs(st, "gateway")
+    assert "from 203.0.113.7 to any port 51900 proto udp" in specs
+    # широкого allow 51900/udp нет — порт открыт только релею
+    assert "51900/udp" not in specs
+
+    snap = ufw.parse_ufw_status("Status: inactive\n")
+    ss_lines = [
+        'UNCONN 0 0 0.0.0.0:51900 0.0.0.0:* users:(("awg-quick",pid=1,fd=3))',
+    ]
+    plan = ufw.build_plan("gateway", st, snap, ufw.HardeningOpts(), ss_lines)
+    rule = [
+        p for p in plan
+        if p.kind == "rule" and p.meta.get("spec", "").startswith("from 203.0.113.7 ")
+    ]
+    assert rule and rule[0].action == "add"
+    # 51900 считается покрытым — предупреждения «неизвестный слушатель» нет.
+    assert not any("51900" in p.detail for p in plan if p.action == "warn")
+
+
+def test_relay_leg_absent_keeps_gateway_specs_unchanged() -> None:
+    specs, _ = ufw.profile_service_specs(_gateway_state(), "gateway")
+    assert not any(spec.startswith("from ") for spec in specs)
+
+
 def _wire(fake: FakeUfw, monkeypatch: pytest.MonkeyPatch) -> FakeUfw:
     monkeypatch.setattr(ufw, "run_list", fake.run)
     monkeypatch.setattr(ufw, "command_exists", lambda name: name in ("ufw", "ss", "sshd"))

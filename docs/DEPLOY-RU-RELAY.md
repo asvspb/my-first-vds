@@ -221,26 +221,56 @@ gateway `state.json`; на релее с битым/пустым state отка�
 ### 4.1 Изолированная нога на exit (`awg2`, P24/ADR-015)
 
 Пока не включено в бою: `awg2` и пул портов ставятся отдельной командой на
-exit-узле, клиентский `awg0` (51825) при этом не трогается.
+exit-узле, клиентский `awg0` (51825) при этом не трогается. Ключи и обфускация
+ноги рождаются **на exit**; релей получает только готовый клиентский шаблон
+(приватный ключ awg2 не покидает exit, приватный ключ релея — не покидает релей).
 
 ```bash
 # 1) на релее — уже есть awg1 после §4; взять публичный ключ ноги:
 awg show awg1 public-key
 
-# 2) на exit (asv2): поставить выделенную ногу и пул 51900-51911
+# 2) на exit (asv2): поставить ногу awg2 + пул 51900-51911 + MASQUERADE
 sudo vds relay exit-leg install \
   --relay-ip 185.80.91.135 --public-key <awg1-pub>        # dry-run: план
 sudo vds relay exit-leg install \
   --relay-ip 185.80.91.135 --public-key <awg1-pub> --apply
+# install сам проверяет: свободны ли порт(ы) пула (первичный запуск),
+# net.ipv4.ip_forward=1, и пишет клиентский шаблон ноги:
+#   /opt/my-vds/gateway/clients/relay-exit-leg.conf (0600)
 
-# 3) на релее — перевести endpoint ноги на порт пула (WP-M3, ручной шаг):
-awg set awg1 peer <exit-pub> endpoint 213.108.23.119:51900
-awg show awg1 latest-handshakes      # свежий handshake = нога жива
+# 3) забрать шаблон с exit (шаблон НЕ секрет: приватного ключа в нём нет).
+#    Канал переноса — на усмотрение оператора; НЕ ходить с релея по ssh на
+#    exit (ADR-015: у релея нет доступа к exit). Например, `sudo cat` на exit
+#    и вставка в файл на релее:
+sudo cat /opt/my-vds/gateway/clients/relay-exit-leg.conf
+
+# 4) на релее — собрать новый /etc/amnezia/awg1.conf из шаблона:
+#    подставить свой приватный ключ ноги (он уже есть в текущем awg1):
+awg show awg1 private-key
+#    в шаблоне заменить строку
+#      PrivateKey = <вставьте приватный ключ релея>
+#    на своё значение; остальное (Address = 10.11.0.2/32, Table = off,
+#    MTU = 1420, Jc/Jmin/Jmax/S1/S2/H1..H4 от awg2, PublicKey = <exit>,
+#    Endpoint = 213.108.23.119:51900, PersistentKeepalive = 25) не менять.
+sudo install -m 0600 /path/to/relay-exit-leg.conf /etc/amnezia/awg1.conf
+
+# 5) на релее — плановый cutover ноги (НЕ горячий манёвр WP-M3):
+awg-quick down awg1; awg-quick up awg1
+#    если нога поднята юнитом — systemctl restart vds-relay-exit, затем
+#    systemctl restart vds-relay-policy (маршрут table 100 исчезает вместе
+#    с link — см. §2.0 п.2).
+
+# 6) проверка data-plane (цель пробы — exit 10.11.0.1, не релей):
+ping -I awg1 -c3 10.11.0.1
+curl --interface awg1 -I https://ifconfig.me   # IP exit (213.108.23.119)
 ```
 
 Инвариант: UFW открывает ровно `51900/udp` и только с IP релея; остальные порты
 пула доступны лишь через nft REDIRECT (`saddr == relay-ip`), с чужого адреса —
-тихий drop. Откат: `sudo vds relay exit-leg remove --apply`.
+тихий drop; MASQUERADE подсети `10.11.0.0/30` — на WAN exit. Никакого
+`awg set awg1 ... endpoint 51900` поверх старого конфига awg0: ключ/обфускация/
+адрес не совпадут и нога не поднимется. Откат: `sudo vds relay exit-leg remove
+--apply` на exit (клиентский awg0 не трогается).
 
 ### 5. ip_forward + MASQUERADE + UFW
 

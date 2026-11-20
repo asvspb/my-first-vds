@@ -386,6 +386,14 @@ def profile_service_specs(state: GatewayState, profile: str) -> tuple[list[str],
             cascade_443.append((proto, key))
         else:
             specs.append(spec)
+    # Выделенная нога relay→exit (ADR-015): P_base открыт только с IP релея.
+    # Без этого harden считал бы 51900/udp неизвестным слушателем (P1-2).
+    leg = protocols.get("relay_leg") or {}
+    if leg.get("installed"):
+        relay_ip = str(leg.get("relay_ip") or "").strip()
+        base_port = str(leg.get("base_port") or "51900")
+        if relay_ip:
+            specs.append(f"from {relay_ip} to any port {base_port} proto udp")
     hop = (protocols.get("hysteria2") or {}).get("hop_ports")
     if hop:
         # state хранит "-" (share-link mport), UFW требует ":" в диапазоне.
@@ -519,6 +527,11 @@ def build_plan(
     # 5. listeners-сверка (Docker обходит UFW — SPEC §1.5)
     if ss_lines is not None:
         ports = set(specs)
+        # Слушатель P_base ноги открыт from-правилом; для сверки слушателей
+        # он всё равно «покрыт» (P1-2).
+        leg = state.protocols.get("relay_leg") or {}
+        if leg.get("installed"):
+            ports.add(f"{leg.get('base_port') or 51900}/udp")
         if profile == "exit-cascade":
             ports = {f"443/{proto}" for proto, _ in cascade_443} | ports
         for port in resolve_ssh_ports(state, opts):

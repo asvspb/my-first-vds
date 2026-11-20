@@ -69,5 +69,9 @@ EXIT_LEG_NFT_FILE = Path("/etc/vds/relay-leg.nft")
 EXIT_LEG_POOL_SCRIPT = Path("/usr/local/sbin/vds-relay-leg-pool-apply.sh")
 EXIT_LEG_LOCK_FILE = "/var/run/vds-relay-exit-leg.lock"
 
+# Готовый клиентский шаблон ноги (для релея): путь под INSTALL_DIR. Приватный
+# ключ релея в шаблоне — плейсхолдер; ключ exit никогда не покидает exit.
+EXIT_LEG_CLIENT_TEMPLATE_PATH = GATEWAY_DIR / "clients" / "relay-exit-leg.conf"
+
 # Блокировка мутаций (конвенция AGENTS.md §5.3).
 LOCK_FILE = "/var/run/vds-relay.lock"
