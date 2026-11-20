@@ -279,7 +279,8 @@ vds relay maneuver rollback [--apply] # вернуть previous_port (идемп
                                       # apply-путь: FileLock до чтений; после успеха
                                       # счётчик отказов сбрасывается, failed_ports — по cooldown
 vds relay maneuver tick [--apply]     # один тик таймера (ExecStart юнита); ВСЕГДА exit 0,
-                                      # одна строка [relay-maneuver] state=… port=… liveness=… …
+                                      # одна строка [relay-maneuver] state=… port=…
+                                      # liveness=… … acted=… result=… [to=…]
 vds relay maneuver install [--apply] [--enable-auto] [--interval 60s]
                                       # opt-in таймер (WP-M4): .service enable=off + .timer;
                                       # без --enable-auto таймер НЕ включён/НЕ запущен;
