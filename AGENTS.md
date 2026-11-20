@@ -147,7 +147,9 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 `docs/GROWTH-POINTS.md` — точки роста схем/протоколов (вход для intake);
 `docs/SERVER-BASELINE.md` — настройки ОС/сервера: авто vs вручную, чеклист восстановления;
 `docs/SPLIT-TRANSPORTS.md` — системный split: AWG и аналоги (Reality/Hy2/XHTTP/CDN);
-`docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…015;
+`docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…016
+(ADR-016 — p2p link: несколько L4-ортогональных носителей между двумя узлами,
+draft до G2);
 `TECHDEBT.md` — бэклог. Контракт схем guard: `docs/contracts/guard-schema-hashes.json`
 (источник правды — клиентский lock, D-17); решения vpn guard — D-16…D-24 в
 `docs/team/reports/DECISIONS-vpn-guard.md`, план v1.1 —
