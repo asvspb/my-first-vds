@@ -13,6 +13,7 @@
 | Шаг | Результат |
 |---|---|
 | Архив v11.1.0 на ноутбуке | sha256 `512edf4e…aa23` = пиннинг ✅ |
+| Синхронизация кода | wstunnel.py на обоих узлах md5 = HEAD `ef51940` (пробельный матч $RENEWED_DOMAINS включён) |
 | `wstunnel install --archive --apply` (оба узла) | `wstunnel-cli 11.1.0`, `status --json`: pinned = installed |
 | rsync src/ + systemd/ | md5 carriers/wstunnel/main идентичны на обоих узлах |
 | **P0 приёмки:** `write_env` без mkdir | на релее нет `/etc/vds` → env молча не записался; фикс: mkdir + raise при сбое; тест `test_write_env_creates_parent_dir` |
