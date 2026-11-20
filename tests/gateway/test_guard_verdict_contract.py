@@ -91,6 +91,9 @@ def test_probe_watch_json_covers_client_contract() -> None:
     payload = _watch_payload()
 
     # Поля, которые клиентский `vpn guard sync` переносит в guard.server_verdict/1.
+    # `now` есть в ALLOWED_FIELDS клиента (verdict.py), хотя в самой схеме его нет —
+    # сторожим тип на серверной стороне, чтобы формат не дрейфовал молча.
+    assert isinstance(payload["now"], str) and payload["now"]
     assert isinstance(payload["window"], str)
     assert isinstance(payload["verdict"], str)
     assert isinstance(payload["reasons"], list)

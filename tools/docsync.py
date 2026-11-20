@@ -655,8 +655,11 @@ def cmd_debt(repo: Path, since: Optional[str], registry: Registry) -> int:
     entries: list[str] = []
     for e in (l for l in out.splitlines() if l.strip()):
         sha = e.split("|", 1)[0]
+        # `-m --first-parent`: у merge-коммита diff-tree без них вернул бы пусто
+        # и обход в мерже стал бы невидим; first-parent — «что принёс мерж».
         files = [l for l in git(repo, ["diff-tree", "--root", "--no-commit-id",
-                                       "--name-only", "-r", sha]).splitlines() if l.strip()]
+                                       "--name-only", "-r", "-m", "--first-parent",
+                                       sha]).splitlines() if l.strip()]
         _, missing, _ = compute_sync(registry, files)
         if not missing:
             continue
