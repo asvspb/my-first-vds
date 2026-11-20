@@ -313,6 +313,7 @@ vds relay carrier switch --to awg|wstunnel [--apply]  # ручное перек�
                                       #  сбой route — hold, не краш
 vds relay wstunnel … --apply          # ставит и deploy-hook LE (vds-wstunnel-reload.sh):
                                       # продление ws.<domain> рестартирует только wstunnel
+                                      # (пробельный матч $RENEWED_DOMAINS — мульти-SAN ok)
 vds relay wstunnel init [--apply]     # релей, шаг 1: ключи wg-ws0 + path-prefix (0600); печатает ПУБЛИЧНЫЙ
 vds relay wstunnel server --relay-ip <ip> --relay-public-key <key> \
     --domain ws.<domain> --prefix-file <env> [--apply]   # exit: wg-ws0 + wss 9443 + nft/UFW

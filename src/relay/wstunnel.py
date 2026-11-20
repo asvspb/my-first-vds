@@ -918,21 +918,20 @@ def render_renew_hook(domain: str, unit: str = WS_SERVER_UNIT) -> str:
         "# VDS wstunnel: reload после продления LE (WP-P2P-4, ADR-016).\n"
         "# Фильтр $RENEWED_DOMAINS: обновление нашего домена — рестарт только\n"
         f"# {unit}; продления других сертификатов (hysteria) не трогаем.\n"
-        "case \",$RENEWED_DOMAINS,\" in\n"
-        f'    *,{host},*) systemctl try-restart {unit} ;;\n'
+        "# Пробельный матч: certbot передаёт домены ЧЕРЕЗ ПРОБЕЛ (мульти-SAN).\n"
+        "case \" $RENEWED_DOMAINS \" in\n"
+        f'    *" {host} "*) systemctl try-restart {unit} ;;\n'
         "    *) exit 0 ;;\n"
         "esac\n"
     )
 
 
 def ensure_renew_hook(domain: str) -> Path:
-    """Установить deploy-hook 0755 (идемпотентно)."""
+    """Установить deploy-hook 0755 (идемпотентно, атомарно)."""
     RENEW_HOOKS_DIR.mkdir(parents=True, exist_ok=True)
-    path = RENEW_HOOK
-    path.write_text(render_renew_hook(domain), encoding="utf-8")
-    os.chmod(path, 0o755)
-    console.print(f"[change][wstunnel] deploy-hook {path} установлен (0755).[/change]")
-    return path
+    _write_text_atomic(RENEW_HOOK, render_renew_hook(domain), 0o755)
+    console.print(f"[change][wstunnel] deploy-hook {RENEW_HOOK} установлен (0755).[/change]")
+    return RENEW_HOOK
 
 
 def run_status(run: Callable[..., ShellResult] = run_list) -> dict[str, object]:

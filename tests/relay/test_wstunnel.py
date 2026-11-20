@@ -620,8 +620,44 @@ def test_relay_apply_policy_check_failure_cleans_tmp_and_keeps_live(monkeypatch,
 
 def test_renew_hook_filters_domain():
     text = ws.render_renew_hook("ws.example.net")
-    assert 'case ",$RENEWED_DOMAINS," in' in text
-    assert "*,ws.example.net,*) systemctl try-restart vds-wstunnel-server.service" in text
+    assert 'case " $RENEWED_DOMAINS " in' in text
+    assert '*" ws.example.net "*) systemctl try-restart vds-wstunnel-server.service' in text
+    # мульти-SAN: пробельный матч ловит домен в середине списка
+    import tempfile
+    import subprocess
+    script = text.replace("{unit}", "vds-wstunnel-server.service").replace("{host}", "ws.example.net")
+    fd, probe_path = tempfile.mkstemp(suffix=".sh")
+    with __import__("os").fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(script)
+    __import__("os").chmod(probe_path, 0o755)
+    try:
+        # end-to-end: fake systemctl в PATH → проверяем пробельный матч
+        # (certbot передаёт RENEWED_DOMAINS ЧЕРЕЗ ПРОБЕЛ, мульти-SAN включительно)
+        bin_dir = tmp_path if "tmp_path" in dir() else None
+        # tmp_path недоступен (нет фикстуры) — используем tempfile-каталог
+        import tempfile as _tf
+        bin_dir = _tf.mkdtemp()
+        stub = Path(bin_dir) / "systemctl"
+        log = Path(bin_dir) / "log"
+        stub.write_text(
+            "#!/bin/sh\necho \"$@\" >> " + str(log) + "\nexit 0\n", encoding="utf-8"
+        )
+        stub.chmod(0o755)
+        env = {"PATH": f"{bin_dir}:/usr/bin:/bin",
+               "RENEWED_DOMAINS": ""}
+        for domains, expect in (("ws.example.net", True),
+                                ("asv2.example.net ws.example.net", True),
+                                ("asv2.example.net", False)):
+            log.unlink(missing_ok=True)
+            e = dict(env); e["RENEWED_DOMAINS"] = domains
+            res = subprocess.run(["sh", probe_path], capture_output=True,
+                                 text=True, env=e)
+            assert res.returncode == 0, (domains, res.stderr)
+            restarted = log.exists() and "try-restart" in log.read_text(encoding="utf-8")
+            assert restarted == expect, (domains, restarted)
+        __import__("shutil").rmtree(bin_dir, ignore_errors=True)
+    finally:
+        __import__("os").unlink(probe_path)
 
 
 def test_renew_hook_rejects_ip():
@@ -629,7 +665,7 @@ def test_renew_hook_rejects_ip():
         ws.render_renew_hook("203.0.113.10")
 
 
-def test_ensure_renew_hook_installed_0700(tmp_path, monkeypatch):
+def test_ensure_renew_hook_installed_0755(tmp_path, monkeypatch):
     import stat as _stat
 
     hooks = tmp_path / "renewal-hooks" / "deploy"

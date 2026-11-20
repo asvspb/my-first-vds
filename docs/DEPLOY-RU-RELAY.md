@@ -526,7 +526,8 @@ ExecStartPost `carrier-default-iface.sh` ставит table 100 по актив�
 носителю из state (дефолт awg1, `ip link show` проверяется — юнит не падает).
 
 **Продление LE (WP-P2P-4):** deploy-hook `/etc/letsencrypt/renewal-hooks/deploy/
-vds-wstunnel-reload.sh` (0755) с жёстким фильтром `$RENEWED_DOMAINS` — продление
+vds-wstunnel-reload.sh` (0755) с пробельным матчем `$RENEWED_DOMAINS`
+(мульти-SAN ok; certbot передаёт домены через пробел) — продление
 `ws.<domain>` рестартирует только `vds-wstunnel-server.service`, hysteria и
 наоборот не задеты. Ставится автоматически в `vds relay wstunnel server --apply`.
 
