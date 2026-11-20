@@ -16,7 +16,9 @@
 > Связанные документы: [VPN-PROTOCOLS.md](VPN-PROTOCOLS.md),
 > [SPLIT-TRANSPORTS.md](SPLIT-TRANSPORTS.md) (AWG и аналоги в split-схеме),
 > [CDN-FRONTS.md](CDN-FRONTS.md), [DEPLOY.md](DEPLOY.md),
-> [docs/team/STATUS.md](team/STATUS.md), [docs/adr/](adr/).
+> [docs/team/STATUS.md](team/STATUS.md), [docs/adr/](adr/);
+> текущая оценка живучести и эшелоны до практического потолка —
+> [REVIEW-20261120-resilience-roadmap](team/reports/REVIEW-20261120-resilience-roadmap.md).
 
 ---
 
