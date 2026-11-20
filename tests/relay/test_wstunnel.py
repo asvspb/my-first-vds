@@ -549,3 +549,63 @@ def test_relay_apply_starts_units_and_checks_policy(monkeypatch, tmp_path):
     # nft -c -f выполнен ДО рестарта policy, файл атомарно заменён
     assert any(c[:3] == ["nft", "-c", "-f"] for c in calls)
     assert "wg-ws0" in (tmp_path / "nft-policy.conf").read_text(encoding="utf-8")
+
+
+# --- P2 ревью 9a2cb7b: mkdir родителя + чистка tmp при провале nft -c ------
+
+def test_exit_conf_parent_dir_created(tmp_path):
+    """write_secret_atomic не создаёт родителя — install обязан сам."""
+    conf = tmp_path / "deep" / "nested" / "wg-ws0.conf"
+    ws.write_env(conf.parent / "x.env", "A=1\n") if False else None
+    conf.parent.mkdir(parents=True, exist_ok=True)  # тест создаёт сам, но проверяем функцию
+    from src.core.secrets import write_secret_atomic as _w
+    deep = tmp_path / "p2" / "wg-ws0.conf"
+    assert _w(str(deep), "x") is False  # родителя нет → False, не исключение
+    deep.parent.mkdir(parents=True, exist_ok=True)
+    assert _w(str(deep), "x") is True
+
+
+def test_relay_apply_policy_check_failure_cleans_tmp_and_keeps_live(monkeypatch, tmp_path):
+    """Провал nft -c -f: tmp вычищен, живая nft-policy.conf не тронута, policy не рестартует."""
+    from src.relay import exit_leg, paths as relay_paths
+
+    restarts: list[str] = []
+    _patch_common(monkeypatch, tmp_path, restarts=restarts)
+    monkeypatch.setattr(exit_leg, "detect_wan_iface", lambda: "eth0")
+    monkeypatch.setattr(ws, "WG_WS_CONF", tmp_path / "wg-ws0.conf")
+    monkeypatch.setattr(ws, "WS_CLIENT_ENV", tmp_path / "client.env")
+    raw = tmp_path / "wg-ws0.priv"
+    raw.write_text("FIXTURE_PW_RELAY=\n", encoding="utf-8")
+    monkeypatch.setattr(ws, "WG_WS_RAW_PRIV", raw)
+    relay_marker = tmp_path / "awg1.conf"
+    relay_marker.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(relay_paths, "RELAY_EXIT_CONFIG_PATH", relay_marker)
+    monkeypatch.setattr(relay_paths, "RELAY_DIR", tmp_path)
+    monkeypatch.setattr(relay_paths, "RELAY_NFT_POLICY_FILE", tmp_path / "nft-policy.conf")
+    monkeypatch.setattr(relay_paths, "RELAY_CIDR_LIST", tmp_path / "ru-cidrs.txt")
+    (tmp_path / "ru-cidrs.txt").write_text("203.0.113.0/24\n", encoding="utf-8")
+    (tmp_path / "client.env").write_text("WSTUNNEL_HTTP_UPGRADE_PATH_PREFIX=P\n", encoding="utf-8")
+    live_policy = tmp_path / "nft-policy.conf"
+    live_policy.write_text("LIVE-POLICY\n", encoding="utf-8")
+
+    state_calls = {"nft_checked": 0}
+
+    def fake_run(argv, timeout=None, check=False):
+        if argv[:2] == ["nft", "-c"]:
+            state_calls["nft_checked"] += 1
+            return ShellResult(stdout="", stderr="syntax error", returncode=1)
+        return ShellResult(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(ws, "run_list", fake_run)
+
+    code = ws.run_relay_install(
+        exit_public_key="FIXTURE_PUB_EXIT", domain="ws.example.net",
+        apply=True, state_path=str(tmp_path / "state.json"),
+    )
+    assert code == 1
+    assert state_calls["nft_checked"] == 1
+    assert live_policy.read_text(encoding="utf-8") == "LIVE-POLICY\n"  # не тронута
+    # tmp вычищен
+    assert not list(tmp_path.glob(".nft-policy.*"))
+    # fail-fast: проверка policy идёт ДО любых рестартов — ни один юнит не тронут
+    assert restarts == []

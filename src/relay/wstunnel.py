@@ -643,7 +643,9 @@ def run_exit_install(
                 private_key, exit_public_key = gen_keypair()
             # P1: conf перезаписывается ВСЕГДА — иначе при ротации ключа релея
             # (или исправлении опечатки) в state был бы новый peer, а в conf старый.
-            # Свой private_key exit при этом сохраняется.
+            # Свой private_key exit при этом сохраняется. mkdir обязателен:
+            # write_secret_atomic родителя не создаёт.
+            WG_WS_CONF.parent.mkdir(parents=True, exist_ok=True)
             _write_secret(
                 WG_WS_CONF,
                 render_exit_conf(private_key=private_key, peer_public_key=peer_key),
@@ -813,8 +815,8 @@ def run_relay_install(
                         "живая политика не тронута"
                     )
                 os.replace(tmp_path, relay_paths.RELAY_NFT_POLICY_FILE)
-            except OSError:
-                tmp_path.unlink(missing_ok=True)
+            except BaseException:  # WstunnelError — RuntimeError, не OSError: без
+                tmp_path.unlink(missing_ok=True)  # этого в /etc/vds-relay оставался бы tmp
                 raise
 
             # Порядок: клиент wstunnel → интерфейс → NAT → policy.
