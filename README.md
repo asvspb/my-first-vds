@@ -276,6 +276,8 @@ vds relay maneuver step [--apply] [--force]
                                       # `awg set awg1 listen-port 0 ... endpoint ...` (dry-run
                                       # по умолчанию; --force обходит только cooldown)
 vds relay maneuver rollback [--apply] # вернуть previous_port (идемпотентно, если он же текущий)
+                                      # apply-путь: FileLock до чтений; после успеха
+                                      # счётчик отказов сбрасывается, failed_ports — по cooldown
 vds relay add-client phone --keepalive 25 --qr
                                      # Пир awg0: .conf (0600), endpoint relay-домен:443,
                                      # DNS = 1.1.1.1,1.0.0.1, AllowedIPs 0.0.0.0/0 (v4-only)
