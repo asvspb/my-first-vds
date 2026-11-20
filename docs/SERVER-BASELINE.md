@@ -349,7 +349,8 @@ EROFS.
 ### 5.12 Правило знаний: реагирование на вердикты PROBE-BURST / RU-PROBE-SUSPECT
 
 **Правило:** `PROBE-BURST` (всплеск 40-байтных `syn_bare`) — конфигурацию не
-менять. `RU-PROBE-SUSPECT` (≥2 новых RU-IP с валидным ClientHello в окне) —
+менять. `RU-PROBE-SUSPECT` (≥2 новых RU-IP с валидным ClientHello в окне и,
+при per-element счётчиках, Σ delta ≥ 6; «новизна» — окно 24 ч, а не час) —
 готовить переключение клиента на резервный транспорт (Hy2 / asv1 / RU-relay).
 **Почему:** PROBE-BURST — слепой масс-скан (Shodan/Censys), TLS-пейлоада не
 несёт. RU-PROBE-SUSPECT = ТСПУ зафиксировал подозрительный паттерн и запустил

@@ -652,8 +652,8 @@ class TestNewRuIps:
         assert probing.save_snapshot(prev, snap_path)
         current = self._state({
             "203.0.113.5": 12,
-            "203.0.113.101": 2,
-            "203.0.113.102": 1,
+            "203.0.113.101": 4,
+            "203.0.113.102": 3,
             "203.0.113.103": 3,
             "198.51.100.9": 5,  # не RU — не считается
         }, syn_valid=10)
@@ -1142,20 +1142,32 @@ class TestThreatMachine:
         t2 = _update(t1)
         assert t2.level == probing.THREAT_QUIET  # windows=2 — разрешено
 
-    def test_high_decay_exit_72_windows_then_quiet(self) -> None:
+    def test_high_decay_exit_24_windows_then_quiet(self) -> None:
+        """DECISION ALERT/PROBE-TUNING: выход из high за 24 окна без SUSPECT."""
+        assert probing.HIGH_EXIT_WINDOWS == 24
         t = probing.ThreatState(
             level=probing.THREAT_HIGH, windows_at_level=5, decay=probing.HIGH_EXIT_WINDOWS - 1,
         )
-        t = _update(t)  # decay достигает 72, windows=6
+        t = _update(t)  # decay достигает 24, windows=6
         assert t.level == probing.THREAT_ELEVATED
-        assert "72" in t.reason
+        assert "24" in t.reason
         for _ in range(probing.ELEVATED_QUIET_EXIT):
             t = _update(t)
         assert t.level == probing.THREAT_QUIET
 
-    def test_any_new_ru_resets_decay(self) -> None:
+    def test_background_ru_ipa_does_not_reset_decay(self) -> None:
+        """Фоновый RU-IP в quiet-окне (не SUSPECT) decay НЕ сбрасывает.
+
+        Раньше обнулял любой new_ru — из-за этого на публичном IPv4 high
+        не снимался никогда (полевой разбор 2026-11-20).
+        """
+        t = probing.ThreatState(level=probing.THREAT_HIGH, windows_at_level=10, decay=5)
+        t = _update(t, new_ru=1)  # 1 новый RU-IP, вердикт quiet
+        assert t.decay == 6 and t.level == probing.THREAT_HIGH
+
+    def test_suspect_resets_decay(self) -> None:
         t = probing.ThreatState(level=probing.THREAT_HIGH, windows_at_level=10, decay=50)
-        t = _update(t, new_ru=1)  # 1 новый RU-IP ниже порога SUSPECT — всё равно сброс
+        t = _update(t, verdict="RU-PROBE-SUSPECT", new_ru=2)
         assert t.decay == 0 and t.level == probing.THREAT_HIGH
 
     def test_decay_frozen_during_lockdown(self) -> None:
@@ -1207,6 +1219,7 @@ class TestSnapshotV2:
         snap = probing.load_snapshot(p)
         assert snap["syn_bare"] == 5
         assert snap["threat"] == {} and snap["config"] == {} and snap["own_ips"] == {}
+        assert snap["seen_ru_ips"] == {}
 
 
 # ---------------------------------------------------------------------------
@@ -1346,10 +1359,10 @@ class TestRuSynNew:
         report = self._report(tmp_path, monkeypatch, self._lockdown(True))
         assert report.verdict.name == "quiet"  # syn_valid=0 гасит SUSPECT
         assert sorted(report.ru_syn_new) == ["203.0.113.101", "203.0.113.102"]
-        # threat остаётся high; новые RU-IP по SYN сбросили decay (продление
-        # сигнала), но НЕ декрементируют заморозку: инкремент запрещён §9.A
+        # threat остаётся high; decay в локе заморожен (§9.A) и new_ru его
+        # больше НЕ сбрасывает — только подтверждённый RU-PROBE-SUSPECT
         assert report.threat.level == probing.THREAT_HIGH
-        assert report.threat.decay == 0
+        assert report.threat.decay == 3
 
     def test_no_lockdown_no_ru_syn_new(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1395,7 +1408,7 @@ class TestWatchJsonContract:
         }, snap_path)
         current = probing.NftState(
             syn_bare=10, syn_valid=5, per_element_counters=True,
-            probers={"203.0.113.101": 2, "203.0.113.102": 1},
+            probers={"203.0.113.101": 4, "203.0.113.102": 3},
         )
         report = probing.build_report(
             current, run=lambda args, **kw: _shell_result(),
@@ -1661,3 +1674,102 @@ class TestNewCli:
         ):
             out = runner.invoke(app, args).output.lower()
             assert "password" not in out and "uuid" not in out
+
+
+# ---------------------------------------------------------------------------
+# DECISION ALERT/PROBE-TUNING (2026-11-20): порог Σ delta, кэш seen_ru_ips
+# ---------------------------------------------------------------------------
+
+class TestProbeTuning:
+    """Полевой разбор 24ч: фоновые RU-сканеры не должны держать high."""
+
+    RU_FILE = "203.0.113.0/24\n"
+
+    def _ru_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        ru_file = tmp_path / "ru-cidrs.txt"
+        ru_file.write_text(self.RU_FILE, encoding="utf-8")
+        monkeypatch.setattr(probing, "RU_CIDR_FILE", ru_file)
+
+    def _report(
+        self, tmp_path: Path, probers: dict[str, int], *, snapshot: dict | None = None,
+        per_element: bool = True,
+    ) -> probing.WatchReport:
+        snap_path = tmp_path / "snap.json"
+        payload = {
+            "version": 2, "ts": "t", "syn_bare": 0, "syn_valid": 0, "udp_443": 0,
+            "probers": {}, "config": {}, "own_ips": {},
+        }
+        if snapshot:
+            payload.update(snapshot)
+        assert probing.write_snapshot_payload(payload, snap_path)
+        current = probing.NftState(
+            syn_bare=100, syn_valid=10, udp_443=0, probers=probers,
+            per_element_counters=per_element,
+        )
+        return probing.build_report(
+            current, run=lambda args, **kw: _shell_result(),
+            snapshot_path=snap_path, server_ip="",
+            now=lambda: probing.datetime(2026, 11, 20, 12, 0, 0),
+        )
+
+    def test_two_scanners_two_syns_each_do_not_trigger(self, tmp_path, monkeypatch):
+        """2 новых RU-IP × 2 SYN = Σ4 < 6 → quiet (как в полевом логе)."""
+        self._ru_file(tmp_path, monkeypatch)
+        report = self._report(tmp_path, {"203.0.113.11": 2, "203.0.113.12": 2})
+        assert report.verdict.name == "quiet"
+        assert len(report.new_ru_ips) == 2  # видны, но порог не берут
+
+    def test_probing_series_with_enough_delta_triggers(self, tmp_path, monkeypatch):
+        """2 новых RU-IP × 4 SYN = Σ8 ≥ 6 → SUSPECT."""
+        self._ru_file(tmp_path, monkeypatch)
+        report = self._report(tmp_path, {"203.0.113.11": 4, "203.0.113.12": 4})
+        assert report.verdict.name == "RU-PROBE-SUSPECT"
+        assert "Σ delta 8" in report.verdict.reasons[0]
+
+    def test_fallback_without_counters_uses_len_only(self, tmp_path, monkeypatch):
+        """per_element=False: дельт нет — работает старый порог по числу IP."""
+        self._ru_file(tmp_path, monkeypatch)
+        report = self._report(
+            tmp_path, {"203.0.113.11": 0, "203.0.113.12": 0}, per_element=False,
+        )
+        assert report.verdict.name == "RU-PROBE-SUSPECT"
+
+    def test_seen_recent_ip_is_not_new(self, tmp_path, monkeypatch):
+        """IP из seen_ru_ips (свежий) не считается новым, даже если вышел из nft-сета."""
+        self._ru_file(tmp_path, monkeypatch)
+        seen = {
+            "203.0.113.11": "2026-11-20T11:00:00+00:00",
+            "203.0.113.12": "2026-11-20T11:30:00+00:00",
+        }
+        report = self._report(
+            tmp_path, {"203.0.113.11": 5, "203.0.113.12": 5},
+            snapshot={"seen_ru_ips": seen},
+        )
+        assert report.new_ru_ips == []
+        assert report.verdict.name == "quiet"
+
+    def test_seen_ip_expired_by_ttl_is_new_again(self, tmp_path, monkeypatch):
+        self._ru_file(tmp_path, monkeypatch)
+        seen = {
+            "203.0.113.11": "2026-11-19T10:00:00+00:00",  # 26 ч назад → истёк
+            "203.0.113.12": "2026-11-19T10:00:00+00:00",
+        }
+        report = self._report(
+            tmp_path, {"203.0.113.11": 4, "203.0.113.12": 4},
+            snapshot={"seen_ru_ips": seen},
+        )
+        assert len(report.new_ru_ips) == 2
+        assert report.verdict.name == "RU-PROBE-SUSPECT"
+
+    def test_seen_cache_returned_for_snapshot(self, tmp_path, monkeypatch):
+        self._ru_file(tmp_path, monkeypatch)
+        report = self._report(tmp_path, {"203.0.113.11": 2})
+        payload = getattr(report, "_seen_ru_ips", {})
+        assert "203.0.113.11" in payload
+        assert payload["203.0.113.11"].startswith("2026-11-20T12:00:00")
+
+    def test_old_snapshot_without_seen_key_loads(self, tmp_path, monkeypatch):
+        """Обратная совместимость: снапшот v2 без seen_ru_ips работает."""
+        self._ru_file(tmp_path, monkeypatch)
+        report = self._report(tmp_path, {"203.0.113.11": 4, "203.0.113.12": 4})
+        assert report.verdict.name == "RU-PROBE-SUSPECT"

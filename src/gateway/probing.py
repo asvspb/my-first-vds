@@ -102,6 +102,10 @@ BURST_RATIO = 0.90           # доля bare-SYN без payload
 BURST_MIN_VOLUME = 100       # минимальный объём SYNs для ratio-критерия
 DEFAULT_WINDOW_HOURS = 1
 NEW_RU_IPS_THRESHOLD = 2     # новых RU-IP за окно для RU-PROBE-SUSPECT
+NEW_RU_MIN_DELTA_SUM = 6     # и суммарная дельта SYN по ним (per-element):
+                             # 2 фоновых сканера × 2 SYN = 4 < 6 порог не берут
+SEEN_RU_TTL_H = 24           # память «новизны» RU-IP, ч (nft-сет живёт 1 ч)
+SEEN_RU_CAP = 500            # предел кэша seen_ru_ips (хранятся самые свежие)
 
 # --- verified_session_ips (SPEC-20261116-surface-hardening §1.2, HF-1) ---
 # Инвариант против «бот ТСПУ проходит handshake»: бот устанавливает
@@ -130,7 +134,7 @@ THREAT_QUIET = "quiet"
 THREAT_ELEVATED = "elevated"
 THREAT_HIGH = "high"
 HIGH_STREAK = 2              # окон RU-PROBE-SUSPECT подряд для входа в high
-HIGH_EXIT_WINDOWS = 72       # окнов без новых RU-IP для выхода из high (decay)
+HIGH_EXIT_WINDOWS = 24       # окнов БЕЗ RU-PROBE-SUSPECT для выхода из high
 ELEVATED_QUIET_EXIT = 3      # тихих окон подряд для выхода из elevated
 FLAP_GUARD_WINDOWS = 2       # даунгрейд не раньше 2 окон после апгрейда
 
@@ -378,6 +382,7 @@ def load_snapshot(path: Path = SNAPSHOT_PATH) -> dict[str, object]:
     threat = data.get("threat")
     config = data.get("config")
     own_ips = data.get("own_ips")
+    seen_ru = data.get("seen_ru_ips")
     snap = {
         "version": data.get("version", SNAPSHOT_VERSION),
         "ts": str(data.get("ts", "")),
@@ -390,6 +395,10 @@ def load_snapshot(path: Path = SNAPSHOT_PATH) -> dict[str, object]:
         "threat": threat if isinstance(threat, dict) else {},
         "config": config if isinstance(config, dict) else {},
         "own_ips": own_ips if isinstance(own_ips, dict) else {},
+        # Кэш «уже виденных» RU-IP (DECISION ALERT/PROBE-TUNING): TTL 24 ч —
+        # nft-сет probers4 живёт 1 ч, поэтому без него сканер с периодом ~61 мин
+        # каждый час выглядел «новым».
+        "seen_ru_ips": seen_ru if isinstance(seen_ru, dict) else {},
     }
     snap["own_ips_cache"] = own_ips_cache_entries(data)
     return snap
@@ -534,6 +543,9 @@ def compute_verdict(
     new_ru_ips: Optional[list[str]] = None,
     ru_available: bool = False,
     syn_valid_total: int = 0,
+    *,
+    new_ru_delta_sum: int = 0,
+    require_delta_sum: bool = False,
 ) -> Verdict:
     """Вердикты окна (границы тестируются):
 
@@ -543,6 +555,10 @@ def compute_verdict(
       ревью 2026-11-16 3c-iii) — и новых IP из RU-зоны (не из снапшота,
       не свой IP сервера) >= NEW_RU_IPS_THRESHOLD. Ловит профиль ТСПУ:
       точечное зондирование с RU-адресов даже при 2–5 шт/час.
+      При `require_delta_sum=True` (есть per-element счётчики) дополнительно
+      нужно `new_ru_delta_sum >= NEW_RU_MIN_DELTA_SUM`: два фоновых сканера по
+      2 SYN дают 4 < 6, серия зондирования — обычно 6+. На фолбэке без
+      счётчиков (дельта=0) условие не применяется.
     - **PROBE-BURST**: unique_probers >= threshold ИЛИ ratio bare-no-payload
       >= 0.90 при объёме SYNs > 100.
     - иначе quiet. При одновременном срабатывании — RU-PROBE-SUSPECT с
@@ -565,11 +581,22 @@ def compute_verdict(
     burst = bool(reasons)
 
     new_ru = list(new_ru_ips or [])
-    if ru_available and syn_valid_total > 0 and len(new_ru) >= NEW_RU_IPS_THRESHOLD:
+    delta_ok = (not require_delta_sum) or new_ru_delta_sum >= NEW_RU_MIN_DELTA_SUM
+    if (
+        ru_available
+        and syn_valid_total > 0
+        and len(new_ru) >= NEW_RU_IPS_THRESHOLD
+        and delta_ok
+    ):
+        sum_part = (
+            f", Σ delta {new_ru_delta_sum} >= {NEW_RU_MIN_DELTA_SUM}"
+            if require_delta_sum
+            else ""
+        )
         reasons.insert(
             0,
             f"новых IP из RU-зоны за окно: {len(new_ru)} >= {NEW_RU_IPS_THRESHOLD} "
-            f"({', '.join(new_ru[:5])}{'…' if len(new_ru) > 5 else ''})",
+            f"({', '.join(new_ru[:5])}{'…' if len(new_ru) > 5 else ''}){sum_part}",
         )
         return Verdict("RU-PROBE-SUSPECT", reasons)
     return Verdict("PROBE-BURST" if burst else "quiet", reasons)
@@ -586,7 +613,7 @@ class ThreatState:
 
     - ru_streak: окон RU-PROBE-SUSPECT подряд (гистерезис входа в high);
     - quiet_streak: тихих окон подряд (выход из elevated: 3);
-    - decay: окнов в high без новых RU-IP (выход: 72; ЗАМОРОЖЕН при
+    - decay: окнов в high без RU-PROBE-SUSPECT (выход: 24; ЗАМОРОЖЕН при
       lockdown.active — §9.A: лок ослепляет syn_valid, RU-SUSPECT повторно
       не сработает, счётчик должен тикать только после unlock);
     - windows_at_level: окон, проведённых на текущем уровне (flapping-защита:
@@ -713,8 +740,10 @@ def update_threat(
         return nxt
 
     # prev.level == high
-    if new_ru_count > 0:
-        # любой новый RU-IP (даже ниже порога SUSPECT) обнуляет decay-отсчёт
+    if ru_hit:
+        # decay сбрасывает ТОЛЬКО подтверждённый RU-PROBE-SUSPECT. Раньше его
+        # обнулял любой одиночный фоновый RU-IP в quiet-окне — на публичном
+        # IPv4 выход из high становился математически недостижим.
         nxt.decay = 0
         nxt.reason = prev.reason or "high"
     elif lockdown_active:
@@ -1403,6 +1432,43 @@ def _server_public_ip() -> str:
     return public_ip() or ""
 
 
+def _parse_iso_dt(value: object) -> Optional[datetime]:
+    """ISO-строка → datetime (naive считаем UTC); мусор → None."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _load_seen_ru(snapshot: dict[str, object], now_dt: datetime) -> dict[str, datetime]:
+    """Кэш «уже виденных» RU-IP из снапшота; записи старше TTL отбрасываются.
+
+    Нужен потому, что nft-сет probers4 живёт 1 ч: сканер, стучащийся раз в
+    ~61 мин, каждый раз выглядел «новым» и обнулял decay в high.
+    """
+    raw = snapshot.get("seen_ru_ips")
+    seen: dict[str, datetime] = {}
+    if not isinstance(raw, dict):
+        return seen
+    if now_dt.tzinfo is None:  # naive-время из тестов/старых вызовов — считаем UTC
+        now_dt = now_dt.replace(tzinfo=timezone.utc)
+    cutoff = now_dt - timedelta(hours=SEEN_RU_TTL_H)
+    for ip, ts in raw.items():
+        dt = _parse_iso_dt(ts)
+        if dt is not None and dt >= cutoff:
+            seen[str(ip)] = dt
+    return seen
+
+
+def _seen_ru_payload(seen: dict[str, datetime]) -> dict[str, str]:
+    """Сериализация кэша: не больше SEEN_RU_CAP самых свежих записей."""
+    newest = sorted(seen.items(), key=lambda kv: kv[1], reverse=True)[:SEEN_RU_CAP]
+    return {ip: dt.isoformat(timespec="seconds") for ip, dt in newest}
+
+
 def build_report(
     current: NftState,
     since_hours: int = DEFAULT_WINDOW_HOURS,
@@ -1457,6 +1523,8 @@ def build_report(
     snapshot_keys = set(snap_probers)
 
     ru_networks = load_ru_cidrs()
+    end = now()
+    seen_ru = _load_seen_ru(snapshot, end)
     geo_cache: dict[str, str] = {}
     new_ru_ips: list[str] = []
     ru_hits: list[RuIpHit] = []
@@ -1487,18 +1555,24 @@ def build_report(
                 continue
             returned = ip in snapshot_keys
             ru_hits.append(RuIpHit(ip=ip, delta=d, packets=packets, returned=returned))
-            if not returned:
+            # «новый» = не в текущем снимке И не встречался за SEEN_RU_TTL_H:
+            # фоновый сканер считается один раз в сутки, а не каждый час.
+            if not returned and ip not in seen_ru:
                 new_ru_ips.append(ip)
+            seen_ru[ip] = end
 
+    new_ru_set = set(new_ru_ips)
+    new_ru_delta = sum(h.delta for h in ru_hits if h.ip in new_ru_set)
     verdict = compute_verdict(
         delta,
         threshold,
         new_ru_ips=new_ru_ips,
         ru_available=bool(ru_networks),
         syn_valid_total=delta.syn_valid + delta.syn_valid_extra,  # окно, не аптайм; extra-порты в SUSPECT, PROBE-BURST — только 443
+        new_ru_delta_sum=new_ru_delta,
+        require_delta_sum=current.per_element_counters,
     )
 
-    end = now()
     start = end - timedelta(hours=since_hours)
     since = start.strftime("%Y-%m-%d %H:%M:%S")
     hits = scan_journal(since, run)
@@ -1542,6 +1616,7 @@ def build_report(
     )
     report._ru_networks = ru_networks
     report._geo_cache = geo_cache
+    report._seen_ru_ips = _seen_ru_payload(seen_ru)
     return report
 
 
@@ -2215,6 +2290,9 @@ def cmd_watch(
                 )
                 return 1
             report.own_sources = sources
+            # Кэш «уже виденных» RU-IP (TTL 24 ч) — только при record=True:
+            # read-only прогон (`watch` без --record) снапшот не трогает.
+            seen_payload = getattr(report, "_seen_ru_ips", {})
             if record:
                 # реакции ДО вывода: json отдаёт пост-реакционное состояние лока
                 run_auto_reactions(report, cfg, state_path=state_path)
@@ -2231,6 +2309,7 @@ def cmd_watch(
                         "config": cfg,
                         "own_ips": own_cache,
                         "own_ips_cache": new_cache,
+                        "seen_ru_ips": seen_payload,
                     },
                 )
     except LockError:

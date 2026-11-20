@@ -189,8 +189,10 @@ xray/hysteria2 (access-log/loglevel — отдельное решение вла
 поэтому `sudo vds … install` не подменяет интерпретатор системным.
 - **Серверная реакция (SPEC-20261116-probe-response, кратко):** вердикты
   окон агрегируются в threat-level `quiet/elevated/high` (high = RU-SUSPECT
-  2 окна подряд; BURST-максимум elevated; выход high = 72 окна без новых
-  RU-IP, decay заморожен при активном локе — лок ослепляет syn_valid;
+  2 окна подряд; BURST-максимум elevated; выход high = **24 окна без
+  RU-PROBE-SUSPECT**; «новизна» RU-IP — окно 24 ч, порог Σ delta ≥ 6 при
+  per-element счётчиках; выход — `elevated` → 3 тихих → `quiet`; decay
+  заморожен при активном локе — лок ослепляет syn_valid;
   состояние в снапшоте, переживает рестарт). Свои клиенты исключаются:
   endpoint-IP активных AWG-пиров (`awg show`, кэш в снапшоте) + серверный
   IP + whitelist `/etc/vds-probe-watch/allow-ips.txt` +
