@@ -105,9 +105,13 @@ rollback'ом 51901 (это заодно проверило ветку отка�
   нога поднялась сама на 51900 из персистнутого `Endpoint`, `table 100` и
   fwmark-правило целы, `maneuver.timer` остался `disabled`.
 - ~~Первый реальный эпизод блока с клиентом за релеем~~ — **ветка gate по `awg0`
-  валидирована вживую 2026-11-20 (§3.1)**. Осталось решение владельца по
-  `--enable-auto` (критерий: AC-1 + AC-2 + ветка подтверждена + 0 ложных
-  подозрений) — включается `vds relay maneuver install --apply --enable-auto`.
+  валидирована вживую 2026-11-20 (§3.1)**.
+- ~~Решение по `--enable-auto`~~ — **автопилот включён 2026-11-20** (решение
+  владельца): `vds relay maneuver install --apply --enable-auto --interval 60s`;
+  `timer_enabled=true`, `auto_timer_active=true`, тики каждые 60 с
+  (`state=healthy port=51900 liveness=ok ms=31 activity=1 fails=0/3`),
+  сервис `Result=success` (нет 226/NAMESPACE). Стоп-кран:
+  `sudo systemctl disable --now vds-relay-maneuver.timer`.
 - `vpn-guard.service` не трогался (окно G6 до 2026-11-24 15:24 MSK).
 
 ## 6. Ребут-протокол (2026-11-20, AC-2)
