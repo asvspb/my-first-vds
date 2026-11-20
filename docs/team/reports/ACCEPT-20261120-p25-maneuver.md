@@ -89,6 +89,7 @@ rollback'ом 51901 (это заодно проверило ветку отка�
 | `Endpoint` в `/etc/amnezia/awg1.conf` после ребута | `213.108.23.119:51900` — персист `persist_endpoint` пережил ребут |
 | `awg show awg1` через ~2 мин после ребута | handshake 1 м 12 с — **нога восстановилась без `maneuver` и без ручных действий** |
 | `maneuver status --json` | `state=cooldown`, `endpoint_port=51900`, пул 51900–51911, таймер `disabled`/`inactive` |
+| `md5sum /opt/my-vds/src/relay/maneuver.py` | `90b2ae2de358dacd575371b72c85e904` = HEAD `9335580`; `to={target}` присутствует (стр. 1360) — **досинхронизация перед `--enable-auto` не требуется** |
 
 Вывод: ребут не требует ни `step`, ни `rollback` — состояние порта живёт в
 конфиге, а `state=cooldown` истекает сам (артефакт приёмки, не блокер).
