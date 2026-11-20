@@ -102,6 +102,15 @@ TAG_FAILED = "ALERT-FAILED"
 TAG_SKIP = "ALERT-SKIP"
 
 
+def _is_reminder(event_type: str) -> bool:
+    """Напоминание о неизменном состоянии (`*_still`).
+
+    Такие тики идут по своей длинной каденции и НЕ должны накручивать счётчик
+    подавлённого: иначе summary каждый час пересказывает «high всё ещё high».
+    """
+    return event_type.endswith("_still")
+
+
 def _tag(text: str) -> None:
     """Машиночитаемая строка в journal: без переносов и разметки."""
     console.print(text, markup=False, highlight=False, soft_wrap=True)
@@ -300,7 +309,7 @@ def _handle(
     """
     decision = decide(event, severity, state, now, cooldown_min, cfg.rate_limit_per_hour)
     if not decision.send:
-        if decision.reason in ("duplicate", "cooldown", "rate_limited"):
+        if decision.reason in ("duplicate", "cooldown", "rate_limited") and not _is_reminder(event_type):
             bump_suppressed(state, event_type)
         _tag(f"{TAG_SKIP} {event_type} {decision.reason}")
         return False
@@ -319,7 +328,8 @@ def _handle(
     ready = _ready_channels(cfg, state, now)
     if not ready:
         _tag(f"{TAG_SKIP} {event_type} rate_limited")
-        bump_suppressed(state, event_type)
+        if not _is_reminder(event_type):
+            bump_suppressed(state, event_type)
         return False
 
     if _deliver(
@@ -478,6 +488,13 @@ def _tick(
                 event_type = "threat_elevated" if level == "elevated" else (
                     "threat_high_still" if last_sev == 2 else "threat_high"
                 )
+                # «Всё ещё high» — длинная каденция (симметрично lockdown_still);
+                # переход elevated→high остаётся мгновенным (cooldown_min).
+                reminder_min = (
+                    cfg.high_reminder_h * 60
+                    if event_type == "threat_high_still"
+                    else cfg.cooldown_min
+                )
                 subject, body = format_message(event_type, cfg, payload)
                 _handle(
                     event="threat",
@@ -485,7 +502,7 @@ def _tick(
                     severity=severity,
                     subject=subject,
                     body=body,
-                    cooldown_min=cfg.cooldown_min,
+                    cooldown_min=reminder_min,
                     **common,
                 )
 

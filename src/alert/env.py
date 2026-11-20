@@ -58,6 +58,7 @@ class AlertConfig:
     cooldown_min: int = 30
     rate_limit_per_hour: int = 6
     lock_reminder_h: int = 6
+    high_reminder_h: int = 6
     telemetry_reminder_h: int = 24
     relay_peer: str = "relay"
     relay_iface: str = "awg0"
@@ -74,6 +75,11 @@ def _int(env: dict[str, str], key: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _int_clamped(env: dict[str, str], key: str, default: int, lo: int, hi: int) -> int:
+    """int из env с ограничением диапазона (значения вне — к ближней границе)."""
+    return max(lo, min(hi, _int(env, key, default)))
 
 
 def _bool(env: dict[str, str], key: str, default: bool = False) -> bool:
@@ -111,6 +117,9 @@ def load_config(path: str = ALERT_ENV_PATH) -> AlertConfig:
         cooldown_min=_int(env, "ALERT_COOLDOWN_MIN", 30),
         rate_limit_per_hour=_int(env, "ALERT_RATE_LIMIT_PER_HOUR", 6),
         lock_reminder_h=_int(env, "ALERT_LOCK_REMINDER_H", 6),
+        # Каденция напоминания о затяжном high: 1..24 ч, дефолт 6 (симметрично
+        # lock_reminder_h). Переходы в/из high остаются мгновенными.
+        high_reminder_h=_int_clamped(env, "ALERT_HIGH_REMINDER_H", 6, 1, 24),
         telemetry_reminder_h=_int(env, "ALERT_TELEMETRY_REMINDER_H", 24),
         relay_peer=(env.get("ALERT_RELAY_PEER") or "").strip() or "relay",
         relay_iface=(env.get("ALERT_RELAY_IFACE") or "").strip() or "awg0",
@@ -196,6 +205,7 @@ def render_env(cfg: AlertConfig, *, with_secrets: bool) -> str:
         f"ALERT_COOLDOWN_MIN={cfg.cooldown_min}",
         f"ALERT_RATE_LIMIT_PER_HOUR={cfg.rate_limit_per_hour}",
         f"ALERT_LOCK_REMINDER_H={cfg.lock_reminder_h}",
+        f"ALERT_HIGH_REMINDER_H={cfg.high_reminder_h}",
         f"ALERT_TELEMETRY_REMINDER_H={cfg.telemetry_reminder_h}",
         f"ALERT_RELAY_PEER={cfg.relay_peer}",
         f"ALERT_RELAY_IFACE={cfg.relay_iface}",

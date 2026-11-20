@@ -410,6 +410,7 @@ ALERT_HEARTBEAT_H=24
 ALERT_COOLDOWN_MIN=30
 ALERT_RATE_LIMIT_PER_HOUR=6
 ALERT_LOCK_REMINDER_H=6
+ALERT_HIGH_REMINDER_H=6
 ALERT_TELEMETRY_REMINDER_H=24
 ALERT_RELAY_PEER=relay
 ALERT_RELAY_PROBE_PORT=443
@@ -559,6 +560,18 @@ telemetry_unavailable, heartbeat, summary}`
 `journalctl -u vds-alert-watch`. Форензика доставки — там.
 
 ---
+
+### 3.8a. Уведомление «всё ещё high» (DECISION ALERT-TUNING, 2026-11-20)
+
+`threat_high_still` — состояние уже известно, меняется редко. Короткий
+`ALERT_COOLDOWN_MIN` (30 мин) даёт ~45 карточек в сутки и поток сводок, поэтому:
+
+- `threat_high_still` идёт по `ALERT_HIGH_REMINDER_H` (**дефолт 6 ч, диапазон
+  1..24**, как у `lockdown_still`); при 6 ч — максимум 4 карточки в сутки;
+- переходы `elevated → high` (`threat_high`) и `high → quiet`
+  (`threat_release`) остаются **мгновенными** (`ALERT_COOLDOWN_MIN`);
+- подавленные тики `*_still` **не накручивают** счётчик `suppressed` и не
+  порождают `summary` — иначе каждый час уходит пустая сводка «high всё ещё high».
 
 ### 3.9. Уведомление о локе (FR-1 п.4)
 

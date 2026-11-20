@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -542,3 +543,82 @@ def test_channel_not_configured_skips(tmp_path, gw):
         watch.console = original
     assert code == 0
     assert "ALERT-SKIP threat_elevated channel_not_configured" in fake.lines
+
+
+# ---------------------------------------------------------------------------
+# Каденция «всё ещё high» (SPEC-20261117 §3.6, ALERT_HIGH_REMINDER_H)
+# ---------------------------------------------------------------------------
+
+def _seed_high_state(tmp_path, *, last_sent_ago_h=1):
+    """state с уже отправленным high (severity 2) — вход в ветку *_still."""
+    path = tmp_path / "alert-state.json"
+    payload = {
+        "version": 1,
+        "sources": {
+            "heartbeat": {"last_sent": iso(NOW - timedelta(hours=1))},
+            "threat": {
+                "last_sent": iso(NOW - timedelta(hours=last_sent_ago_h)),
+                "last_sent_type": "threat_high_still",
+                "severity": 2,
+            },
+        },
+        "window": [],
+        "suppressed": {},
+        "failures": {},
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_high_still_uses_long_reminder_not_30min(tmp_path, gw):
+    """Через 35 мин повтор НЕ уходит (было бы при 30-мин cooldown)."""
+    state = _seed_high_state(tmp_path, last_sent_ago_h=1)
+    sender = Sender()
+    _, lines = _tick(
+        tmp_path, sender=sender, state_path=state,
+        moment=NOW + timedelta(minutes=35), probe_kwargs={"level": "high"},
+    )
+    assert sender.calls == []
+    assert "ALERT-SKIP threat_high_still duplicate" in lines
+
+
+def test_high_still_sends_after_reminder_window(tmp_path, gw):
+    state = _seed_high_state(tmp_path, last_sent_ago_h=1)
+    sender = Sender()
+    moment = NOW + timedelta(hours=7)
+    _, lines = _tick(
+        tmp_path, sender=sender, state_path=state, moment=moment,
+        probe_kwargs={
+            "level": "high",
+            "ts": (moment - timedelta(minutes=5)).isoformat(),  # свежий снапшот
+        },
+    )
+    assert len(sender.calls) == 1
+    assert "ALERT-SENT smtp threat_high_still" in lines
+
+
+def test_suppressed_high_still_does_not_feed_summary(tmp_path, gw):
+    """Подавленный *_still не накручивает счётчик → summary не рождается."""
+    state = _seed_high_state(tmp_path, last_sent_ago_h=1)
+    sender = Sender()
+    _, lines = _tick(
+        tmp_path, sender=sender, state_path=state,
+        moment=NOW + timedelta(minutes=35), probe_kwargs={"level": "high"},
+    )
+    assert not any("summary" in line for line in lines)
+    saved = json.loads(pathlib.Path(state).read_text(encoding="utf-8"))
+    assert not saved.get("suppressed"), saved.get("suppressed")
+
+
+def test_high_transition_stays_immediate(tmp_path, gw):
+    """Переход elevated → high по-прежнему мгновенный (короткий cooldown)."""
+    state = _seed_alert_state(tmp_path)
+    sender = Sender()
+    _tick(tmp_path, sender=sender, state_path=state)  # elevated
+    sender2 = Sender()
+    _, lines = _tick(
+        tmp_path, sender=sender2, state_path=state,
+        moment=NOW + timedelta(minutes=5), probe_kwargs={"level": "high"},
+    )
+    assert len(sender2.calls) == 1
+    assert "ALERT-SENT smtp threat_high" in lines

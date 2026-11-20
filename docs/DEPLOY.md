@@ -277,11 +277,16 @@ vds gateway probe-watch ru-cidr install --apply    # RU-CIDR без релея: 
    не перезаписывается без `--force`.
 4. `sudo vds alert test` (или `--channel smtp` — быстрая проверка почты) —
    реальная отправка, **без** записи state.
-5. `sudo vds alert status` — сверить каналы, юниты и coverage (что «слепо» и
+5. Каденция уведомлений: повтор того же уровня — `ALERT_COOLDOWN_MIN` (30 мин),
+   «всё ещё high» — `ALERT_HIGH_REMINDER_H` (6 ч, диапазон 1..24), напоминание о
+   локе — 6 ч; переходы уровня и снятие лока — мгновенно. Подавленные `*_still`
+   не порождают сводку.
+
+6. `sudo vds alert status` — сверить каналы, юниты и coverage (что «слепо» и
    почему). `--json` машинно читается и не содержит значений секретов. Без root
    статус работает в урезанном виде (`alert.env` 0600 не читается) — это норма,
    для coverage нужен `sudo`.
-6. `sudo vds alert watch --no-send` — прогнать тик без отправки: `relay_pulse` не
+7. `sudo vds alert watch --no-send` — прогнать тик без отправки: `relay_pulse` не
    должен быть `inconclusive` при живом канале (`idle` допустим, если на `awg1`
    не выставлен `PersistentKeepalive` — см. DEPLOY-RU-RELAY §4).
 

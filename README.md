@@ -206,6 +206,8 @@ vds alert install --apply           # Юниты vds-alert-watch + /etc/vds/aler
 vds alert install --channel smtp --apply   # только почта (без --channel — авто по парам ключей)
 vds alert install --interval 2m --handshake-threshold 300s --heartbeat 24h  # тик/пульс/dead-man
 vds alert install --force --apply   # перезаписать существующий alert.env
+                                     # каденция: повтор уровня 30 мин, «всё ещё high» —
+                                     #   ALERT_HIGH_REMINDER_H (6 ч, 1..24), лок — 6 ч
 vds alert test                      # Тестовое сообщение во все активные каналы (root)
 vds alert test --channel smtp       # Проверить именно почту (App Password)
 vds alert status                    # Каналы/юниты/coverage; --json — без секретов

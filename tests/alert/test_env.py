@@ -127,3 +127,30 @@ def test_enabled_checks_parsed_from_csv(tmp_path):
     path = tmp_path / "alert.env"
     path.write_text("ALERT_CHECKS=threat,lockdown\n", encoding="utf-8")
     assert load_config(str(path)).enabled_checks == ("threat", "lockdown")
+
+
+# ---------------------------------------------------------------------------
+# ALERT_HIGH_REMINDER_H: дефолт 6 ч, диапазон 1..24 (DECISION ALERT-TUNING п.4)
+# ---------------------------------------------------------------------------
+
+def test_high_reminder_default_is_6h(tmp_path):
+    path = tmp_path / "alert.env"
+    path.write_text("ALERT_CHANNELS=tg\n", encoding="utf-8")
+    cfg = load_config(str(path))
+    assert cfg.high_reminder_h == 6
+
+
+def test_high_reminder_clamped_to_range(tmp_path):
+    path = tmp_path / "alert.env"
+    path.write_text("ALERT_HIGH_REMINDER_H=0\n", encoding="utf-8")
+    assert load_config(str(path)).high_reminder_h == 1
+    path.write_text("ALERT_HIGH_REMINDER_H=99\n", encoding="utf-8")
+    assert load_config(str(path)).high_reminder_h == 24
+    path.write_text("ALERT_HIGH_REMINDER_H=12\n", encoding="utf-8")
+    assert load_config(str(path)).high_reminder_h == 12
+
+
+def test_render_env_contains_high_reminder():
+    text = render_env(_cfg(high_reminder_h=6), with_secrets=False)
+    assert "ALERT_HIGH_REMINDER_H=6" in text
+    assert "ALERT_HIGH_REMINDER_H=12" in render_env(_cfg(high_reminder_h=12), with_secrets=False)
