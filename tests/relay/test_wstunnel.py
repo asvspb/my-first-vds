@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from src.core.shell import ShellResult
+from src.relay import carriers
 from src.relay import wstunnel as ws
 
 TEMPLATES = Path(__file__).resolve().parents[2] / "systemd"
@@ -515,7 +516,7 @@ def test_relay_apply_starts_units_and_checks_policy(monkeypatch, tmp_path):
     monkeypatch.setattr(exit_leg, "detect_wan_iface", lambda: "eth0")
     monkeypatch.setattr(ws, "WG_WS_CONF", tmp_path / "wg-ws0.conf")
     monkeypatch.setattr(ws, "WS_CLIENT_ENV", tmp_path / "client.env")
-    monkeypatch.setattr(ws, "WS_CLIENT_ENV", tmp_path / "client.env")
+    monkeypatch.setattr(carriers, "CARRIER_IFACE_SCRIPT", tmp_path / "carrier-default-iface.sh")
     raw = tmp_path / "wg-ws0.priv"
     raw.write_text("FIXTURE_PW_RELAY=\n", encoding="utf-8")
     monkeypatch.setattr(ws, "WG_WS_RAW_PRIV", raw)

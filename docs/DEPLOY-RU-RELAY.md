@@ -510,6 +510,16 @@ awg1: в wg-ws0 уходят пакеты клиентов, а не 10.12.0.0/30
    `Wants/After=vds-wstunnel-client.service`. **`table 100` не меняется** —
    переключение сделает селектор (WP-P2P-3) на первом rollback P25.
 
+**Селектор (WP-P2P-3):** state `/var/lib/vds/p2p-carriers.json` 0600;
+`primary → fallback` — на первом rollback P25 с pre-check `ping -I wg-ws0`
+(мёртвый резерв → сразу exhausted, AC-S5); в `fallback` тик P25 — no-op без
+траты attempts (AC-S6); возврат — 3 пробы awg1 подряд + ≥600 с (AC-6), при
+этом P25-серия сбрасывается (иначе ложный манёвр); 3/3 провалов wg-ws0 →
+`exhausted`; лимит 3 переключений в час. Команды: `vds relay carrier status`,
+`switch --to awg|wstunnel [--apply]`. AC-S4: `vds-relay-policy` через
+ExecStartPost `carrier-default-iface.sh` ставит table 100 по активному
+носителю из state (дефолт awg1, `ip link show` проверяется — юнит не падает).
+
 Юниты: `vds-wstunnel-nft` (exit, oneshot nft+UFW), `vds-awg-wg-ws0` (plain AWG),
 `vds-wstunnel-server`/`-client` (Restart=always, env 0600).
 

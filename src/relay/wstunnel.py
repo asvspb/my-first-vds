@@ -819,6 +819,12 @@ def run_relay_install(
                 tmp_path.unlink(missing_ok=True)  # этого в /etc/vds-relay оставался бы tmp
                 raise
 
+            # AC-S4: ExecStartPost policy-юнита читает активный носитель из
+            # p2p-carriers.json — рендерим скрипт ДО рестартов.
+            from src.relay.carriers import ensure_default_iface_script
+
+            ensure_default_iface_script()
+
             # Порядок: клиент wstunnel → интерфейс → NAT → policy.
             for unit in (WS_CLIENT_UNIT, WG_WS_UNIT,
                          relay_paths.RELAY_NAT_UNIT, relay_paths.RELAY_POLICY_UNIT):

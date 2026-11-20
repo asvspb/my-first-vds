@@ -66,6 +66,7 @@ vds/
 │   ├── vds-wstunnel-client.service.tpl  # релей: WSS-клиент, UDP-форвард на wg-ws0
 │   ├── vds-wstunnel-nft.service.tpl     # exit: oneshot nft -c/-f + UFW (9443 только релею)
 │   ├── vds-awg-wg-ws0.service.tpl       # wg-ws0 (plain AWG) на обеих сторонах
+│   ├── (policy) ExecStartPost carrier-default-iface.sh  # table 100 → активный носитель (AC-S4)
                                      # ADR-016 (принят G2): носитель №2 wstunnel-wg в
                                      #   L4-ортогональном резерве к awg (UDP↔TCP);
                                      #   переключение — на первом rollback P25;
@@ -305,6 +306,9 @@ vds relay wstunnel install --archive <tar.gz> [--apply]  # носитель №2
                                       # sha256 до распаковки, атомарно 0755 в /usr/local/bin;
                                       # пиннинг WSTUNNEL_VERSION/SHA256 (v11.1.0), сеть — отдельно
 vds relay wstunnel status [--json]    # пиннинг, установленная версия, env-файлы секретов 0600
+vds relay carrier status [--json]     # селектор носителей: active/состояние/лимит 3 в час
+vds relay carrier switch --to awg|wstunnel [--apply]  # ручное переключение table 100
+                                      # (lock общий с манёвром P25; авто — хук rollback)
 vds relay wstunnel init [--apply]     # релей, шаг 1: ключи wg-ws0 + path-prefix (0600); печатает ПУБЛИЧНЫЙ
 vds relay wstunnel server --relay-ip <ip> --relay-public-key <key> \
     --domain ws.<domain> --prefix-file <env> [--apply]   # exit: wg-ws0 + wss 9443 + nft/UFW

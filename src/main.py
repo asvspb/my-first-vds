@@ -48,7 +48,17 @@ relay_wstunnel_app = typer.Typer(
 )
 relay_app.add_typer(relay_exit_leg_app, name="exit-leg")
 relay_app.add_typer(relay_maneuver_app, name="maneuver")
+relay_carrier_app = typer.Typer(
+    help=(
+        "Селектор носителей p2p (ADR-016, WP-P2P-3): table 100 -> awg1|wg-ws0, "
+        "state primary/fallback/exhausted; lock общий с манёвром P25"
+    ),
+    no_args_is_help=True,
+)
+relay_app.add_typer(relay_exit_leg_app, name="exit-leg")
+relay_app.add_typer(relay_maneuver_app, name="maneuver")
 relay_app.add_typer(relay_wstunnel_app, name="wstunnel")
+relay_app.add_typer(relay_carrier_app, name="carrier")
 probe_watch_app = typer.Typer(
     help="Монитор активного зондирования tcp/443 (И33 v1: nft counters + journal)"
 )
@@ -1426,6 +1436,31 @@ def relay_wstunnel_install(
     except WstunnelError as exc:
         console.print(f"[error][wstunnel] {exc}[/error]")
         raise typer.Exit(1)
+
+
+@relay_carrier_app.command("status")
+def relay_carrier_status(
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable вывод"),
+):
+    """Состояние селектора носителей (ADR-016, WP-P2P-3).
+
+    Пример: vds relay carrier status --json"""
+    from src.relay.carriers import run_status
+
+    raise typer.Exit(run_status(json_output=json_output))
+
+
+@relay_carrier_app.command("switch")
+def relay_carrier_switch(
+    to: str = typer.Option(..., "--to", help="Целевой носитель: awg | wstunnel"),
+    apply: bool = typer.Option(False, "--apply", help="Применить (по умолчанию dry-run)"),
+):
+    """Ручное переключение table 100 (lock общий с манёвром P25 — AC-7).
+
+    Пример: sudo vds relay carrier switch --to wstunnel --apply"""
+    from src.relay.carriers import run_switch
+
+    raise typer.Exit(run_switch(to=to, apply=apply))
 
 
 @relay_wstunnel_app.command("init")

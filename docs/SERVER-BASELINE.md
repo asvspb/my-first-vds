@@ -56,7 +56,11 @@
 | SSH | **только 49222** (limit), ключи; `PasswordAuthentication` — как в образе |
 | Юниты | vds-xray, vds-hysteria2 (secure LE), vds-amneziawg + vds-amneziawg-nat, vds-probe-watch.timer (+ vds-gateway-health.timer, vds-probe-rucidr.timer — при установке); после P24 — `vds-awg-relay` (awg2) и `vds-awg-relay-pool` (nft REDIRECT); носитель №2 (ADR-016) — `vds-wstunnel-server.service` + `vds-wstunnel-nft.service` (exit) и
 `vds-wstunnel-client.service` (релей), плюс `vds-awg-wg-ws0.service` на обеих сторонах,
-MASQUERADE `-s <client_subnet> -o wg-ws0` — ветка `p2p_iface` в `vds-relay-nat.service`, `chain forward` MSS-clamp — в nft `vds_relay`; на exit forward не настраивается (`DEFAULT_FORWARD_POLICY=ACCEPT`),
+MASQUERADE `-s <client_subnet> -o wg-ws0` — ветка `p2p_iface` в `vds-relay-nat.service`, `chain forward` MSS-clamp — в nft `vds_relay`; на exit forward не настраивается (`DEFAULT_FORWARD_POLICY=ACCEPT`);
+**селектор носителей** (WP-P2P-3): state `/var/lib/vds/p2p-carriers.json` 0600 (aware-UTC,
+история ≤100 записей); `policy` через ExecStartPost `carrier-default-iface.sh` ставит
+table 100 по активному носителю (дефолт awg1, `ip link show` проверяется — юнит не падает
+на старте, AC-S4); команды `vds relay carrier status|switch`,
 `Restart=always`, секрет-prefix в env 0600; на релее opt-in — `vds-relay-maneuver.timer` + `vds-relay-maneuver.service` (`vds relay maneuver install`, WP-M4; `.service` enable=off, `StateDirectory=vds`, sandbox: `/etc/amnezia` в ReadWritePaths, `CAP_NET_ADMIN CAP_NET_RAW`, `AF_NETLINK`) |
 | Роль | основной AWG-exit ноутбука (`vpn start`), AWG-подсеть 10.9.0.0/24 |
 

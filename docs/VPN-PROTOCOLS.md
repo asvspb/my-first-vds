@@ -309,6 +309,10 @@ add-client`). Существующие конфиги не переписыва�
 `listen-port 0` + endpoint по пулу, с liveness-окном 20 с и откатом; авто-таймер
 opt-in в WP-M4.
 
+**Селектор носителей (WP-P2P-3):** `vds relay carrier status` / `switch --to
+awg|wstunnel` — при блоке UDP-пула `table 100` уходит на `wg-ws0` (первый
+rollback P25), при восстановлении awg1 (3 пробы + 600 с) возвращается обратно.
+
 **Plain-режим AWG (обфускация выключена, ADR-016):** для носителя `wg-ws0`
 (WG **внутри** wstunnel/WSS) обфускация не применяется —
 `render_server_conf(obf={})` / `render_client_conf(obf={}, junk={})` не пишут
