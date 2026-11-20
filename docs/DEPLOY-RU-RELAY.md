@@ -272,14 +272,16 @@ curl --interface awg1 -I https://ifconfig.me   # IP exit (213.108.23.119)
 адрес не совпадут и нога не поднимется. Откат: `sudo vds relay exit-leg remove
 --apply` на exit (клиентский awg0 не трогается).
 
-### 4.2 Манёвр ноги (P25, WP-M3) — только локально на релее
+### 4.2 Манёвр ноги (P25, WP-M3) и opt-in таймер (WP-M4) — только на релее
 
 ```bash
-vds relay maneuver status [--json]      # состояние, порт, cooldown, failed_ports
+vds relay maneuver status [--json]      # состояние, порт, cooldown, failed_ports,
+                                        # timer_enabled / auto_timer_active
 vds relay maneuver history --limit 20   # ts, from→to, ok/rollback, liveness_ms
 vds relay maneuver step                 # dry-run: что сделал бы автомат
 vds relay maneuver step --apply         # один шаг (liveness 20 с)
 vds relay maneuver rollback --apply     # вернуть previous_port
+vds relay maneuver tick --apply         # один тик таймера (ExecStart юнита)
 ```
 
 Инварианты: смена только runtime (`awg set awg1 listen-port 0 peer … endpoint …`),
@@ -291,7 +293,34 @@ Guard: команда отказывает на exit-узле и если тек
 liveness**, не `handshake_age`. Состояние манёвра защищено `FileLock` (чтения state/ноги — под локом в
 apply-путях); после успешного шага/rollback счётчик подряд-отказов
 сбрасывается, `failed_ports` очищаются после истечения cooldown.
-Авто-таймер — WP-M4 (opt-in).
+
+**Opt-in таймер (WP-M4).** Авторежим по умолчанию **выключен**: `install`
+ставит `vds-relay-maneuver.service` (enable=off, без `[Install]`) и
+`vds-relay-maneuver.timer`, делает `daemon-reload`, но таймер не включает и не
+запускает:
+
+```bash
+# 1) поставить юниты (guard роли/пула; без --apply — dry-run)
+sudo vds relay maneuver install --apply                 # auto = off
+# 2) проверить один тик руками: строка [relay-maneuver] в журнале, exit 0
+sudo vds relay maneuver tick --apply
+journalctl -u vds-relay-maneuver -n 5 --no-pager
+# 3) включить авторежим одним из двух способов:
+sudo vds relay maneuver install --apply --enable-auto    # enable + start
+sudo systemctl enable --now vds-relay-maneuver.timer     # то же вручную
+# снять: state-история /var/lib/vds/relay-maneuver.json остаётся
+sudo vds relay maneuver remove --apply
+```
+
+Тайминг: `OnUnitActiveSec` = `--interval` (по умолчанию **60 с**). Детекция в
+авторежиме — 3 тика подряд с упавшей liveness при живом трафике: **≈180 с**
+(3 × 60) до `suspect` + 5–20 с на сам манёвр. Критерий M5 «<60 с» — время
+реакции актуатора после достижения suspect (3/3), а не от первого пропавшего
+пакета. Для стенда допустим `--interval 15s` (минимум; меньше — самоподрыв
+при liveness-окне 20 с). Юнит всегда завершается exit 0: guard, `ManeuverError`,
+`StoreError`, занятый `FileLock` перехватываются, в journal печатается одна
+строка `[relay-maneuver] state=… port=… liveness=… ms=… activity=… fails=n/3
+acted=… result=…`. Секретов в юните и выводе нет.
 
 ### 5. ip_forward + MASQUERADE + UFW
 

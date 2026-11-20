@@ -1452,6 +1452,57 @@ def relay_maneuver_rollback(
     raise typer.Exit(run_rollback(apply=apply))
 
 
+@relay_maneuver_app.command("tick")
+def relay_maneuver_tick(
+    apply: bool = typer.Option(
+        False, "--apply", help="Исполнить тик (без флага — read-only сэмпл)"
+    ),
+):
+    """Один тик таймера (ExecStart `vds-relay-maneuver.service`). ВСЕГДА exit 0:
+    отказ guard/ManeuverError/StoreError/занятый лок перехватываются, в journal
+    печатается одна строка `\\[relay-maneuver] state=… port=… liveness=… …`.
+    `--apply` — реальный тик; без него state не пишется.
+
+    Пример: sudo vds relay maneuver tick --apply"""
+    from src.relay.maneuver import run_tick
+
+    raise typer.Exit(run_tick(apply=apply))
+
+
+@relay_maneuver_app.command("install")
+def relay_maneuver_install(
+    apply: bool = typer.Option(False, "--apply", help="Установить юниты (по умолчанию dry-run)"),
+    enable_auto: bool = typer.Option(
+        False, "--enable-auto",
+        help="Включить и запустить таймер (по умолчанию auto=off: opt-in)",
+    ),
+    interval: str = typer.Option(
+        "60s", "--interval", help="Период тика (>=15s; 60s → детекция 3/3 ≈180 с)"
+    ),
+):
+    """Opt-in таймер манёвра: `vds-relay-maneuver.timer` + `.service` (ADR-015,
+    SPEC-20261120 WP-M4). Guard роли/пула. auto=off по умолчанию: файлы
+    ставятся, таймер не включён и не запущен; `--enable-auto` — enable+start.
+
+    Пример: sudo vds relay maneuver install --apply --enable-auto --interval 60s"""
+    from src.relay.maneuver import run_install
+
+    raise typer.Exit(run_install(apply=apply, enable_auto=enable_auto, interval=interval))
+
+
+@relay_maneuver_app.command("remove")
+def relay_maneuver_remove(
+    apply: bool = typer.Option(False, "--apply", help="Снять юниты (по умолчанию dry-run)"),
+):
+    """Снять `.timer` и `.service` (stop+disable+rm, идемпотентно). State
+    `/var/lib/vds/relay-maneuver.json` сохраняется как история.
+
+    Пример: sudo vds relay maneuver remove --apply"""
+    from src.relay.maneuver import run_remove
+
+    raise typer.Exit(run_remove(apply=apply))
+
+
 @acme_app.command("issue")
 def acme_issue(
     domain: str = typer.Option(..., "--domain", help="Домен, резолвящийся в публичный IP сервера"),

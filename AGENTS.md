@@ -57,6 +57,9 @@ systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2
                          # vds-probe-rucidr / vds-logs-sample / vds-logs-daily /
                          # vds-alert-watch .service+.timer.tpl (сторож: тик 2 мин, exit-узел;
                          #   sandbox: RestrictAddressFamilies включает AF_NETLINK — netlink для `awg show`)
+                         # vds-relay-maneuver .service+.timer.tpl (opt-in тик манёвра ноги,
+                         #   ADR-015/P25 WP-M4; sandbox: ReadWritePaths +/etc/amnezia,
+                         #   CAP_NET_ADMIN CAP_NET_RAW, AF_NETLINK; [Install] только у .timer)
                          # (vds-logs-sample/daily: ReadWritePaths /var/lib/vds + /var/run для FileLock);
                          # sysctl/99-vds-gateway.conf.tpl
 tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/, amneziawg/, acme/, relay/, alert/
@@ -78,6 +81,9 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 | `vds relay add-client NAME [--endpoint HOST[:PORT]] [--dns IP[,IP]] [--qr]` | Пир awg0 + .conf 0600 (MTU 1280, `AllowedIPs = 0.0.0.0/0` v4-only, `DNS = 1.1.1.1, 1.0.0.1` через exit); endpoint = домен клиентов (имя машины пропускается, нерезолв → IP сервера, P22); `--qr` — ANSIUTF8 в терминале через stdin (без qrencode — warning), P23 |
 | `vds relay exit-leg install --relay-ip <ip> --public-key <awg1-pub> [--apply]` | Exit-узел (ADR-015, P24): `awg2` 10.11.0.0/30, MASQUERADE ноги, UFW только с IP релея, пул 51900–51911 (nft REDIRECT), клиентский шаблон `relay-exit-leg.conf` 0600; проверяет `ip_forward` и занятость портов; dry-run по умолчанию; `remove --apply` откатывает |
 | `vds relay maneuver status\|history\|step\|rollback [--apply] [--force]` | Локальный манёвр ноги (P25/ADR-015): liveness 20 с + activity gate (шум keepalive отфильтрован) → `awg set awg1 listen-port 0 … endpoint …`; cooldown 600 с, ≤3/час, обход пула, `exhausted` с автовыходом; dry-run по умолчанию; apply-путь под FileLock до чтений, успех сбрасывает consecutive_failures, failed_ports живут до истечения cooldown |
+| `sudo vds relay maneuver install [--apply] [--enable-auto] [--interval 60s]` | Opt-in таймер манёвра (SPEC-20261120 WP-M4): `vds-relay-maneuver.service.tpl` (enable=off, `[Install]` нет) + `vds-relay-maneuver.timer.tpl` (`OnUnitActiveSec`, `Unit=`); guard роли/пула; без `--enable-auto` файлы поставлены, таймер НЕ включён/НЕ запущен; `--interval ≥15s` (60s → детекция 3/3 ≈180 с) |
+| `vds relay maneuver tick [--apply]` | ExecStart юнита: **всегда exit 0**, одна строка `[relay-maneuver] state=… port=… liveness=… ms=… activity=… fails=n/3 acted=… result=…`; guard/StoreError/занятый лок перехвачены (oneshot не failed) |
+| `vds relay maneuver remove [--apply]` | Снять `.timer`+`.service` (stop+disable+rm, идемпотентно); `/var/lib/vds/relay-maneuver.json` сохраняется как история |
 | `sudo vds alert install --apply` | Сторож угрозы на exit-узле (SPEC-20261117): юниты `vds-alert-watch.service`/`.timer` из `vds-alert-watch.service.tpl`/`vds-alert-watch.timer.tpl`, `/etc/vds/alert.env` 0600; dry-run без `--apply`; флаги `--channel tg,smtp`, `--interval 2m`, `--handshake-threshold 300s`, `--heartbeat 24h`, `--force`; на релее нужен `--allow-relay-node` (не делать) |
 | `sudo vds alert test [--channel tg\|smtp]` | Тестовая отправка без записи state (проверить почту/бота) |
 | `vds alert status [--json]` | Каналы/юниты/coverage; JSON без секретов; без root — урезанно (env 0600) |

@@ -278,6 +278,13 @@ vds relay maneuver step [--apply] [--force]
 vds relay maneuver rollback [--apply] # вернуть previous_port (идемпотентно, если он же текущий)
                                       # apply-путь: FileLock до чтений; после успеха
                                       # счётчик отказов сбрасывается, failed_ports — по cooldown
+vds relay maneuver tick [--apply]     # один тик таймера (ExecStart юнита); ВСЕГДА exit 0,
+                                      # одна строка [relay-maneuver] state=… port=… liveness=… …
+vds relay maneuver install [--apply] [--enable-auto] [--interval 60s]
+                                      # opt-in таймер (WP-M4): .service enable=off + .timer;
+                                      # без --enable-auto таймер НЕ включён/НЕ запущен;
+                                      # --interval >=15s; 60s → детекция 3/3 ≈180 с
+vds relay maneuver remove [--apply]   # снять .timer/.service (идемпотентно); state-история цела
 vds relay add-client phone --keepalive 25 --qr
                                      # Пир awg0: .conf (0600), endpoint relay-домен:443,
                                      # DNS = 1.1.1.1,1.0.0.1, AllowedIPs 0.0.0.0/0 (v4-only)
@@ -355,6 +362,7 @@ Gateway-таймеры (ставятся по явной команде, не п
 | `vds-logs-sample.timer` (`vds-logs-sample.service.tpl`/`vds-logs-sample.timer.tpl`) | 5-минутный сэмпл телеметрии (journald/счётчики, ADR-012); `ReadWritePaths=/var/lib/vds /var/run` (runtime-lock) | `vds logs install --apply` |
 | `vds-logs-daily.timer` (`vds-logs-daily.service.tpl`/`vds-logs-daily.timer.tpl`) | ежедневный отчёт/ротация лог-конвейера (ADR-012); `ReadWritePaths=/var/lib/vds /var/run` (runtime-lock) | `vds logs install --apply` |
 | `vds-alert-watch.timer` (`vds-alert-watch.service.tpl`/`vds-alert-watch.timer.tpl`) | сторож угрозы на exit-узле: threat из `probe-watch.json`, пульс плеча relay→exit по `awg show awg0 dump`, лок 443; доставка в Telegram/SMTP, heartbeat раз в сутки (SPEC-20261117); `ReadWritePaths=/var/lib/vds /var/run`; `RestrictAddressFamilies` включает `AF_NETLINK` (иначе `awg show` → «Address family not supported») | `vds alert install --apply` |
+| `vds-relay-maneuver.timer` (`vds-relay-maneuver.service.tpl`/`vds-relay-maneuver.timer.tpl`) | opt-in тик манёвра ноги relay→exit (ADR-015/P25 WP-M4): `state`-тег в journal, exit-код всегда 0; `ReadWritePaths=/var/lib/vds /var/run /etc/amnezia` (persist Endpoint), `CAP_NET_ADMIN CAP_NET_RAW`, `AF_NETLINK`; авторежим по умолчанию **выкл** | `vds relay maneuver install --apply [--enable-auto]` |
 
 Таймеры ZeroTier (архив) активируются **только** при явной установке
 `vds zerotier install` (опциональный сценарий):

@@ -40,10 +40,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
-from src.core.lock import FileLock
+from src.core.lock import FileLock, LockError
 from src.core.logger import console
 from src.core.secrets import write_secret_atomic
 from src.core.shell import run_list
+from src.core.units import install_unit, remove_unit, resolve_python
 from src.gateway.store import GatewayState, StoreError, load_state
 from src.relay.paths import (
     EXIT_LEG_BASE_PORT,
@@ -69,6 +70,15 @@ ACTIVITY_NOISE_BYTES = 4096  # порог прироста, ниже — шум 
 DEFAULT_HISTORY_LIMIT = 10
 
 STATES = ("idle", "healthy", "suspect", "maneuvering", "cooldown", "exhausted")
+
+# --- Opt-in таймер (SPEC §4 WP-M4) ---
+MANEUVER_UNIT = "vds-relay-maneuver.service"
+MANEUVER_TIMER = "vds-relay-maneuver.timer"
+MANEUVER_SERVICE_TEMPLATE = "vds-relay-maneuver.service.tpl"
+MANEUVER_TIMER_TEMPLATE = "vds-relay-maneuver.timer.tpl"
+DEFAULT_INTERVAL_S = 60  # тик раз в минуту → детекция 3/3 ≈ 180 с
+MIN_INTERVAL_S = 15  # защита от самоподрыва (стенд — 15s)
+REPO_DIR = Path(__file__).resolve().parents[2]
 
 _ENDPOINT_LINE_RE = re.compile(r"^(\s*Endpoint\s*=\s*).*$", re.IGNORECASE)
 _PING_MS_RE = re.compile(r"time[=<]\s*([0-9]+(?:\.[0-9]+)?)\s*ms")
@@ -848,6 +858,19 @@ def run_step(
     return 0
 
 
+def _timer_state() -> dict:
+    """Состояние opt-in таймера: enabled (is-enabled) и active (is-active).
+
+    Read-only, без секретов. Вне systemd/без прав — False (не ошибка).
+    """
+    enabled_res = run_list(["systemctl", "is-enabled", MANEUVER_TIMER], timeout=10)
+    active_res = run_list(["systemctl", "is-active", MANEUVER_TIMER], timeout=10)
+    return {
+        "timer_enabled": enabled_res.ok and enabled_res.output.strip() == "enabled",
+        "auto_timer_active": active_res.ok and active_res.output.strip() == "active",
+    }
+
+
 def collect_status(*, maneuver_path: Optional[str] = None) -> dict:
     """Машиночитаемый статус манёвра; без секретов (только публичные поля)."""
     st = load_maneuver_state(maneuver_path)
@@ -875,6 +898,7 @@ def collect_status(*, maneuver_path: Optional[str] = None) -> dict:
         "probe_target": EXIT_LEG_IP,
         "runtime": runtime,
         "last_sample": st["last_sample"],
+        **_timer_state(),
     }
 
 
@@ -907,6 +931,11 @@ def run_status(json_output: bool = False, *, maneuver_path: Optional[str] = None
         f"[info] Пул:[/info] {snapshot['pool']}   "
         f"[info]Проба:[/info] {snapshot['probe_target']} внутри туннеля   "
         f"[info]Попыток:[/info] {snapshot['attempts_total']}"
+    )
+    console.print(
+        f"[info] Таймер:[/info] enabled={'да' if snapshot['timer_enabled'] else 'нет'}   "
+        f"[info]active:[/info] {'да' if snapshot['auto_timer_active'] else 'нет'}   "
+        "(opt-in, `vds relay maneuver install --enable-auto`)"
     )
     return 0
 
@@ -1046,4 +1075,289 @@ def run_rollback(
             f"[warning][relay] endpoint возвращён на {previous}, но liveness не "
             "подтвердился — конфиг не изменён, требуется диагностика.[/warning]"
         )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Opt-in таймер (SPEC §4 WP-M4): install / remove / tick
+# ---------------------------------------------------------------------------
+
+def parse_interval(text: str) -> int:
+    """`--interval` манёвра → секунды. Парсер тот же, что у alert install.
+
+    Минимум MIN_INTERVAL_S: при 60 с и N=3 детекция в авторежиме ≈180 с
+    (3 тика) + 5–20 с манёвр; 15 с — только для стенда.
+    """
+    from src.alert.env import parse_duration
+
+    try:
+        seconds = parse_duration(text)
+    except ValueError as exc:
+        raise ManeuverError(f"--interval: {exc}") from exc
+    if seconds < MIN_INTERVAL_S:
+        raise ManeuverError(
+            f"--interval: минимум {MIN_INTERVAL_S} с (получено {seconds}); "
+            "меньше — самоподрыв таймера при liveness-окне 20 с"
+        )
+    return seconds
+
+
+def _install_ctx(interval_sec: int) -> dict[str, str]:
+    install_dir = os.environ.get("INSTALL_DIR", "/opt/my-vds")
+    return {
+        "python": resolve_python(install_dir),
+        "repo_dir": str(REPO_DIR),
+        "install_dir": install_dir,
+        "interval_sec": str(interval_sec),
+    }
+
+
+def _guard_node_and_port(state_path: Optional[str]) -> None:
+    """Guard роли узла и пула (P0) — до любых изменений install."""
+    try:
+        gstate = load_state(state_path)
+    except StoreError as exc:
+        raise ManeuverError(str(exc)) from exc
+    violation = relay_node_violation(gstate)
+    if violation:
+        raise ManeuverError(violation)
+    leg = read_leg()
+    guard_leg_port(leg["endpoint_port"], pool_ports())
+
+
+def run_install(
+    apply: bool = False,
+    enable_auto: bool = False,
+    interval: str = f"{DEFAULT_INTERVAL_S}s",
+    *,
+    state_path: Optional[str] = None,
+    root: str = "/",
+) -> int:
+    """`vds relay maneuver install`: юниты таймера. Dry-run по умолчанию.
+
+    auto=off (opt-in): без `--enable-auto` файлы ставятся и daemon-reload
+    выполняется, но таймер НЕ включён и НЕ запущен (`.service` — enable=False,
+    `.timer` — enable=False). `--enable-auto` → enable=True + start timer.
+    """
+    try:
+        interval_sec = parse_interval(interval)
+        _guard_node_and_port(state_path)
+    except (ManeuverError, OSError) as exc:
+        console.print(f"[error][relay] {exc}[/error]")
+        return 1
+
+    if not apply:
+        console.print("[info][relay] DRY-RUN план maneuver install:[/info]")
+        console.print(
+            f"[info][relay]   1. {MANEUVER_UNIT} из {MANEUVER_SERVICE_TEMPLATE} "
+            "(enable=off: включается только таймером)[/info]"
+        )
+        console.print(
+            f"[info][relay]   2. {MANEUVER_TIMER} из {MANEUVER_TIMER_TEMPLATE} "
+            f"(OnUnitActiveSec={interval_sec}s, Unit={MANEUVER_UNIT})[/info]"
+        )
+        console.print(
+            f"[info][relay]   авто-режим: {'ВКЛ (--enable-auto)' if enable_auto else 'выкл (opt-in: файлы поставлены, таймер не включён/не запущен)'}[/info]"
+        )
+        console.print(
+            f"[info][relay]   тайминг: 60 с × 3 тика ≈ 180 с до suspect + "
+            f"5–20 с манёвр; текущий интервал {interval_sec} с[/info]"
+        )
+        console.print("[info][relay] Запустите с --apply для исполнения.[/info]")
+        return 0
+
+    if root == "/" and os.geteuid() != 0:
+        console.print("[error][relay] install --apply требует root (sudo).[/error]")
+        return 1
+
+    ctx = _install_ctx(interval_sec)
+    try:
+        with FileLock(RELAY_MANEUVER_LOCK_FILE):
+            if not install_unit(
+                MANEUVER_SERVICE_TEMPLATE, MANEUVER_UNIT, ctx, root=root, enable=False
+            ):
+                return 1
+            if not install_unit(
+                MANEUVER_TIMER_TEMPLATE, MANEUVER_TIMER, ctx, root=root,
+                enable=enable_auto,
+            ):
+                return 1
+            if enable_auto:
+                started = run_list(["systemctl", "start", MANEUVER_TIMER], timeout=15)
+                if not started.ok:
+                    console.print(
+                        f"[error][relay] не удалось запустить {MANEUVER_TIMER}: "
+                        f"{started.stderr.strip()}[/error]"
+                    )
+                    return 1
+    except (LockError, OSError) as exc:
+        console.print(f"[error][relay] {exc}[/error]")
+        return 1
+
+    if enable_auto:
+        console.print(
+            f"[success][relay] таймер установлен и включён: {MANEUVER_TIMER} "
+            f"(интервал {interval_sec} с). Проверка: vds relay maneuver status[/success]"
+        )
+    else:
+        console.print(
+            f"[success][relay] таймер установлен, авторежим ВЫКЛ (opt-in): "
+            f"{MANEUVER_TIMER}. Включить: sudo systemctl enable --now "
+            f"{MANEUVER_TIMER}[/success]"
+        )
+    return 0
+
+
+def run_remove(apply: bool = False, *, root: str = "/") -> int:
+    """`vds relay maneuver remove`: снять .timer и .service. State сохраняется.
+
+    Идемпотентно: `remove_unit` — stop+disable+rm (нет файла — успех), поэтому
+    повторный запуск не ломает ничего. `/var/lib/vds/relay-maneuver.json`
+    (история) НЕ удаляется.
+    """
+    if not apply:
+        console.print("[info][relay] DRY-RUN план maneuver remove:[/info]")
+        console.print(
+            f"[info][relay]   1. stop/disable и удалить {MANEUVER_TIMER}, {MANEUVER_UNIT}[/info]"
+        )
+        console.print(
+            f"[info][relay]   2. {RELAY_MANEUVER_STATE_PATH} сохранить (история)[/info]"
+        )
+        return 0
+
+    if root == "/" and os.geteuid() != 0:
+        console.print("[error][relay] remove --apply требует root (sudo).[/error]")
+        return 1
+
+    try:
+        with FileLock(RELAY_MANEUVER_LOCK_FILE):
+            for name in (MANEUVER_TIMER, MANEUVER_UNIT):
+                if not remove_unit(name, root=root):
+                    return 1
+    except (LockError, OSError) as exc:
+        console.print(f"[error][relay] {exc}[/error]")
+        return 1
+
+    console.print(
+        f"[success][relay] таймер снят ({MANEUVER_TIMER}, {MANEUVER_UNIT}); "
+        f"state {RELAY_MANEUVER_STATE_PATH} сохранён (история).[/success]"
+    )
+    return 0
+
+
+def _journal_tag(
+    *,
+    state: str,
+    port: object,
+    liveness_ok: bool,
+    liveness_ms: Optional[int],
+    activity: bool,
+    fails: int,
+    acted: bool,
+    result: Optional[str],
+) -> str:
+    """Одна структурированная строка тика (journal). Секретов нет по построению."""
+    return (
+        f"[relay-maneuver] state={state} port={port if port is not None else '-'} "
+        f"liveness={'ok' if liveness_ok else 'fail'} "
+        f"ms={liveness_ms if liveness_ms is not None else '-'} "
+        f"activity={1 if activity else 0} fails={fails}/{LIVENESS_FAIL_THRESHOLD} "
+        f"acted={1 if acted else 0} result={result or 'none'}"
+    )
+
+
+def run_tick(
+    apply: bool = False,
+    force: bool = False,
+    *,
+    state_path: Optional[str] = None,
+    maneuver_path: Optional[str] = None,
+) -> int:
+    """`vds relay maneuver tick` — ExecStart таймера. **Всегда exit 0.**
+
+    ManeuverError/StoreError/OSError/отказ guard/занятый FileLock
+    перехватываются: печатается ровно одна структурированная journal-строка,
+    oneshot-юнит не уходит в failed. `--apply` — реальный тик; без него —
+    read-only сэмпл (тот же тег, state не пишется).
+    """
+    state_name = "unknown"
+    port: object = None
+    liveness_ok = False
+    liveness_ms: Optional[int] = None
+    activity = False
+    fails = 0
+    acted = False
+    result_name: Optional[str] = None
+    sample: Optional[dict] = None
+    try:
+        gstate = load_state(state_path)
+        violation = relay_node_violation(gstate)
+        if violation:
+            raise ManeuverError(violation)
+
+        if apply:
+            if os.geteuid() != 0:
+                raise ManeuverError("--apply требует root (systemd-юнит запускает от root)")
+            with FileLock(RELAY_MANEUVER_LOCK_FILE):
+                st = load_maneuver_state(maneuver_path)
+                leg = read_leg()
+                port = leg["endpoint_port"]
+                guard_leg_port(leg["endpoint_port"], pool_ports())
+                if int(st.get("current_port") or 0) != leg["endpoint_port"]:
+                    st["current_port"] = leg["endpoint_port"]
+                now = time.time()
+                sample = collect_sample(st.get("last_sample"), now=now, probe=probe_liveness)
+                result = tick(
+                    st=st, leg=leg, sample=sample, now=now, apply=True,
+                    force=force, state_path=maneuver_path,
+                )
+        else:
+            st = load_maneuver_state(maneuver_path)
+            leg = read_leg()
+            port = leg["endpoint_port"]
+            guard_leg_port(leg["endpoint_port"], pool_ports())
+            now = time.time()
+            sample = collect_sample(st.get("last_sample"), now=now, probe=probe_liveness)
+            result = tick(
+                st=st, leg=leg, sample=sample, now=now, apply=False,
+                force=force, state_path=maneuver_path,
+            )
+
+        state_name = str(result["state"])
+        acted = bool(result["acted"])
+        result_name = result["result"]
+    except (ManeuverError, StoreError, OSError, LockError) as exc:
+        if sample is not None:
+            liveness_ok = bool(sample.get("liveness_ok"))
+            liveness_ms = sample.get("liveness_ms")
+            activity = bool(sample.get("activity"))
+            fails = int(sample.get("consecutive_failures") or 0)
+        console.print(
+            _journal_tag(
+                state="error", port=port, liveness_ok=liveness_ok,
+                liveness_ms=liveness_ms, activity=activity, fails=fails,
+                acted=False, result=None,
+            )
+            + f" reason={str(exc).replace(chr(10), ' ')}",
+            markup=False,
+            highlight=False,
+            soft_wrap=True,
+        )
+        return 0
+
+    if sample is not None:
+        liveness_ok = bool(sample.get("liveness_ok"))
+        liveness_ms = sample.get("liveness_ms")
+        activity = bool(sample.get("activity"))
+        fails = int(sample.get("consecutive_failures") or 0)
+    console.print(
+        _journal_tag(
+            state=state_name, port=port, liveness_ok=liveness_ok,
+            liveness_ms=liveness_ms, activity=activity, fails=fails,
+            acted=acted, result=result_name,
+        ),
+        markup=False,
+        highlight=False,
+        soft_wrap=True,
+    )
     return 0

@@ -102,7 +102,8 @@ vds relay maneuver status [--json]
 vds relay maneuver history [--limit N]
 vds relay maneuver step [--dry-run|--apply]
 vds relay maneuver rollback [--apply]
-vds relay maneuver install [--apply] [--enable-auto]
+vds relay maneuver tick [--apply]              # ExecStart таймера; всегда exit 0
+vds relay maneuver install [--apply] [--enable-auto] [--interval 60s]
 vds relay maneuver remove [--apply]
 sudo vds relay exit-leg install  [--apply]   # exit: awg2 + пул + UFW/nft
 sudo vds relay exit-leg remove   [--apply]
@@ -124,8 +125,23 @@ Exit-часть — только на самом exit (роль владельц
 | M1 | ADR-015 + этот SPEC | docs | M0 | ✅ 2026-11-20 |
 | M2 (P24) | exit: `awg2` + юнит + UFW/nft пул + `ALERT_RELAY_IFACE` | `src/relay/exit_leg.py`, `src/gateway/paths.py`, `src/system/ufw.py`, `src/alert/checks.py`, `src/alert/env.py`, `systemd/vds-awg-relay.service.tpl`, `systemd/vds-awg-relay-pool.service.tpl`, tests | M1 | клиенты не задеты; скан пула с чужого IP молчит; reboot-устойчивость; идемпотентность |
 | M3 (P25 core) | relay: state-machine, liveness, актуатор `awg set`, anti-ping-pong, CLI | `src/relay/maneuver.py`, `src/relay/paths.py`, `src/main.py`, tests | M1 | dry-run/apply; rollback по 20 с; нет рестарта `vds-relay-exit`; секретов нет |
-| M4 | opt-in таймер (60 с) + journal-теги | `systemd/vds-relay-maneuver.{service,timer}.tpl`, tests | M2, M3 | auto=off по умолчанию; exit-код тика всегда 0 |
+| M4 | opt-in таймер (60 с) + journal-теги | `systemd/vds-relay-maneuver.{service,timer}.tpl`, `src/relay/maneuver.py`, `src/core/units.py`, `src/main.py`, tests | M2, M3 | auto=off по умолчанию; exit-код тика всегда 0 |
 | M5 | G4–G6: unit + живое окно + docsync | доки, TECHDEBT, STATUS, report | M2, M4 | nft drop порта → <60 с; `docsync audit --strict` = 0 |
+
+**M4 — уточнение тайминга и `--interval` (2026-11-20).** `install` принимает
+аддитивный `--interval` (дефолт `60s`, минимум `15s`, парсер — как у
+`alert install`). Таймер: `OnUnitActiveSec=<interval>` + `Unit=vds-relay-maneuver.service`,
+`[Install] WantedBy=timers.target`; у `.service` секции `[Install]` нет
+(включается только таймером). При `OnUnitActiveSec=60s` и пороге `N=3`
+детекция в авторежиме — **≈180 с (3 тика)** до `suspect` + 5–20 с сам манёвр.
+Критерий M5 «<60 с» относится к **времени реакции актуатора после достижения
+suspect (3/3)**, а не к интервалу от первого пропавшего пакета. Для стенда
+допустим `--interval 15s`. `tick` — отдельная команда (`ExecStart` юнита),
+**всегда exit 0**: `ManeuverError`/`StoreError`/`OSError`/отказ guard/занятый
+`FileLock` перехватываются, печатается одна структурированная строка
+`[relay-maneuver] state=… port=… liveness=<ok|fail> ms=<…|-> activity=<0|1>
+fails=<n>/3 acted=<0|1> result=<ok|rollback|none>`; секретов нет. `step`
+остаётся ручным (dry-run по умолчанию).
 
 ## 5. Тесты (unit, без root/сети)
 

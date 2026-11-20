@@ -49,11 +49,15 @@ def install_unit(
     name: str,
     ctx: dict[str, str] = {},
     root: str = "/",
+    enable: bool = True,
 ) -> bool:
     """Отрендерить шаблон `systemd/<template>` и установить как юнит `name`.
 
     Идемпотентно: повторный вызов перезаписывает тот же файл и повторно
-    делает daemon-reload + enable. True — успех, False — ошибка (значением).
+    делает daemon-reload + enable. `enable=False` (аддитивный параметр,
+    SPEC-20261120-relay-maneuver WP-M4) — файл ставится и daemon-reload
+    выполняется, но `systemctl enable` не вызывается: юнит остаётся
+    выключенным (opt-in таймер). True — успех, False — ошибка (значением).
     """
     def _install() -> bool:
         tpl = SYSTEMD_DIR / template
@@ -79,11 +83,22 @@ def install_unit(
             return False
 
         reload_res = run_list(["systemctl", "daemon-reload"], timeout=10)
+        if not reload_res.ok:
+            console.print(
+                f"[error]systemctl daemon-reload не удался: "
+                f"{reload_res.stderr.strip()}[/error]"
+            )
+            return False
+        if not enable:
+            console.print(
+                f"[change]Юнит {name} установлен (не включён: enable=False)[/change]"
+            )
+            return True
         enable_res = run_list(["systemctl", "enable", name], timeout=10)
-        if not (reload_res.ok and enable_res.ok):
+        if not enable_res.ok:
             console.print(
                 f"[error]systemctl не смог включить {name}: "
-                f"{enable_res.stderr.strip() or reload_res.stderr.strip()}[/error]"
+                f"{enable_res.stderr.strip()}[/error]"
             )
             return False
         console.print(f"[change]Юнит {name} установлен и включён[/change]")

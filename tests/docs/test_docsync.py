@@ -229,8 +229,9 @@ def test_extract_commands_real_main_py() -> None:
     # SPEC-20261116-log-forensics/ADR-012) + probe-watch iwc-leaf
     # + 5 alert-команд (SPEC-20261117-alert-watch)
     # + 2 relay exit-leg (SPEC-20261120-relay-maneuver WP-M2 / ADR-015)
-    # + 4 relay maneuver (status/history/step/rollback, WP-M3 / ADR-015)
-    assert len(cmds) == 88
+    # + 7 relay maneuver (status/history/step/rollback — WP-M3;
+    #   tick/install/remove — opt-in таймер, WP-M4 / ADR-015)
+    assert len(cmds) == 91
     assert len(set(cmds)) == len(cmds)
     assert "vds sysinfo" in cmds and "vds cleanup" in cmds and "vds server-setup" in cmds
     assert "vds gateway probe-watch" in cmds  # iwc-leaf
