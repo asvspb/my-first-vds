@@ -54,8 +54,11 @@
 **Exit-сторона для `10.12.0.0/30` обязательна** (те же три элемента, что у `awg2`
 в `src/relay/exit_leg.py`):
 
-1. выделенный WG-интерфейс `10.12.0.1/30`, слушающий **только** `127.0.0.1:<wg-ws-port>`
-   (либо `input drop` на WAN для WG-порта) — на него нельзя прийти мимо wstunnel;
+1. выделенный AWG-интерфейс `10.12.0.1/30`, `ListenPort=<wg-ws-port>`.
+   **Kernel AWG/WG не умеет bind на loopback** — порт слушает `0.0.0.0`/`[::]`,
+   поэтому защита ставится nft, а не bind:
+   `chain input`: `iifname != "lo" udp dport <wg-ws-port> drop`
+   (`inet`-таблица покрывает v4+v6). Прийти мимо wstunnel нельзя;
 2. `postrouting`: `ip saddr 10.12.0.0/30 oifname "<wan>" masquerade` — иначе пакеты
    уйдут в WAN с приватным src;
 3. `forward/UFW`: `route in on <exit-wg-ws> out on <wan>` allow.
@@ -218,7 +221,7 @@ meltdown: WG-в-TCP при потерях на магистрали проигр
 
 | # | Вопрос | Почему важен |
 |---|---|---|
-| OQ-1 | Пакет/бинарник `wstunnel` для Ubuntu 24.04 и точный синтаксис `--restrict-to` | От него зависит рендер юнита и sandbox (`AF_INET` + bind на 127.0.0.1) |
+| OQ-1 | Бинарник `wstunnel` (GitHub release + SHA256) и точные флаги релиза (`--restrict-to`, `--http-upgrade-path-prefix`) | От него зависит рендер юнитов, sandbox (`AF_INET`) и способ передачи секрет-префикса |
 | OQ-2 | Занятость `8443/tcp` на asv2 и на RU-релее | Порт-кандидат; XHTTP на asv2 снят, но проверить фактом (`ss -tlnp`) |
 | OQ-3 | Второй LE-домен под wstunnel и механика продления | `state.protocols["acme"]` хранит **один** скалярный `domain` (`src/acme/install.py`) — нужен второй сертификат без поломки существующего `vds acme` и deploy-hook `certbot.timer`. Решение — в SPEC (вариант: отдельный `acme.wstunnel_domain` + свой deploy-hook) |
 | OQ-4 | `alert-watch` и смена носителя | Ложные `relay_blocked` при переходе на `wg-ws0` — см. §9 |

@@ -102,6 +102,34 @@
   блок «Протоколы, которые можно активировать», CDN помечен холодным резервом
   (Q6). Только коммит: pipx/демон не трогались, дерево ubuntuInstaller чистое.
 
+## 2026-11-20: SPEC p2p link — ревизия после ревью (P0-1…P0-3, AC-S1…S9)
+
+- **P0-1:** kernel AWG/WG **не умеет bind на loopback** — вместо невыполнимого
+  «listen 127.0.0.1» зафиксирован nft-drop
+  `iifname != "lo" udp dport <WG_WS_PORT> drop`. Стек — **`awg`** (на обоих
+  узлах есть `awg`, `wg` нет; alert-watch читает `awg show`), обфускация
+  выключена (`Jc=0, S1=S2=0`) — внутри TLS junk жжёт MTU/окно.
+- **P0-2:** TLS/SNI исправлен — подключение к **`wss://ws.<domain>:9443`**
+  (hostname, а не IP: иначе LE не валидируется и SNI не уходит). Убрана
+  несуществующая схема `wg://` → UDP-форвард
+  `udp://127.0.0.1:<local>:127.0.0.1:<wg-port>`; секрет-префикс через
+  `EnvironmentFile` 0600 (оговорена видимость в argv, митигация — single-user
+  root-узлы + `ProtectProc=invisible`).
+- **P0-3:** селектор больше не переключается вслепую: pre-check
+  `ping -I wg-ws0 10.12.0.1` перед `ip route replace`, при мёртвом резерве —
+  сразу `exhausted` + alert. В `fallback` P25 **не крутит порты** (no-op,
+  `attempts` не растёт) — иначе три ложных rollback свалят селектор.
+- **P1:** реальный домен заменён плейсхолдерами; добавлен факт `9443/tcp`
+  на asv2 (свободен) и `awg`/`wg` (awg есть, wg нет); AC-S1…S9 сведены в
+  таблицу SPEC (включая AC-S9 про ложный `relay_blocked`); MASQUERADE `wg-ws0`
+  закреплён за `vds-relay-nat.service` (iptables), **не** nft — тот
+  перегенерируется `vds-relay-cidr.timer`.
+- **P2:** keepalive 25 на обеих сторонах; второй LE по ADR-004 (`--standalone`
+  80/tcp) + deploy-hook с фильтром `$RENEWED_DOMAINS`.
+- **OQ закрыты решениями:** вендоринг `erebe/wstunnel` (версия+SHA256, без
+  `curl|sh`), `ws.<domain>` (DNS — владелец), порт `9443`, `Restart=always` +
+  keepalive, XHTTP на 8443 не трогаем.
+
 ## 2026-11-20: SPEC p2p link (draft) + read-only факты по OQ
 
 - **SPEC:** [SPEC-20261120-p2p-link-multi-carrier](specs/SPEC-20261120-p2p-link-multi-carrier.md)

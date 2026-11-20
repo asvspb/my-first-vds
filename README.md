@@ -64,7 +64,8 @@ vds/
 │   ├── vds-awg-relay-pool.service.tpl   # exit (ADR-015): nft REDIRECT пул 51900-51911
                                      # ADR-016 (принят G2): носитель №2 wstunnel-wg в
                                      #   L4-ортогональном резерве к awg (UDP↔TCP);
-                                     #   переключение — на первом rollback P25
+                                     #   переключение — на первом rollback P25;
+                                     #   носитель №2 — wss на 9443/tcp
 │   └── sysctl/99-vds-gateway.conf.tpl
 ├── AGENTS.md           # Контекст проекта для ИИ-агентов
 ├── TECHDEBT.md         # Бэклог техдолга
