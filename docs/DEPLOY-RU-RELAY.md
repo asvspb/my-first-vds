@@ -512,6 +512,14 @@ awg1: в wg-ws0 уходят пакеты клиентов, а не 10.12.0.0/30
 
 Юниты: `vds-wstunnel-nft` (exit, oneshot nft+UFW), `vds-awg-wg-ws0` (plain AWG),
 `vds-wstunnel-server`/`-client` (Restart=always, env 0600).
+
+**Порядок активации (важно):** `install_unit` только enable'ит, поэтому команды
+сами делают `systemctl restart` — exit: `nft` → `wg-ws0` → `server` (сначала
+nft/UFW, иначе WG-порт успел бы подняться без drop вне `lo`); релей: `client` →
+`wg-ws0` → `nat` → `policy`. Без установленного бинарника (`wstunnel install
+--archive … --apply`) обе команды отказывают до мутаций (иначе 203/EXEC).
+nft-политика релея пишется атомарно после `nft -c -f` — битый `ru-cidrs.txt`
+не уронит живую awg1-ногу.
 живая приёмка — WP-P2P-6; DNS `ws.<domain>` → IP exit делает владелец (OQ-2).
 
 ## Откат (демонтаж)

@@ -309,6 +309,8 @@ vds relay wstunnel init [--apply]     # релей, шаг 1: ключи wg-ws0 
 vds relay wstunnel server --relay-ip <ip> --relay-public-key <key> \
     --domain ws.<domain> --prefix-file <env> [--apply]   # exit: wg-ws0 + wss 9443 + nft/UFW
 vds relay wstunnel client --exit-public-key <key> --domain ws.<domain> [--apply]
+                                      # старт: nft→wg-ws0→server (exit) / client→wg-ws0→nat→policy
+                                      # (релей); требует установленный бинарник (--archive)
                                       # релей, шаг 2: conf wg-ws0, клиент, NAT-ветка (table 100 не трогает)
                                       # wg-ws0 = plain AWG (без Jc/S*), Table=off, MTU 1240,
                                       # Endpoint 127.0.0.1:<local> — VPN-PROTOCOLS §2.5

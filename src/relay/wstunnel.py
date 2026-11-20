@@ -422,7 +422,8 @@ def parse_prefix_env(text: str) -> str:
     raise WstunnelError("в файле нет WSTUNNEL_*_PATH_PREFIX — это не prefix-файл")
 
 
-def read_private_key(path: Path = WG_WS_RAW_PRIV) -> str:
+def read_private_key(path: Optional[Path] = None) -> str:
+    path = path or WG_WS_RAW_PRIV  # late binding: тесты подменяют модульную константу
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -478,6 +479,37 @@ def render_nft_script(
 def _plan(lines: list[str]) -> None:
     for line in lines:
         console.print(f"  - {line}")
+
+
+def _write_text_atomic(path: Path, text: str, mode: int) -> None:
+    """Атомарная запись файла (tmp+replace) с явными правами."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except OSError:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _restart_unit(unit: str, run: Optional[Callable[..., ShellResult]] = None) -> None:
+    """`systemctl restart` с проверкой rc (install_unit только enable'ит!)."""
+    runner = run or run_list
+    res = runner(["systemctl", "restart", unit], timeout=30)
+    if not res.ok:
+        raise WstunnelError(f"{unit}: {res.stderr.strip() or res.stdout.strip()}")
+
+
+def _require_binary() -> None:
+    """Без бинарника юниты упадут 203/EXEC — проверяем ДО мутаций."""
+    if not WSTUNNEL_BIN.is_file():
+        raise WstunnelError(
+            f"нет {WSTUNNEL_BIN}: сначала `vds relay wstunnel install "
+            "--archive <tar.gz> --apply`"
+        )
 
 
 def run_init(dry_run: bool = True, apply: bool = False) -> int:
@@ -587,6 +619,11 @@ def run_exit_install(
             f"`certbot certonly --standalone -d {host}` (порт 80).[/error]"
         )
         return 1
+    try:
+        _require_binary()
+    except WstunnelError as exc:
+        console.print(f"[error][wstunnel] {exc}[/error]")
+        return 1
 
     from src.core.lock import FileLock
     from src.core.secrets import write_secret_atomic as _write_secret
@@ -604,20 +641,19 @@ def run_exit_install(
                 exit_public_key = _pubkey_from_private(private_key)
             else:
                 private_key, exit_public_key = gen_keypair()
-                WG_WS_CONF.parent.mkdir(parents=True, exist_ok=True)
-                _write_secret(
-                    WG_WS_CONF,
-                    render_exit_conf(private_key=private_key, peer_public_key=peer_key),
-                )
+            # P1: conf перезаписывается ВСЕГДА — иначе при ротации ключа релея
+            # (или исправлении опечатки) в state был бы новый peer, а в conf старый.
+            # Свой private_key exit при этом сохраняется.
+            _write_secret(
+                WG_WS_CONF,
+                render_exit_conf(private_key=private_key, peer_public_key=peer_key),
+            )
 
             write_env(WS_SERVER_ENV, render_server_env(prefix))
-            EXIT_NFT_FILE.parent.mkdir(parents=True, exist_ok=True)
-            EXIT_NFT_FILE.write_text(
-                render_exit_nft(relay_ip=ip, wan_iface=wan), encoding="utf-8"
+            _write_text_atomic(
+                EXIT_NFT_FILE, render_exit_nft(relay_ip=ip, wan_iface=wan), 0o644
             )
-            os.chmod(EXIT_NFT_FILE, 0o644)
-            WS_NFT_SCRIPT.write_text(render_nft_script(ip), encoding="utf-8")
-            os.chmod(WS_NFT_SCRIPT, 0o755)
+            _write_text_atomic(WS_NFT_SCRIPT, render_nft_script(ip), 0o755)
 
             if not install_unit("vds-wstunnel-nft.service.tpl", WS_NFT_UNIT,
                                 ctx={"script": str(WS_NFT_SCRIPT)}):
@@ -631,6 +667,11 @@ def run_exit_install(
                                      "wg_port": WG_WS_PORT_DEFAULT,
                                      "cert": str(cert), "key": str(key)}):
                 raise WstunnelError(f"юнит {WS_SERVER_UNIT} не установлен")
+
+            # Порядок критичен: сначала nft/UFW (drop WG-порта вне lo должен
+            # действовать ДО поднятия wg-ws0), затем интерфейс, затем сервер.
+            for unit in (WS_NFT_UNIT, WG_WS_UNIT, WS_SERVER_UNIT):
+                _restart_unit(unit)
 
             state = load_state(state_path)
             state.protocols["p2p_wstunnel"] = {
@@ -676,7 +717,6 @@ def run_relay_install(
     try:
         peer_key = exit_leg.validate_public_key(exit_public_key)
         host = _validate_hostname(domain)
-        private_key = read_private_key()
     except (WstunnelError, ValueError) as exc:
         console.print(f"[error][wstunnel] {exc}[/error]")
         return 1
@@ -704,10 +744,15 @@ def run_relay_install(
     if os.geteuid() != 0:
         console.print("[error][wstunnel] --apply требует root (sudo).[/error]")
         return 1
+    try:
+        _require_binary()
+        private_key = read_private_key()
+    except WstunnelError as exc:
+        console.print(f"[error][wstunnel] {exc}[/error]")
+        return 1
 
     from src.core.lock import FileLock
     from src.core.secrets import write_secret_atomic as _write_secret
-    from src.core.shell import run_list as _run
     from src.core.units import install_unit
 
     try:
@@ -740,7 +785,9 @@ def run_relay_install(
             ):
                 raise WstunnelError("не удалось перерендерить vds-relay-nat.service")
 
-            # nft-политика релея: перерендер из локального агрегата RU-CIDR
+            # nft-политика релея: перерендер из локального агрегата RU-CIDR.
+            # P1-2: сначала nft -c -f на временном файле — битый агрегат не должен
+            # уронить живую awg1-ногу через рестарт policy-юнита.
             from src.relay.config import render_nft_policy
 
             cidrs = []
@@ -749,16 +796,31 @@ def run_relay_install(
                          relay_paths.RELAY_CIDR_LIST.read_text(encoding="utf-8").splitlines()
                          if ln.strip()]
             relay_paths.RELAY_DIR.mkdir(parents=True, exist_ok=True)
-            relay_paths.RELAY_NFT_POLICY_FILE.write_text(render_nft_policy(cidrs),
-                                                        encoding="utf-8")
-            os.chmod(relay_paths.RELAY_NFT_POLICY_FILE, 0o644)
-
-            for unit in (relay_paths.RELAY_NAT_UNIT, relay_paths.RELAY_POLICY_UNIT):
-                res = _run(["systemctl", "restart", unit], timeout=30)
-                if not res.ok:
+            policy_text = render_nft_policy(cidrs)
+            fd, tmp_policy = tempfile.mkstemp(
+                dir=str(relay_paths.RELAY_DIR), prefix=".nft-policy."
+            )
+            tmp_path = Path(tmp_policy)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(policy_text)
+                os.chmod(tmp_path, 0o644)
+                check = run_list(["nft", "-c", "-f", str(tmp_path)], timeout=30)
+                if not check.ok:
                     raise WstunnelError(
-                        f"{unit}: {res.stderr.strip() or res.stdout.strip()}"
+                        "nft -c -f (policy) не прошёл: "
+                        f"{check.stderr.strip() or check.stdout.strip()} — "
+                        "живая политика не тронута"
                     )
+                os.replace(tmp_path, relay_paths.RELAY_NFT_POLICY_FILE)
+            except OSError:
+                tmp_path.unlink(missing_ok=True)
+                raise
+
+            # Порядок: клиент wstunnel → интерфейс → NAT → policy.
+            for unit in (WS_CLIENT_UNIT, WG_WS_UNIT,
+                         relay_paths.RELAY_NAT_UNIT, relay_paths.RELAY_POLICY_UNIT):
+                _restart_unit(unit)
 
             state = load_state(state_path)
             meta = dict(state.protocols.get("p2p_wstunnel") or {})

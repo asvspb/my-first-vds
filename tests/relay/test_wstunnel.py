@@ -365,3 +365,187 @@ def test_exit_install_rejects_ip_domain():
         apply=False,
     )
     assert code == 1
+
+
+# ---------------------------------------------------------------------------
+# --apply-ветки (P2-3 ревью): порядок рестартов, бинарник, ключи, state
+# ---------------------------------------------------------------------------
+
+import contextlib
+import pathlib as _pathlib
+
+from src.gateway.store import load_state
+
+
+class _FakeLock:
+    def __init__(self, *a, **kw):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _patch_common(monkeypatch, tmp_path, *, restarts):
+    monkeypatch.setattr(ws.os, "geteuid", lambda: 0)
+    binary = tmp_path / "bin" / "wstunnel"
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(ws, "WSTUNNEL_BIN", binary)
+    monkeypatch.setattr("src.core.lock.FileLock", _FakeLock)
+    monkeypatch.setattr("src.core.units.install_unit", lambda *a, **kw: True)
+    monkeypatch.setattr(ws, "_restart_unit", lambda unit, run=None: restarts.append(unit))
+
+
+def _lock_helper():
+    return _FakeLock()
+
+
+def test_exit_apply_starts_units_in_order(monkeypatch, tmp_path):
+    from src.relay import exit_leg
+
+    restarts: list[str] = []
+    _patch_common(monkeypatch, tmp_path, restarts=restarts)
+    monkeypatch.setattr(exit_leg, "ensure_ip_forward", lambda: None)
+    monkeypatch.setattr(exit_leg, "detect_wan_iface", lambda: "enp0s3")
+    monkeypatch.setattr(exit_leg, "exit_node_violation", lambda state: None)
+
+    cert_dir = tmp_path / "certs" / "ws.example.net"
+    cert_dir.mkdir(parents=True)
+    (cert_dir / "fullchain.pem").write_text("c", encoding="utf-8")
+    (cert_dir / "privkey.pem").write_text("k", encoding="utf-8")
+    monkeypatch.setattr(ws, "CERT_ROOT", tmp_path / "certs")
+    monkeypatch.setattr(ws, "WG_WS_CONF", tmp_path / "wg-ws0.conf")
+    monkeypatch.setattr(ws, "EXIT_NFT_FILE", tmp_path / "wstun.nft")
+    monkeypatch.setattr(ws, "WS_NFT_SCRIPT", tmp_path / "apply.sh")
+    monkeypatch.setattr(ws, "WS_SERVER_ENV", tmp_path / "server.env")
+
+    prefix_file = tmp_path / "client.env"
+    prefix_file.write_text("WSTUNNEL_HTTP_UPGRADE_PATH_PREFIX=FIXTURE_PREFIX\n", encoding="utf-8")
+    state_path = str(tmp_path / "state.json")
+
+    code = ws.run_exit_install(
+        relay_ip="203.0.113.10", relay_public_key="FIXTURE_PUB_RELAY",
+        domain="ws.example.net", prefix_file=prefix_file, apply=True,
+        state_path=state_path,
+    )
+    assert code == 0
+    assert restarts == [ws.WS_NFT_UNIT, ws.WG_WS_UNIT, ws.WS_SERVER_UNIT]
+    st = load_state(state_path)
+    meta = st.protocols["p2p_wstunnel"]
+    assert meta["iface"] == "wg-ws0"
+    assert meta["public_key"] == "FIXTURE_PUB_RELAY"  # ключ ПИРА
+    assert meta["peer_ip"] == "10.12.0.2"
+    assert meta["installed"] is True
+    # секретов в state нет
+    raw = _pathlib.Path(state_path).read_text(encoding="utf-8")
+    assert "FIXTURE_PREFIX" not in raw
+    assert "PrivateKey" not in raw
+
+
+def test_exit_apply_refuses_without_binary(monkeypatch, tmp_path):
+    restarts: list[str] = []
+    _patch_common(monkeypatch, tmp_path, restarts=restarts)
+    monkeypatch.setattr(ws, "WSTUNNEL_BIN", tmp_path / "missing")
+    cert_dir = tmp_path / "certs" / "ws.example.net"
+    cert_dir.mkdir(parents=True)
+    (cert_dir / "fullchain.pem").write_text("c", encoding="utf-8")
+    (cert_dir / "privkey.pem").write_text("k", encoding="utf-8")
+    monkeypatch.setattr(ws, "CERT_ROOT", tmp_path / "certs")
+    prefix_file = tmp_path / "client.env"
+    prefix_file.write_text("WSTUNNEL_HTTP_UPGRADE_PATH_PREFIX=P\n", encoding="utf-8")
+
+    code = ws.run_exit_install(
+        relay_ip="203.0.113.10", relay_public_key="FIXTURE_PUB_RELAY",
+        domain="ws.example.net", prefix_file=prefix_file, apply=True,
+        state_path=str(tmp_path / "state.json"),
+    )
+    assert code == 1
+    assert restarts == []  # ничего не стартовали
+
+
+def test_exit_apply_updates_peer_key_keeping_private(monkeypatch, tmp_path):
+    """P1: смена --relay-public-key переписывает conf, private_key сохраняется."""
+    from src.relay import exit_leg
+
+    restarts: list[str] = []
+    _patch_common(monkeypatch, tmp_path, restarts=restarts)
+    monkeypatch.setattr(exit_leg, "ensure_ip_forward", lambda: None)
+    monkeypatch.setattr(exit_leg, "detect_wan_iface", lambda: "enp0s3")
+    monkeypatch.setattr(exit_leg, "exit_node_violation", lambda state: None)
+    cert_dir = tmp_path / "certs" / "ws.example.net"
+    cert_dir.mkdir(parents=True)
+    (cert_dir / "fullchain.pem").write_text("c", encoding="utf-8")
+    (cert_dir / "privkey.pem").write_text("k", encoding="utf-8")
+    monkeypatch.setattr(ws, "CERT_ROOT", tmp_path / "certs")
+    conf = tmp_path / "wg-ws0.conf"
+    conf.write_text(
+        "[Interface]\nAddress = 10.12.0.1/30\nPrivateKey = FIXTURE_PW_EXIT_KEEP=\n\n"
+        "[Peer]\nPublicKey = OLD_PEER_KEY\nAllowedIPs = 10.12.0.2/32\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ws, "WG_WS_CONF", conf)
+    monkeypatch.setattr(ws, "EXIT_NFT_FILE", tmp_path / "wstun.nft")
+    monkeypatch.setattr(ws, "WS_NFT_SCRIPT", tmp_path / "apply.sh")
+    monkeypatch.setattr(ws, "WS_SERVER_ENV", tmp_path / "server.env")
+    monkeypatch.setattr(
+        "src.relay.exit_leg._pubkey_from_private", lambda k: "FIXTURE_PUB_EXIT"
+    )
+    prefix_file = tmp_path / "client.env"
+    prefix_file.write_text("WSTUNNEL_HTTP_UPGRADE_PATH_PREFIX=P\n", encoding="utf-8")
+
+    code = ws.run_exit_install(
+        relay_ip="203.0.113.10", relay_public_key="NEW_PEER_KEY",
+        domain="ws.example.net", prefix_file=prefix_file, apply=True,
+        state_path=str(tmp_path / "state.json"),
+    )
+    assert code == 0
+    text = conf.read_text(encoding="utf-8")
+    assert "FIXTURE_PW_EXIT_KEEP=" in text   # свой ключ цел
+    assert "NEW_PEER_KEY" in text and "OLD_PEER_KEY" not in text
+
+
+def test_relay_apply_starts_units_and_checks_policy(monkeypatch, tmp_path):
+    from src.relay import exit_leg, paths as relay_paths
+
+    restarts: list[str] = []
+    _patch_common(monkeypatch, tmp_path, restarts=restarts)
+    monkeypatch.setattr(exit_leg, "detect_wan_iface", lambda: "eth0")
+    monkeypatch.setattr(ws, "WG_WS_CONF", tmp_path / "wg-ws0.conf")
+    monkeypatch.setattr(ws, "WS_CLIENT_ENV", tmp_path / "client.env")
+    monkeypatch.setattr(ws, "WS_CLIENT_ENV", tmp_path / "client.env")
+    raw = tmp_path / "wg-ws0.priv"
+    raw.write_text("FIXTURE_PW_RELAY=\n", encoding="utf-8")
+    monkeypatch.setattr(ws, "WG_WS_RAW_PRIV", raw)
+
+    relay_marker = tmp_path / "awg1.conf"
+    relay_marker.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(relay_paths, "RELAY_EXIT_CONFIG_PATH", relay_marker)
+    monkeypatch.setattr(relay_paths, "RELAY_DIR", tmp_path)
+    monkeypatch.setattr(relay_paths, "RELAY_NFT_POLICY_FILE", tmp_path / "nft-policy.conf")
+    monkeypatch.setattr(relay_paths, "RELAY_CIDR_LIST", tmp_path / "ru-cidrs.txt")
+    (tmp_path / "ru-cidrs.txt").write_text("203.0.113.0/24\n", encoding="utf-8")
+    (tmp_path / "client.env").write_text("WSTUNNEL_HTTP_UPGRADE_PATH_PREFIX=P\n", encoding="utf-8")
+
+    calls: list[list[str]] = []
+
+    def fake_run(argv, timeout=None, check=False):
+        calls.append(list(argv))
+        return ShellResult(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(ws, "run_list", fake_run)
+
+    code = ws.run_relay_install(
+        exit_public_key="FIXTURE_PUB_EXIT", domain="ws.example.net",
+        apply=True, state_path=str(tmp_path / "state.json"),
+    )
+    assert code == 0
+    assert restarts == [
+        ws.WS_CLIENT_UNIT, ws.WG_WS_UNIT,
+        relay_paths.RELAY_NAT_UNIT, relay_paths.RELAY_POLICY_UNIT,
+    ]
+    # nft -c -f выполнен ДО рестарта policy, файл атомарно заменён
+    assert any(c[:3] == ["nft", "-c", "-f"] for c in calls)
+    assert "wg-ws0" in (tmp_path / "nft-policy.conf").read_text(encoding="utf-8")
