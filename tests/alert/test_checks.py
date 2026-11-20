@@ -496,3 +496,68 @@ def test_multi_iface_traffic_active_from_any(tmp_path):
         cfg=_multi_cfg(), prev_state=prev, now=NOW, run=run, state_path=state_path,
     )
     assert signal.traffic_active is True  # 12000 > 9000
+
+
+# ---------------------------------------------------------------------------
+# P0 (ревью 2026-11-20): у wg-ws0 СВОЯ пара ключей — источник по интерфейсу
+# ---------------------------------------------------------------------------
+
+WG_PUB = "FIXTURE_PUBKEY_WG_WS1111111"
+WG_IP = "10.12.0.2"
+
+
+def _dump_pub(pub: str, ip: str, epoch: int, rx: int = 1000) -> str:
+    return (
+        f"{IFACE_LINE}\n"
+        f"{pub}\t(none)\t198.51.100.9:51822\t{ip}/32\t{epoch}\t{rx}\t7\toff\n"
+    )
+
+
+def _write_state_two_legs(tmp_path):
+    """relay_leg (awg2, ключ A / 10.11.0.2) + p2p_wstunnel (wg-ws0, ключ B / 10.12.0.2)."""
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "clients": [],
+                "protocols": {
+                    "relay_leg": {"iface": "awg2", "public_key": PEER_PUB, "peer_ip": "10.11.0.2"},
+                    "p2p_wstunnel": {"iface": "wg-ws0", "public_key": WG_PUB, "peer_ip": WG_IP},
+                },
+                "ufw_lockdown": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
+def test_wg_ws0_uses_own_key_not_relay_leg(tmp_path):
+    """Раньше для любого не-awg0 брался relay_leg → wg-ws0 искал ключ awg2."""
+    state_path = _write_state_two_legs(tmp_path)
+    dead = int(NOW.timestamp()) - 3600
+    run = FakeRunner({
+        ("awg", "show", "awg2"): _res(_dump_pub(PEER_PUB, "10.11.0.2", dead)),
+        ("awg", "show", "wg-ws0"): _res(_dump_pub(WG_PUB, WG_IP, int(NOW.timestamp()) - 20)),
+    })
+    signal = read_relay_signal(
+        cfg=_multi_cfg(), prev_state={}, now=NOW, run=run, state_path=state_path,
+    )
+    assert signal.classification == "ok"  # wg-ws0 найден по СВОЕМУ ключу
+
+
+def test_wg_ws0_foreign_key_and_ip_not_used(tmp_path):
+    """Чужой ключ и чужой IP в дампе wg-ws0 → peer_not_in_dump (не подмена)."""
+    from src.alert.checks import _probe_one_iface
+
+    state_path = _write_state_two_legs(tmp_path)
+    run = FakeRunner({
+        ("awg", "show", "wg-ws0"): _res(_dump_pub("OTHERKEY", "10.12.0.99", int(NOW.timestamp()) - 20)),
+    })
+    sig_wg = _probe_one_iface(
+        cfg=_multi_cfg(), prev_state={}, now=NOW, run=run,
+        state_path=state_path, iface="wg-ws0",
+    )
+    assert sig_wg.peer_found is False
+    assert sig_wg.detail == "peer_not_in_dump"

@@ -111,9 +111,13 @@ def test_client_argv_uses_hostname_and_udp_forward():
                           local_udp=51822, wg_port=51821)
     assert argv[1] == "client"
     assert "-L" in argv
-    assert "udp://127.0.0.1:51822:localhost:51821?timeout_sec=0" in argv
+    assert "udp://127.0.0.1:51822:127.0.0.1:51821?timeout_sec=0" in argv
     assert "--tls-verify-certificate" in argv
     assert "wss://ws.example.net:9443" in argv
+    # target форварда обязан совпадать со --restrict-to сервера строкой
+    restrict = ws.server_argv(cert_path="c", key_path="k")
+    target = restrict[restrict.index("--restrict-to") + 1]
+    assert f"127.0.0.1:51821" == target
 
 
 def test_client_argv_rejects_ip():
@@ -245,6 +249,8 @@ def test_exit_nft_isolation_and_nat():
     assert "ip saddr != 203.0.113.10 tcp dport 9443 drop" in text
     assert 'iifname != "lo" udp dport 51821 drop' in text
     assert "meta nfproto ipv6 tcp dport 9443 drop" in text
+    # forward-цепочки нет: на exit DEFAULT_FORWARD_POLICY=ACCEPT (проверено)
+    assert "chain forward" not in text
     assert "flush table inet vds_relay_wstun" in text
 
 
@@ -253,7 +259,34 @@ def test_exit_nft_rejects_bad_ip():
         ws.render_exit_nft(relay_ip="not-an-ip", wan_iface="enp0s3")
 
 
-def test_relay_nat_template_has_p2p_branch():
+def test_relay_nat_template_masquerades_client_subnet_to_p2p_iface():
+    """P1 ревью: src должен быть {client_subnet}, а не 10.12.0.0/30.
+
+    В wg-ws0 уходят пакеты клиентов (10.10.0.0/24), как и в awg1 рядом;
+    подстановочного {p2p_subnet} нет намеренно — перепутать невозможно.
+    """
     text = (TEMPLATES / "vds-relay-nat.service.tpl").read_text(encoding="utf-8")
-    assert "{p2p_subnet}" in text and "{p2p_iface}" in text
     assert "if [ -n \"{p2p_iface}\" ]" in text
+    assert "-s {client_subnet} -o {p2p_iface} -j MASQUERADE" in text
+    assert "{p2p_subnet}" not in text
+
+
+# --- P2 ревью 2026-11-20: архитектуры и строгая проверка hostname ----------
+
+def test_expected_sha256_rejects_unknown_arch():
+    with pytest.raises(ws.WstunnelError, match="не поддерживается"):
+        ws.expected_sha256("arm64")
+
+
+def test_expected_sha256_amd64_matches_pin():
+    assert ws.expected_sha256("amd64") == ws.WSTUNNEL_SHA256_BY_ARCH["amd64"]
+
+
+@pytest.mark.parametrize("bad", ["203.0.113.10", "[::1]", "ws.example.net/path", "ws example.net", ""])
+def test_client_argv_rejects_non_hostname(bad):
+    with pytest.raises(ws.WstunnelError):
+        ws.client_argv(domain=bad)
+
+
+def test_client_argv_accepts_fqdn():
+    assert ws.client_argv(domain="ws.example.net")[-1] == "wss://ws.example.net:9443"

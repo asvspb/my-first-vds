@@ -55,7 +55,7 @@
 | Порты | `49222/tcp LIMIT` (ssh, двухфазный перенос завершён), `443/tcp+udp`, `80/tcp` (ACME), `51825/udp`; после P24 — `51900/udp` **только с IP релея** (нога на `awg2`, пул 51900–51911 через nft REDIRECT; MASQUERADE `10.11.0.0/30` на WAN в той же nft-таблице, нужен `ip_forward=1`) |
 | SSH | **только 49222** (limit), ключи; `PasswordAuthentication` — как в образе |
 | Юниты | vds-xray, vds-hysteria2 (secure LE), vds-amneziawg + vds-amneziawg-nat, vds-probe-watch.timer (+ vds-gateway-health.timer, vds-probe-rucidr.timer — при установке); после P24 — `vds-awg-relay` (awg2) и `vds-awg-relay-pool` (nft REDIRECT); носитель №2 (ADR-016) — `vds-wstunnel-server.service` (exit) и `vds-wstunnel-client.service` (релей),
-MASQUERADE `10.12.0.0/30` — ветка `p2p_*` в `vds-relay-nat.service`, `chain forward` MSS-clamp — в nft `vds_relay`,
+MASQUERADE `-s <client_subnet> -o wg-ws0` — ветка `p2p_iface` в `vds-relay-nat.service`, `chain forward` MSS-clamp — в nft `vds_relay`; на exit forward не настраивается (`DEFAULT_FORWARD_POLICY=ACCEPT`),
 `Restart=always`, секрет-prefix в env 0600; на релее opt-in — `vds-relay-maneuver.timer` + `vds-relay-maneuver.service` (`vds relay maneuver install`, WP-M4; `.service` enable=off, `StateDirectory=vds`, sandbox: `/etc/amnezia` в ReadWritePaths, `CAP_NET_ADMIN CAP_NET_RAW`, `AF_NETLINK`) |
 | Роль | основной AWG-exit ноутбука (`vpn start`), AWG-подсеть 10.9.0.0/24 |
 
@@ -483,6 +483,8 @@ cooldown, и лимит; напоминание о локе — раз в `ALERT
 backoff (`60·2^(n−1)` с, до 1 ч).
 
 **Носителей может быть несколько** (ADR-016): `ALERT_RELAY_IFACE=awg2,wg-ws0` —
+ключ пира берётся по источнику интерфейса: `awg2` → `protocols["relay_leg"]`,
+`wg-ws0` → `protocols["p2p_wstunnel"]` (у носителя СВОЯ пара ключей и 10.12.0.2),
 пульс `ok`, если жив любой; `blocked` только когда мертвы все (иначе переход на
 резервный носитель даёт ложный `relay_blocked`).
 

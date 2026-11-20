@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import os
 import platform
+import re
 import tarfile
 import tempfile
 from pathlib import Path
@@ -36,7 +37,12 @@ from src.core.shell import ShellResult, run_list
 
 # --- пиннинг релиза (OQ-1) -------------------------------------------------
 WSTUNNEL_VERSION = "11.1.0"
-WSTUNNEL_SHA256 = "512edf4e7bb64fc133522220123514868fae75b5bae4124b53e396787276aa23"
+#: sha256 ассетов по архитектурам. arm64 пока не проверен — отсутствие в
+#: словаре означает «эта архитектура не поддерживается» (а не «любой хэш»).
+WSTUNNEL_SHA256_BY_ARCH = {
+    "amd64": "512edf4e7bb64fc133522220123514868fae75b5bae4124b53e396787276aa23",
+}
+WSTUNNEL_SHA256 = WSTUNNEL_SHA256_BY_ARCH["amd64"]  # обратная совместимость
 WSTUNNEL_RELEASE_URL = (
     "https://github.com/erebe/wstunnel/releases/download/v{version}/"
     "wstunnel_{version}_linux_{arch}.tar.gz"
@@ -100,8 +106,21 @@ def sha256_of(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_archive(path: Path, expected: str = WSTUNNEL_SHA256) -> None:
+def expected_sha256(arch: Optional[str] = None) -> str:
+    """sha256 для архитектуры; неподдерживаемая — явная ошибка."""
+    key = arch or detect_arch()
+    digest = WSTUNNEL_SHA256_BY_ARCH.get(key)
+    if not digest:
+        raise WstunnelError(
+            f"архитектура {key} не поддерживается: нет проверенного sha256 "
+            f"(есть: {', '.join(sorted(WSTUNNEL_SHA256_BY_ARCH))})"
+        )
+    return digest
+
+
+def verify_archive(path: Path, expected: Optional[str] = None) -> None:
     """Сверить sha256 ДО распаковки; несовпадение — WstunnelError."""
+    expected = expected or expected_sha256()
     actual = sha256_of(path)
     if actual != expected:
         raise WstunnelError(
@@ -204,6 +223,37 @@ def server_argv(
     ]
 
 
+_HOSTNAME_RE = re.compile(
+    r"^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))+$"
+)
+
+
+def _validate_hostname(domain: str) -> str:
+    """Строгая проверка: hostname (FQDN), не IP, без схемы/пути/пробелов.
+
+    `ipaddress` ловит IP-литералы (включая IPv6 в скобках), regex — остальное
+    (`ws.example.net/x`, пробелы, подчёркивания недопустимы в TLS-SNI).
+    """
+    host = (domain or "").strip().strip("[]").lower()
+    try:
+        import ipaddress
+
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise WstunnelError(
+            "нужен hostname домена (ws.<domain>), а не IP: иначе LE не валидируется "
+            "и SNI не уходит"
+        )
+    if not _HOSTNAME_RE.fullmatch(host):
+        raise WstunnelError(
+            f"{domain!r} не похож на hostname формата ws.<domain> "
+            "(без схемы, пути и пробелов)"
+        )
+    return host
+
+
 def client_argv(
     *,
     domain: str,
@@ -217,15 +267,12 @@ def client_argv(
     уходит настоящий. `--tls-verify-certificate` обязателен: по умолчанию
     wstunnel доверяет любому сертификату.
     """
-    host = (domain or "").strip()
-    if not host or host.replace(".", "").isdigit():
-        raise WstunnelError(
-            "нужен hostname домена (ws.<domain>), а не IP: иначе LE не валидируется "
-            "и SNI не уходит"
-        )
+    host = _validate_hostname(domain)
     return [
         str(WSTUNNEL_BIN), "client",
-        "-L", f"udp://127.0.0.1:{int(local_udp)}:localhost:{int(wg_port)}?timeout_sec=0",
+        # target — ровно `127.0.0.1:<wg_port>`: `--restrict-to` матчит строку,
+        # а `localhost` может резолвиться в ::1 и не совпасть.
+        "-L", f"udp://127.0.0.1:{int(local_udp)}:127.0.0.1:{int(wg_port)}?timeout_sec=0",
         "--tls-verify-certificate",
         f"wss://{host}:{int(ws_port)}",
     ]
@@ -312,7 +359,11 @@ def render_exit_nft(
       в интернет);
     * `input` (priority filter − 1) — WSS-порт только с IP релея; WG-порт
       **только через lo** (kernel AWG не умеет bind на loopback — nft замещает);
-    * `forward` — разрешить 10.12.0.0/30 наружу.
+    Forward-цепочки здесь НЕТ намеренно: на exit `DEFAULT_FORWARD_POLICY=ACCEPT`
+    («allow (routed)» — проверено на живом узле), ровно поэтому работает и
+    `awg2` без правил. Отдельная `chain forward policy accept` была бы no-op
+    (и не обошла бы чужой DROP на том же хуке). Если политика станет `DROP` —
+    нужен `ufw route allow in on wg-ws0 out on <wan>`, а не nft-иллюзия.
     """
     from src.relay.exit_leg import validate_relay_ip, validate_wan_iface
 
@@ -334,10 +385,6 @@ def render_exit_nft(
         f"        ip saddr != {ip} tcp dport {int(ws_port)} drop\n"
         f"        meta nfproto ipv6 tcp dport {int(ws_port)} drop\n"
         f'        iifname != "lo" udp dport {int(wg_port)} drop\n'
-        "    }\n"
-        "    chain forward {\n"
-        "        type filter hook forward priority filter; policy accept;\n"
-        f'        ip saddr {WG_WS_NET} oifname "{wan}" accept\n'
         "    }\n"
         "}\n"
     )
@@ -419,6 +466,8 @@ __all__ = [
     "detect_arch",
     "download_url",
     "sha256_of",
+    "expected_sha256",
+    "WSTUNNEL_SHA256_BY_ARCH",
     "verify_archive",
     "extract_binary",
     "installed_version",

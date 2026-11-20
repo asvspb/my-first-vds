@@ -289,7 +289,8 @@ vds gateway probe-watch ru-cidr install --apply    # RU-CIDR без релея: 
    для coverage нужен `sudo`.
 7. `ALERT_RELAY_IFACE` может быть списком (`awg2,wg-ws0`): пульс `ok`, если жив
    любой носитель — при ADR-016 это обязательно, иначе ложный `relay_blocked`
-   в момент перехода на резерв.
+   в момент перехода на резерв. Ключ пира выбирается **по интерфейсу**:
+   `awg2` → `protocols["relay_leg"]`, `wg-ws0` → `protocols["p2p_wstunnel"]`.
 8. `sudo vds alert watch --no-send` — прогнать тик без отправки: `relay_pulse` не
    должен быть `inconclusive` при живом канале (`idle` допустим, если на `awg1`
    не выставлен `PersistentKeepalive` — см. DEPLOY-RU-RELAY §4).

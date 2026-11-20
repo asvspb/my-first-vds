@@ -102,11 +102,35 @@
   блок «Протоколы, которые можно активировать», CDN помечен холодным резервом
   (Q6). Только коммит: pipx/демон не трогались, дерево ubuntuInstaller чистое.
 
+## 2026-11-20: фикс-пакет по ревью трёх WP (P0×2, P1×2, P2×2)
+
+- **P0-1 (alert, ложный `relay_blocked` на резерве):** `_relay_peer_identity`
+  выбирает источник **по интерфейсу** — `wg-ws0` → `protocols["p2p_wstunnel"]`
+  (своя пара ключей, 10.12.0.2), `awg2` → `relay_leg`, `awg0` → `clients[]`.
+  Раньше любой не-`awg0` брал `relay_leg` → `peer_not_found` на wg-ws0.
+  Тест с **двумя разными ключами** (этого не хватало прежним тестам).
+- **P0-2 (wstunnel не пропустил бы ни один пакет):** клиент форвардит на
+  `127.0.0.1:<wg>`, а не `localhost:<wg>` — `--restrict-to` матчит строку, а
+  `localhost` может резолвиться в `::1`. Тест сверяет target с `--restrict-to`.
+- **P1-1 (NAT молча не работал бы):** в `vds-relay-nat.service` MASQUERADE
+  пишется `-s {client_subnet} -o {p2p_iface}` — в `wg-ws0` уходят пакеты
+  клиентов (10.10.0.0/24), а не 10.12.0.0/30; плейсхолдер `{p2p_subnet}` убран,
+  перепутать нельзя (тест запрещает его возврат).
+- **P1-2 (no-op):** `chain forward` из `render_exit_nft` удалена. На exit
+  `DEFAULT_FORWARD_POLICY=ACCEPT` + «allow (routed)» — проверено на живом узле;
+  поэтому awg2 работает без правил. Зафиксировано в доке: если политика станет
+  `DROP`, нужен `ufw route allow in on wg-ws0 out on <wan>`, а не nft-иллюзия.
+- **P2-1:** `WSTUNNEL_SHA256_BY_ARCH` (только amd64 проверен); arm64 → явная
+  ошибка «не поддерживается», а не гарантированный провал sha256.
+- **P2-2:** hostname валидируется строго (`ipaddress` + regex): IP, `[::1]`,
+  `ws.example.net/path`, пробелы — отказ.
+- **P2-3:** реальный поддомен в STATUS заменён на `ws.<domain>`.
+
 ## 2026-11-20: WP-P2P-2 (часть 1) — wg-ws0 plain, nft, NAT-ветка
 
-- **DNS/LЕ готовы:** `ws.asvpersonal.ru` → exit (DNS only, проверено с ноутбука
+- **DNS/LЕ готовы:** `ws.<domain>` → exit (DNS only, проверено с ноутбука
   и с exit через 8.8.8.8); LE выпущен `certbot --standalone`
-  (`/etc/letsencrypt/live/ws.asvpersonal.ru/`, до 2027-02-18).
+  (`/etc/letsencrypt/live/ws.<domain>/`, до 2027-02-18).
 - **Plain AWG:** `render_server_conf(obf={})` / `render_client_conf(obf={}, junk={})`
   не пишут `Jc/S1/H*` — внутри WSS обфускация только жжёт MTU/окно.
 - **Конфиги `wg-ws0`:** exit `10.12.0.1/30` + пир `10.12.0.2/32` keepalive 25;

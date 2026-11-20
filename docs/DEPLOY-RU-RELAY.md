@@ -486,10 +486,16 @@ ssh relay 'vds relay wstunnel status --json'   # pinned/installed/env-файлы
 `Jc/Jmin/Jmax/S1/S2/H1..H4` (для AWG это plain-WireGuard). Релей: `Table = off`,
 `MTU 1240`, `Endpoint = 127.0.0.1:<local-udp>` (порт `wstunnel client -L`).
 
-**MASQUERADE 10.12.0.0/30** — в `vds-relay-nat.service` (iptables, одна точка с
-awg1/eth0), **не** в nft: таблица `vds_relay` перегенерируется cidr-таймером.
+**MASQUERADE** — `-s <client_subnet> -o wg-ws0` (клиентская подсеть awg0, как и для
+awg1: в wg-ws0 уходят пакеты клиентов, а не 10.12.0.0/30). Живёт в
+`vds-relay-nat.service` (iptables, одна точка с awg1/eth0), **не** в nft: таблица
+`vds_relay` перегенерируется cidr-таймером.
 В nft-политику добавлены `iifname "wg-ws0" return` и `chain forward` с
 `maxseg size set rt mtu`.
+
+**Forward на exit не настраиваем:** там `DEFAULT_FORWARD_POLICY=ACCEPT`
+(«allow (routed)») — ровно поэтому работает и `awg2` без правил. Отдельная nft
+`chain forward` была бы no-op и не обошла бы чужой DROP.
 
 **Юниты** (интерфейс, `Wants/After`) — следующая часть WP-P2P-2;
 живая приёмка — WP-P2P-6; DNS `ws.<domain>` → IP exit делает владелец (OQ-2).

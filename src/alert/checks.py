@@ -255,23 +255,48 @@ def _signal(
     )
 
 
+#: Интерфейс носителя №2 (ADR-016): у него СВОЯ пара ключей и свой IP 10.12.0.2.
+P2P_WSTUN_IFACE = "wg-ws0"
+
+
 def _relay_peer_identity(
     gateway_state, cfg: AlertConfig, iface: str
 ) -> tuple[str, str]:
-    """(public_key, address_ip) пира релея для выбранного интерфейса.
+    """(public_key, address_ip) пира релея **для конкретного интерфейса**.
 
-    Выделенная нога (ADR-015): при `ALERT_RELAY_IFACE` = iface из
-    `state.protocols["relay_leg"]` (или любом не-`awg0`) личность пира берётся
-    из `relay_leg` — `exit_leg` пишет туда, а не в `clients`. Фолбэк на
-    `clients[]` (`protocol=amneziawg`, `name=relay_peer`) сохраняет обратную
-    совместимость для клиентского awg0.
+    Три источника, и выбор строго по интерфейсу (P0 ревью 2026-11-20 — раньше
+    для любого не-`awg0` брался `relay_leg`, и `wg-ws0` искал ключ от awg2 →
+    вечный `peer_not_found` и ложный `relay_blocked` при работе на резерве):
+
+    * `wg-ws0` → `state.protocols["p2p_wstunnel"]` (ADR-016);
+    * прочие не-`awg0` (например `awg2`) → `state.protocols["relay_leg"]`;
+    * `awg0` → `clients[]` (`protocol=amneziawg`, `name=relay_peer`).
+
+    Легаси-совместимость: `relay_leg` без поля `iface` по-прежнему обслуживает
+    любой не-`awg0` интерфейс (кроме `wg-ws0`).
     """
-    leg = (getattr(gateway_state, "protocols", None) or {}).get("relay_leg") or {}
+    protocols = getattr(gateway_state, "protocols", None) or {}
+    leg = protocols.get("relay_leg") or {}
+    wstun = protocols.get("p2p_wstunnel") or {}
+
+    def _identity(src: dict) -> tuple[str, str]:
+        return (
+            str(src.get("public_key") or ""),
+            str(src.get("peer_ip") or "").split("/")[0].strip(),
+        )
+
+    wstun_iface = str(wstun.get("iface") or P2P_WSTUN_IFACE)
+    if iface in (P2P_WSTUN_IFACE, wstun_iface) and wstun:
+        public_key, peer_ip = _identity(wstun)
+        if public_key:
+            return public_key, peer_ip
+
     leg_iface = str(leg.get("iface") or "")
-    use_leg = bool(leg) and (iface == leg_iface or iface != "awg0")
+    use_leg = bool(leg) and (
+        iface == leg_iface or (iface != "awg0" and iface != P2P_WSTUN_IFACE)
+    )
     if use_leg:
-        public_key = str(leg.get("public_key") or "")
-        peer_ip = str(leg.get("peer_ip") or "").split("/")[0].strip()
+        public_key, peer_ip = _identity(leg)
         if public_key:
             return public_key, peer_ip
 
