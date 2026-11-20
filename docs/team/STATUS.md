@@ -102,6 +102,31 @@
   блок «Протоколы, которые можно активировать», CDN помечен холодным резервом
   (Q6). Только коммит: pipx/демон не трогались, дерево ubuntuInstaller чистое.
 
+## 2026-11-20: WP-P2P-3 — селектор носителей (готово к ревью, `769a7eb`)
+
+- **`src/relay/carriers.py`:** state-машина `primary/fallback/recovering/exhausted`,
+  state `/var/lib/vds/p2p-carriers.json` 0600 (aware-UTC, история ≤100), пробы
+  `ping -I <iface> <peer>`, переключение = `ip route replace default dev … table 100`.
+- **Хук P25:** оба rollback-ветки `tick()` и CLI `rollback` вызывают
+  `on_maneuver_rollback()` (уже под локом P25 — анти-deadlock AC-7): pre-check
+  `ping -I wg-ws0` → fallback, провал → exhausted (AC-S5, не переключаемся на
+  мёртвый носитель).
+- **P25 no-op в fallback (AC-S6):** `run_step`/`run_tick` при
+  `active == wstunnel` вместо `tick()` выполняют `fallback_tick` — attempts не
+  тратятся, `awg set` не вызывается.
+- **prefer_primary (AC-6):** 3 пробы awg1 подряд + ≥600 с в fallback → возврат +
+  **сброс P25-серии** (consecutive_failures=0, failed_ports=[], exhausted=False,
+  healthy) — иначе старые 3/3 дали бы ложный манёвр.
+- **Анти-джиттер:** `fallback → exhausted` по 3/3 провалам wg-ws0; автовыход при
+  живом любом носителе; лимит 3 переключений/час.
+- **Совместимость:** без `/etc/amnezia/wg-ws0.conf` всё no-op — существующие
+  тесты maneuver не менялись, живой релей до выката WP-P2P-2 ведёт себя как раньше.
+- **AC-S4:** policy-юнит через ExecStartPost `carrier-default-iface.sh` ставит
+  table 100 по активному носителю из state (дефолт awg1, `ip link show`
+  проверяется — юнит не падает); `After=wg-ws0` мягкий.
+- **CLI:** `vds relay carrier status [--json]` / `switch --to awg|wstunnel [--apply]`.
+- **Тесты:** +18 (матрица переходов, анти-джиттер, лимит, совместимость, AC-S4).
+
 ## 2026-11-20: WP-P2P-2 — P0/P1 фикс (юниты реально стартуют, атомарная policy)
 
 - **P0-1:** `install_unit()` только enable'ит — добавлены явные
