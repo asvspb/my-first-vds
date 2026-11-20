@@ -102,6 +102,26 @@
   блок «Протоколы, которые можно активировать», CDN помечен холодным резервом
   (Q6). Только коммит: pipx/демон не трогались, дерево ubuntuInstaller чистое.
 
+## 2026-11-20: WP-P2P-1 — вендоринг wstunnel + юниты (готово к ревью)
+
+- **Пиннинг (OQ-1):** `WSTUNNEL_VERSION=11.1.0`,
+  `WSTUNNEL_SHA256=512edf4e…aa23` (digest релиза
+  `wstunnel_11.1.0_linux_amd64.tar.gz`), url-шаблон GitHub Releases; никаких
+  `latest`/`curl | sh`. Флаги сверены по README тега v11.1.0:
+  server `wss://0.0.0.0:<port> --restrict-to 127.0.0.1:<wg> --tls-certificate …
+  --tls-private-key …`; client `-L 'udp://127.0.0.1:<local>:localhost:<wg>?timeout_sec=0'
+  --tls-verify-certificate wss://ws.<domain>:9443`.
+- **Секрет в env, не в argv:** `WSTUNNEL_RESTRICT_HTTP_UPGRADE_PATH_PREFIX`
+  (server) / `WSTUNNEL_HTTP_UPGRADE_PATH_PREFIX` (client) — env-файлы 0600;
+  ушла оговорка про видимость префикса в `ps`.
+- **Безопасность распаковки:** только regular-файл `wstunnel`, без `..` и
+  абсолютных путей, sha256 до распаковки, атомарный `os.replace` 0755.
+- **Юниты:** `vds-wstunnel-{server,client}.service.tpl` — `Restart=always`,
+  `RestartSec=5`, `StartLimitIntervalSec=0`, `ProtectSystem=strict`, env-файл.
+- **CLI:** `vds relay wstunnel install --archive … [--apply]`, `… status [--json]`.
+- **Тесты:** 22 (пиннинг, arch, sha-мисматч, traversal, отсутствие секрета в
+  argv/env-имена, песочница шаблонов, dry-run, парсинг версии).
+
 ## 2026-11-20: WP-P2P-5 — alert-watch: список интерфейсов ноги (готово к ревью)
 
 - `ALERT_RELAY_IFACE` принимает **список** (`awg2,wg-ws0`): новый

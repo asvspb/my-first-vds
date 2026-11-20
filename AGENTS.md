@@ -58,6 +58,8 @@ systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2
                          # vds-probe-rucidr / vds-logs-sample / vds-logs-daily /
                          # vds-alert-watch .service+.timer.tpl (сторож: тик 2 мин, exit-узел;
                          #   sandbox: RestrictAddressFamilies включает AF_NETLINK — netlink для `awg show`)
+                         # vds-wstunnel-{server,client}.service.tpl (ADR-016, носитель №2:
+                         #   WSS/TLS 9443 + WG; Restart=always, env-файлы секретов 0600)
                          # vds-relay-maneuver .service+.timer.tpl (opt-in тик манёвра ноги,
                          #   ADR-015/P25 WP-M4; sandbox: ReadWritePaths +/etc/amnezia,
                          #   CAP_NET_ADMIN CAP_NET_RAW, AF_NETLINK; [Install] только у .timer)
@@ -85,6 +87,8 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 | `sudo vds relay maneuver install [--apply] [--enable-auto] [--interval 60s]` | Opt-in таймер манёвра (SPEC-20261120 WP-M4): `vds-relay-maneuver.service.tpl` (enable=off, `[Install]` нет) + `vds-relay-maneuver.timer.tpl` (`OnUnitActiveSec`, `Unit=`); guard роли/пула; без `--enable-auto` файлы поставлены, таймер НЕ включён/НЕ запущен; `--interval ≥15s` (60s → детекция 3/3 ≈180 с) |
 | `vds relay maneuver tick [--apply]` | ExecStart юнита: **всегда exit 0**, одна строка `[relay-maneuver] state=… port=… liveness=… ms=… activity=… fails=n/3 acted=… result=… [to=…]`; guard/StoreError/занятый лок перехвачены (oneshot не failed) |
 | `vds relay maneuver remove [--apply]` | Снять `.timer`+`.service` (stop+disable+rm, идемпотентно); `/var/lib/vds/relay-maneuver.json` сохраняется как история |
+| `vds relay wstunnel install --archive <tar.gz> [--apply]` | Носитель №2 p2p (ADR-016, WP-P2P-1): установка бинарника из **локального** архива релиза; sha256 проверяется **до** распаковки (пиннинг `WSTUNNEL_VERSION`/`WSTUNNEL_SHA256` = v11.1.0), атомарно 0755 в `/usr/local/bin`; dry-run по умолчанию; сеть модуль не трогает |
+| `vds relay wstunnel status [--json]` | Пиннинг, установленная версия, наличие env-файлов секретов (0600) |
 | `sudo vds alert install --apply` | Сторож угрозы на exit-узле (SPEC-20261117): юниты `vds-alert-watch.service`/`.timer` из `vds-alert-watch.service.tpl`/`vds-alert-watch.timer.tpl`, `/etc/vds/alert.env` 0600; dry-run без `--apply`; флаги `--channel tg,smtp`, `--interval 2m`, `--handshake-threshold 300s`, `--heartbeat 24h`, `--force`; на релее нужен `--allow-relay-node` (не делать); каденция: повтор уровня 30 мин, `threat_high_still` — `ALERT_HIGH_REMINDER_H` (6 ч, 1..24; ключ печатается в плане install), подавленные `*_still` не кормят summary; `ALERT_RELAY_IFACE` принимает список (`awg2,wg-ws0`) — пульс ok, если жив любой |
 | `sudo vds alert test [--channel tg\|smtp]` | Тестовая отправка без записи state (проверить почту/бота) |
 | `vds alert status [--json]` | Каналы/юниты/coverage; JSON без секретов; без root — урезанно (env 0600) |

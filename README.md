@@ -62,6 +62,8 @@ vds/
 │   ├── vds-alert-watch.timer.tpl        #   тик 2 мин: threat/пульс плеча/лок 443
 │   ├── vds-awg-relay.service.tpl        # exit (ADR-015, P24): awg2 — нога релея
 │   ├── vds-awg-relay-pool.service.tpl   # exit (ADR-015): nft REDIRECT пул 51900-51911
+│   ├── vds-wstunnel-server.service.tpl  # exit (ADR-016): WSS 9443 + WG за --restrict-to
+│   ├── vds-wstunnel-client.service.tpl  # релей: WSS-клиент, UDP-форвард на wg-ws0
                                      # ADR-016 (принят G2): носитель №2 wstunnel-wg в
                                      #   L4-ортогональном резерве к awg (UDP↔TCP);
                                      #   переключение — на первом rollback P25;
@@ -297,6 +299,10 @@ vds relay maneuver install [--apply] [--enable-auto] [--interval 60s]
                                       # без --enable-auto таймер НЕ включён/НЕ запущен;
                                       # --interval >=15s; 60s → детекция 3/3 ≈180 с
 vds relay maneuver remove [--apply]   # снять .timer/.service (идемпотентно); state-история цела
+vds relay wstunnel install --archive <tar.gz> [--apply]  # носитель №2 (ADR-016):
+                                      # sha256 до распаковки, атомарно 0755 в /usr/local/bin;
+                                      # пиннинг WSTUNNEL_VERSION/SHA256 (v11.1.0), сеть — отдельно
+vds relay wstunnel status [--json]    # пиннинг, установленная версия, env-файлы секретов 0600
 vds relay add-client phone --keepalive 25 --qr
                                      # Пир awg0: .conf (0600), endpoint relay-домен:443,
                                      # DNS = 1.1.1.1,1.0.0.1, AllowedIPs 0.0.0.0/0 (v4-only)

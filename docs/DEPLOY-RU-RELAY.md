@@ -460,6 +460,31 @@ ADR-007 §Test-plan при первом включении whitelist у опер
 — dnsmasq: RU-TLD → RU-резолвер напрямую; прочее → форвард через awg1
 (`server=1.1.1.1@awg1`). Устанавливать после полевой проверки whitelist.
 
+## Носитель №2: wstunnel (ADR-016, WP-P2P-1)
+
+L4-ортогональный резерв к UDP-ноге: WSS/TLS на `9443/tcp` (8443 занят XHTTP на
+exit, на релее свободен), внутри — UDP-форвард на локальный порт AWG `wg-ws0`.
+
+**Вендоринг (бинарник).** Пакета в apt нет; ставится из **локального** архива
+GitHub Releases. Версия и sha256 запинены в коде (`WSTUNNEL_VERSION`=11.1.0,
+`WSTUNNEL_SHA256`), проверка идёт **до** распаковки, установка атомарная 0755:
+
+```
+# скачать на ноутбук (не на сервере — никаких curl | sh):
+#   https://github.com/erebe/wstunnel/releases/download/v11.1.0/wstunnel_11.1.0_linux_amd64.tar.gz
+scp wstunnel_11.1.0_linux_amd64.tar.gz relay:/tmp/
+ssh relay 'sudo vds relay wstunnel install --archive /tmp/wstunnel_11.1.0_linux_amd64.tar.gz --apply'
+ssh relay 'vds relay wstunnel status --json'   # pinned/installed/env-файлы
+```
+
+**Секрет path-prefix** живёт только в env-файлах 0600
+(`/etc/vds/wstunnel-{server,client}.env`, переменные
+`WSTUNNEL_RESTRICT_HTTP_UPGRADE_PATH_PREFIX` / `WSTUNNEL_HTTP_UPGRADE_PATH_PREFIX`
+— имена есть в README v11.1.0) и **не попадает в argv**.
+
+**Юниты и `wg-ws0`** (интерфейс, NAT, nft/MSS, порядок `Wants/After`) — WP-P2P-2;
+живая приёмка — WP-P2P-6; DNS `ws.<domain>` → IP exit делает владелец (OQ-2).
+
 ## Откат (демонтаж)
 
 ```bash

@@ -39,8 +39,16 @@ relay_maneuver_app = typer.Typer(
     ),
     no_args_is_help=True,
 )
+relay_wstunnel_app = typer.Typer(
+    help=(
+        "Носитель №2 p2p (ADR-016): wstunnel WSS/TLS + WG; вендоринг бинарника "
+        "с пиннингом версии/SHA256, env-файлы секретов, юниты"
+    ),
+    no_args_is_help=True,
+)
 relay_app.add_typer(relay_exit_leg_app, name="exit-leg")
 relay_app.add_typer(relay_maneuver_app, name="maneuver")
+relay_app.add_typer(relay_wstunnel_app, name="wstunnel")
 probe_watch_app = typer.Typer(
     help="Монитор активного зондирования tcp/443 (И33 v1: nft counters + journal)"
 )
@@ -1393,6 +1401,52 @@ def relay_exit_leg_remove(
     from src.relay.exit_leg import run_remove
 
     raise typer.Exit(run_remove(apply=apply))
+
+
+@relay_wstunnel_app.command("install")
+def relay_wstunnel_install(
+    archive: str = typer.Option(
+        ..., "--archive", help="Локальный .tar.gz релиза wstunnel (скачивается отдельно)"
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Применить (по умолчанию dry-run)"),
+):
+    """Установить бинарник wstunnel из локального архива (ADR-016, WP-P2P-1).
+
+    Сеть модуль не трогает: архив скачивает оператор, модуль проверяет **sha256
+    до распаковки** (пиннинг `WSTUNNEL_VERSION`/`WSTUNNEL_SHA256`) и атомарно
+    ставит `/usr/local/bin/wstunnel` (0755). Никаких `latest` и `curl | sh`.
+
+    Пример: sudo vds relay wstunnel install --archive /tmp/wstunnel_11.1.0_linux_amd64.tar.gz --apply"""
+    from pathlib import Path
+
+    from src.relay.wstunnel import WstunnelError, run_install
+
+    try:
+        raise typer.Exit(run_install(archive=Path(archive), dry_run=not apply, apply=apply))
+    except WstunnelError as exc:
+        console.print(f"[error][wstunnel] {exc}[/error]")
+        raise typer.Exit(1)
+
+
+@relay_wstunnel_app.command("status")
+def relay_wstunnel_status(
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable вывод"),
+):
+    """Состояние вендоринга: пиннинг, установленная версия, env-файлы.
+
+    Пример: vds relay wstunnel status --json"""
+    import json as _json
+
+    from src.relay.wstunnel import run_status
+
+    status = run_status()
+    if json_output:
+        print(_json.dumps(status, ensure_ascii=False))
+        raise typer.Exit(0)
+    console.print(f"[info][wstunnel] пиннинг: v{status['pinned_version']}[/info]")
+    console.print(f"[info][wstunnel] установлен: {status['installed_version'] or 'нет'}[/info]")
+    console.print(f"[info][wstunnel] env-файлы: сервер={status['env_server']}, клиент={status['env_client']}[/info]")
+    raise typer.Exit(0)
 
 
 @relay_maneuver_app.command("status")
