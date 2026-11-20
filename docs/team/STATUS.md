@@ -117,6 +117,23 @@
 - Уточнено (P1-1 из прошлого ревью): `save_state` tmp уже инициализирован;
   cleanup дополнительно защищён `if tmp:`.
 
+## 2026-11-20: WP-P2P-6 — носитель №2 + селектор в бою (✅ живая приёмка PASS)
+
+- **Отчёт:** [ACCEPT-20261120-p2p-carriers](reports/ACCEPT-20261120-p2p-carriers.md).
+- **Полный живой цикл** (боевой блок пула `ct original proto-dst 51900-51911`,
+  dead-man 600 с): 17:48:19 rollback P25 (пул мёртв) → **17:48:43 селектор
+  переключил table 100 на wg-ws0** (24 с после rollback, pre-check ok) →
+  13 мин клиентского трафика через носитель №2 (~1.4 МБ) → 18:01:19
+  prefer_primary вернул awg1 (3 пробы + ≥600 с) + **сброс P25-серии** —
+  ложного манёвра нет.
+- **AC-таблица:** AC-1/S1 (скан тишина), AC-S2 (LE+SNI), AC-3/4, AC-2, AC-6,
+  AC-S4, AC-S7 (drop 9443 15 с → reconnect, NRestarts=0), AC-S8 (bulk ~1.4 МБ
+  при MTU 1240), AC-S9 (0 ложных relay_blocked, ALERT_RELAY_IFACE=awg2,wg-ws0).
+- **P0 приёмки (закрыт на месте):** `write_env` без mkdir — на релее нет
+  `/etc/vds`, env молча не записался; фикс + тест.
+- **Итог:** класс «блок UDP-пула/протокола ноги» закрыт в бою; клиент не
+  перенастраивался; exit не получал прав.
+
 ## 2026-11-20: WP-P2P-4 — deploy-hook LE + fallback_since (готово к ревью, `333d3e4`)
 
 - **Deploy-hook** `/etc/letsencrypt/renewal-hooks/deploy/vds-wstunnel-reload.sh`
