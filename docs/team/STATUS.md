@@ -5,6 +5,21 @@
 > Счётчики тестов в исторических записях — моментальные снимки (OQ-9):
 > актуальный baseline — `pytest -q`, число в живых доках не хранится.
 
+## 2026-11-20: DECISION Q8 — docsync `warn` → `block`
+
+- **Решение владельца:** перевести `mode` в `docs/doc-sync.json` в `block`
+  досрочно (не ждать 2026-11-30): критерий «один цикл `warn`» выполнен по существу
+  (alert-watch, vpn-guard, P24/P25 — 12+ коммитов).
+- **Pre-flight:** `docsync audit --strict` = OK; `core.hooksPath=.githooks`;
+  `docsync debt` — после фикса метрики ровно **1** запись (TECHDEBT P26,
+  зарегистрирован; его критерий закрытия — «формат признан внутренним»).
+- **Фикс метрики:** `cmd_debt` теперь считает только обходы, реально пропустившие
+  обязательные доки (docs-only коммиты с трейлером давали 6 фантомов из 7);
+  тест `test_debt_ignores_docs_only_trailer`.
+- **Контроль:** staged-правка `src/main.py` без доков → exit 1; с валидным
+  `Docs: none — … (TECHDEBT P26)` → exit 0.
+- **Откат:** `"mode": "warn"` коммитом либо `git config --unset core.hooksPath`.
+
 ## Активный цикл: P24/P25 — манёвр ноги relay↔exit (2026-11-20)
 
 - **ADR-015** + **SPEC-20261120** (G2 APPROVED): изоляция порта exit (`awg2`,

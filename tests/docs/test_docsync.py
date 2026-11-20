@@ -345,6 +345,17 @@ def test_scenario_5_escape_and_debt(tmp_path: Path) -> None:
     assert "refactor(ufw): internals" in debt.stdout  # коммит виден аудиту
 
 
+def test_debt_ignores_docs_only_trailer(tmp_path: Path) -> None:
+    """Трейлер `Docs: none` в docs-only коммите — не долг: пропускать было нечего."""
+    repo = make_repo(tmp_path)
+    stage(repo, "README.md", MINI_README + " правка\n")
+    msg = commit_msg_file(tmp_path, "docs: tweak\n\nDocs: none — только доки\n")
+    git_cmd(repo, ["commit", "-q", "-F", str(msg)])
+    debt = run_docsync(repo, ["debt"])
+    assert debt.returncode == 0
+    assert "пусто" in debt.stdout, debt.stdout
+
+
 def test_escape_fictional_debt_blocked(tmp_path: Path) -> None:
     repo = make_repo(tmp_path)
     stage(repo, "src/system/ufw.py", "# ufw\n")

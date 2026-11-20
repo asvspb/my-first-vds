@@ -638,7 +638,13 @@ def cmd_explain(repo: Path, registry: Registry, path: str) -> int:
     return EXIT_OK
 
 
-def cmd_debt(repo: Path, since: Optional[str]) -> int:
+def cmd_debt(repo: Path, since: Optional[str], registry: Registry) -> int:
+    """Список легальных обходов, которые РЕАЛЬНО пропустили обязательные доки.
+
+    Трейлер `Docs: none` в docs-only коммите ничего не пропускает: `compute_sync`
+    для такого набора файлов не находит missing. Такие коммиты в долг не попадают,
+    иначе счётчик пухнет фантомами и перестаёт быть сигналом для G6.
+    """
     args = ["log", "--format=%H|%ct|%s", "--grep=^Docs:\\s*none", "-i"]
     if since:
         m = re.fullmatch(r"(\d+)d", since)
@@ -646,7 +652,15 @@ def cmd_debt(repo: Path, since: Optional[str]) -> int:
             raise DocsyncError(f"--since ожидает формат Nd (дней), получено: {since}")
         args.append(f"--since={int(m.group(1))} days ago")
     out = git(repo, args, check=False)
-    entries = [l for l in out.splitlines() if l.strip()]
+    entries: list[str] = []
+    for e in (l for l in out.splitlines() if l.strip()):
+        sha = e.split("|", 1)[0]
+        files = [l for l in git(repo, ["diff-tree", "--root", "--no-commit-id",
+                                       "--name-only", "-r", sha]).splitlines() if l.strip()]
+        _, missing, _ = compute_sync(registry, files)
+        if not missing:
+            continue
+        entries.append(e)
     if not entries:
         print(f"{TAG} debt: пусто — легальных обходов нет")
         return EXIT_OK
@@ -753,7 +767,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.cmd == "explain":
             return cmd_explain(repo, Registry.load(repo), args.path)
         if args.cmd == "debt":
-            return cmd_debt(repo, args.since)
+            return cmd_debt(repo, args.since, Registry.load(repo))
         registry = Registry.load(repo)
         if args.cmd == "check":
             if args.staged:

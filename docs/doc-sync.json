@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "mode": "warn",
+  "mode": "block",
   "classes": {
     "living": [
       "README.md", "AGENTS.md", "TECHDEBT.md", "docs/TEAM.md",

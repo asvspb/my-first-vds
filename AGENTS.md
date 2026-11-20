@@ -167,13 +167,14 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
    (`docsync audit --range origin/main..HEAD`) и G4/G6 (`audit --strict`).
 4. **Хуки ставятся на каждом клоне**: `bash tools/install-hooks.sh`
    (commit-msg + pre-push; откат: `git config --unset core.hooksPath`).
-5. **Режим warn/block** — поле `mode` в `docs/doc-sync.json`: `warn` — нарушения
-   печатаются, но не блокируют; `block` — честный exit 1. Переход в block —
-   только правкой реестра (коммит), не env-переменной. `audit --strict`
-   (G4/G6) блокирует всегда.
-6. **Docsync debt** — `Docs: none`-коммиты видны в `docsync debt`; G6 не
-   закрывается с непогашенным долгом (закрытие — правка доков или строка в
-   TECHDEBT).
+5. **Режим `block` включён (2026-11-20, DECISION Q8)** — поле `mode` в
+   `docs/doc-sync.json`: `block` — честный exit 1 на commit-msg; `warn` остаётся
+   как форма отката. Переход в block — только правкой реестра (коммит), не
+   env-переменной. `audit --strict` (G4/G6) блокирует всегда.
+6. **Docsync debt** — `Docs: none`-коммиты, реально пропустившие обязательные доки,
+   видны в `docsync debt` (docs-only коммиты с трейлером долгом не считаются);
+   G6 не закрывается с непогашенным долгом (закрытие — правка доков или строка
+   в TECHDEBT).
 
 ## 10. Роли
 
