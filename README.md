@@ -268,7 +268,7 @@ vds relay exit-leg install --relay-ip <relay-ip> --public-key <awg1-pub>
 vds relay exit-leg remove [--apply]  # снять awg2/пул/правила/юниты/state exit-ноги
                                      # install проверяет ip_forward и занятость портов,
                                      # пишет клиентский шаблон relay-exit-leg.conf (0600)
-vds relay maneuver status [--json]    # P25/ADR-015: состояние автомата, порт, cooldown,
+vds relay maneuver status [--json]    # P25/ADR-015 (реализован 2026-11-20): состояние автомата, порт, cooldown,
                                       # failed_ports, exhausted; runtime endpoint; без секретов
 vds relay maneuver history [--limit N]# последние попытки: ts, from→to, ok/rollback, liveness_ms
 vds relay maneuver step [--apply] [--force]
