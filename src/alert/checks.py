@@ -4,7 +4,7 @@
   * `probe-watch.json` — своим минимальным json-читателем (не импортируем
     2300-строчный `probing`, который намеренно маскирует «нет данных» в пустой
     снапшот — для сторожа это недопустимо, SPEC §3.2);
-  * `awg show awg0 dump` — через `run_list`;
+  * `awg show <ALERT_RELAY_IFACE> dump` (default `awg0`) — через `run_list`;
   * gateway `state.json` — через `gateway.store.load_state` (только чтение);
   * состояние лока — `system.ufw.get_lockdown` (ленивый импорт).
 
@@ -264,11 +264,14 @@ def read_relay_signal(
     state_path: Optional[str] = None,
     tcp_probe: Optional[Callable[[str, int, float], bool]] = None,
 ) -> RelaySignal:
-    """Пульс плеча relay→exit: `awg show awg0 dump` + пир из gateway state.
+    """Пульс плеча relay→exit: `awg show <ALERT_RELAY_IFACE> dump` + пир из gateway state.
 
     Пир-релей на exit-узле — это **AWG-клиент** (`clients[]`, `protocol ==
     "amneziawg"`, `name == cfg.relay_peer`), а не `state.protocols["relay"]`
-    (SPEC §3.1). `tcp_probe` — инжектируемая проба (тесты без сети).
+    (SPEC §3.1). Интерфейс читается из `ALERT_RELAY_IFACE` (default `awg0`;
+    на exit с выделенной ногой — `awg2`, ADR-015); пир ищется по публичному
+    ключу из state, а не по имени iface — имя интерфейса лишь выбирает источник
+    (SPEC-20261120 §3.7). `tcp_probe` — инжектируемая проба (тесты без сети).
     """
     try:
         from src.gateway.store import load_state
@@ -292,13 +295,15 @@ def read_relay_signal(
     address = str(peer.extra.get("address") or "")
     address_ip = address.split("/")[0].strip()
 
-    result = run(["awg", "show", "awg0", "dump"], timeout=5)
+    iface = (getattr(cfg, "relay_iface", "") or "awg0").strip() or "awg0"
+    result = run(["awg", "show", iface, "dump"], timeout=5)
     if not result.ok:
         return _signal("inconclusive", "awg_unavailable", peer_found=False)
 
     peers = parse_awg_dump(result.stdout)
     awg_peer: Optional[AwgPeer] = peers.get(public_key) if public_key else None
     if awg_peer is None and address_ip:
+        # Совместимость: старые state без public_key — ищем по адресу пира.
         for candidate in peers.values():
             tokens = [tok.split("/")[0] for tok in candidate.allowed_ips.split(",")]
             if address_ip in tokens:

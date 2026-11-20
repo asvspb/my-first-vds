@@ -115,12 +115,18 @@ def gen_obfuscation_params(rng: random.Random) -> dict:
 
 @dataclass(frozen=True)
 class ServerPeer:
-    """Peer серверного .conf (клиент). psk=None → строка без PresharedKey."""
+    """Peer серверного .conf (клиент). psk=None → строка без PresharedKey.
+
+    `keepalive` — PersistentKeepalive со стороны сервера (нужен только
+    межнодёжной ноге relay→exit, ADR-015: exit держит метроном к релею);
+    по умолчанию не пишется (И44: молчание сервера в простое).
+    """
 
     public_key: str
     allowed_ips: str
     psk: Optional[str] = None
     name: str = ""  # комментарий "# <name>" над peer
+    keepalive: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +182,8 @@ def render_server_conf(params: ServerParams) -> str:
         if peer.psk is not None:
             lines.append(f"PresharedKey = {peer.psk}")
         lines.append(f"AllowedIPs = {peer.allowed_ips}")
+        if peer.keepalive:
+            lines.append(f"PersistentKeepalive = {peer.keepalive}")
     return "\n".join(lines) + "\n"
 
 

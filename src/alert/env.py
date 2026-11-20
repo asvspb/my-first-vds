@@ -60,6 +60,7 @@ class AlertConfig:
     lock_reminder_h: int = 6
     telemetry_reminder_h: int = 24
     relay_peer: str = "relay"
+    relay_iface: str = "awg0"
     relay_probe_port: int = 443
     tcp_timeout_s: int = 3
     enabled_checks: tuple[str, ...] = ("threat", "relay_pulse", "lockdown")
@@ -112,6 +113,7 @@ def load_config(path: str = ALERT_ENV_PATH) -> AlertConfig:
         lock_reminder_h=_int(env, "ALERT_LOCK_REMINDER_H", 6),
         telemetry_reminder_h=_int(env, "ALERT_TELEMETRY_REMINDER_H", 24),
         relay_peer=(env.get("ALERT_RELAY_PEER") or "").strip() or "relay",
+        relay_iface=(env.get("ALERT_RELAY_IFACE") or "").strip() or "awg0",
         relay_probe_port=_int(env, "ALERT_RELAY_PROBE_PORT", 443),
         tcp_timeout_s=_int(env, "ALERT_TCP_TIMEOUT_S", 3),
         enabled_checks=_csv(env, "ALERT_CHECKS") or ("threat", "relay_pulse", "lockdown"),
@@ -196,6 +198,7 @@ def render_env(cfg: AlertConfig, *, with_secrets: bool) -> str:
         f"ALERT_LOCK_REMINDER_H={cfg.lock_reminder_h}",
         f"ALERT_TELEMETRY_REMINDER_H={cfg.telemetry_reminder_h}",
         f"ALERT_RELAY_PEER={cfg.relay_peer}",
+        f"ALERT_RELAY_IFACE={cfg.relay_iface}",
         f"ALERT_RELAY_PROBE_PORT={cfg.relay_probe_port}",
         f"ALERT_TCP_TIMEOUT_S={cfg.tcp_timeout_s}",
         f"ALERT_CHECKS={checks}",

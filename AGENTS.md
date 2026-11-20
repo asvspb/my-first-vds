@@ -52,7 +52,8 @@ src/
 │                        # awg dump/лок), watch (тик), cli (install/remove/test/status). Только уведомления
 └── system/              # setup, cleanup, ufw (harden/ssh-port — SPEC-20261116; CDN-порт — CF-CIDR-набор)
 systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg(-nat)/
-                         # vds-relay-{exit,nat,policy,cidr}.service.tpl; vds-gateway-health / vds-probe-watch /
+                         # vds-relay-{exit,nat,policy,cidr}.service.tpl; vds-awg-relay(-pool).service.tpl
+                         #   (ADR-015/P24: awg2 — нога релея на exit, пул 51900-51911); vds-gateway-health / vds-probe-watch /
                          # vds-probe-rucidr / vds-logs-sample / vds-logs-daily /
                          # vds-alert-watch .service+.timer.tpl (сторож: тик 2 мин, exit-узел;
                          #   sandbox: RestrictAddressFamilies включает AF_NETLINK — netlink для `awg show`)
@@ -75,6 +76,7 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 | `vds system ufw ssh-port --to 49222 [--finalize]` | Двухфазный перенос SSH-порта (22 закрывается только `--finalize`; откат Фазы A сам перезапускает ssh.socket/ssh, drop-in 0644) |
 | `vds relay init --exit <ip> --domain <домен> --sni <RU_SNI> --apply` | RU-relay (ADR-007): AWG udp/443 + Reality tcp/443 + policy-routing до exit-ноды; целевая ОС — Ubuntu 24.04 (`docs/DEPLOY-RU-RELAY.md`) |
 | `vds relay add-client NAME [--endpoint HOST[:PORT]] [--dns IP[,IP]] [--qr]` | Пир awg0 + .conf 0600 (MTU 1280, `AllowedIPs = 0.0.0.0/0` v4-only, `DNS = 1.1.1.1, 1.0.0.1` через exit); endpoint = домен клиентов (имя машины пропускается, нерезолв → IP сервера, P22); `--qr` — ANSIUTF8 в терминале через stdin (без qrencode — warning), P23 |
+| `vds relay exit-leg install --relay-ip <ip> --public-key <awg1-pub> [--apply]` | Exit-узел (ADR-015, P24): выделенный `awg2` 10.11.0.0/30 для ноги релея, UFW только с IP релея, пул 51900–51911 через nft REDIRECT; dry-run по умолчанию, идемпотентно; `remove --apply` откатывает |
 | `sudo vds alert install --apply` | Сторож угрозы на exit-узле (SPEC-20261117): юниты `vds-alert-watch.service`/`.timer` из `vds-alert-watch.service.tpl`/`vds-alert-watch.timer.tpl`, `/etc/vds/alert.env` 0600; dry-run без `--apply`; флаги `--channel tg,smtp`, `--interval 2m`, `--handshake-threshold 300s`, `--heartbeat 24h`, `--force`; на релее нужен `--allow-relay-node` (не делать) |
 | `sudo vds alert test [--channel tg\|smtp]` | Тестовая отправка без записи state (проверить почту/бота) |
 | `vds alert status [--json]` | Каналы/юниты/coverage; JSON без секретов; без root — урезанно (env 0600) |
@@ -137,7 +139,7 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 `docs/GROWTH-POINTS.md` — точки роста схем/протоколов (вход для intake);
 `docs/SERVER-BASELINE.md` — настройки ОС/сервера: авто vs вручную, чеклист восстановления;
 `docs/SPLIT-TRANSPORTS.md` — системный split: AWG и аналоги (Reality/Hy2/XHTTP/CDN);
-`docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…014;
+`docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…015;
 `TECHDEBT.md` — бэклог. При изменении поведения обновлять соответствующий документ
 (новый протокол/транспорт — ADR + VPN-PROTOCOLS + README + AGENTS).
 

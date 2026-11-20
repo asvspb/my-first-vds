@@ -59,6 +59,8 @@ vds/
 │   ├── vds-relay-cidr.timer.tpl         #   еженедельное обновление
 │   ├── vds-alert-watch.service.tpl      # сторож угрозы на exit-узле (SPEC-20261117)
 │   ├── vds-alert-watch.timer.tpl        #   тик 2 мин: threat/пульс плеча/лок 443
+│   ├── vds-awg-relay.service.tpl        # exit (ADR-015, P24): awg2 — нога релея
+│   ├── vds-awg-relay-pool.service.tpl   # exit (ADR-015): nft REDIRECT пул 51900-51911
 │   └── sysctl/99-vds-gateway.conf.tpl
 ├── AGENTS.md           # Контекст проекта для ИИ-агентов
 ├── TECHDEBT.md         # Бэклог техдолга
@@ -259,6 +261,11 @@ vds relay init --exit <exit-ip> --domain relay.asvpersonal.ru --sni <RU_SNI>
                                     # Целевая ОС — Ubuntu 24.04 (LandVPS, проверено 2026-11-17):
                                     # iptables/ufw из коробки, ssh.socket, Python 3.12
 vds relay status                    # Юниты, awg0/awg1, живость ноги до exit, nft, CIDR
+vds relay exit-leg install --relay-ip <relay-ip> --public-key <awg1-pub>
+                                     # exit-узел (ADR-015, P24): awg2 10.11.0.0/30,
+                                     # UFW только с IP релея, пул 51900-51911 (nft REDIRECT);
+                                     # dry-run по умолчанию, повторный --apply = no-op
+vds relay exit-leg remove [--apply]  # снять awg2/пул/правила/юниты/state exit-ноги
 vds relay add-client phone --keepalive 25 --qr
                                      # Пир awg0: .conf (0600), endpoint relay-домен:443,
                                      # DNS = 1.1.1.1,1.0.0.1, AllowedIPs 0.0.0.0/0 (v4-only)

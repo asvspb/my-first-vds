@@ -22,8 +22,17 @@ hysteria2_app = typer.Typer(help="Hysteria2 QUIC gateway (UDP 443)")
 amneziawg_app = typer.Typer(help="AmneziaWG gateway (obfuscated WireGuard, UDP 51825)")
 acme_app = typer.Typer(help="ACME / Let's Encrypt certificates (certbot, HTTP-01)")
 relay_app = typer.Typer(
-    help="RU-relay (ADR-007): AWG udp/443 + Reality tcp/443 + policy-routing до asv1"
+    help="RU-relay (ADR-007): AWG udp/443 + Reality tcp/443 + policy-routing до asv1; "
+    "exit-leg — выделенная нога awg2 на exit-узле (ADR-015, P24)"
 )
+relay_exit_leg_app = typer.Typer(
+    help=(
+        "Exit-узел (ADR-015, P24): выделенная нога awg2 (10.11.0.0/30) + пул "
+        "51900-51911/udp только с IP релея; dry-run по умолчанию"
+    ),
+    no_args_is_help=True,
+)
+relay_app.add_typer(relay_exit_leg_app, name="exit-leg")
 probe_watch_app = typer.Typer(
     help="Монитор активного зондирования tcp/443 (И33 v1: nft counters + journal)"
 )
@@ -1339,6 +1348,43 @@ def relay_add_client(
     except (StoreError, RelayClientError) as exc:
         console.print(f"[error][relay] {exc}[/error]")
         raise typer.Exit(1)
+
+
+@relay_exit_leg_app.command("install")
+def relay_exit_leg_install(
+    relay_ip: str = typer.Option(
+        ..., "--relay-ip", help="Публичный IPv4 RU-релея (единственный разрешённый saddr)"
+    ),
+    public_key: str = typer.Option(
+        ..., "--public-key", help="Публичный ключ релея (awg1) — единственный пир awg2"
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Применить (по умолчанию dry-run)"),
+):
+    """Exit-узел (ADR-015, P24): выделенная нога awg2 (10.11.0.0/30) + пул
+    51900-51911/udp, доступный только с IP релея (nft REDIRECT на 51900, UFW —
+    один порт), PersistentKeepalive 25. Клиентский awg0 (51825) не трогается.
+    Идемпотентно: повторный --apply не перегенерирует ключи и не плодит правила.
+
+    Пример: sudo vds relay exit-leg install --relay-ip 185.80.91.135 \\
+        --public-key <awg1-pubkey-релея> --apply
+
+    На релее команда отказывает: релей не получает прав на exit."""
+    from src.relay.exit_leg import run_install
+
+    raise typer.Exit(run_install(relay_ip=relay_ip, public_key=public_key, apply=apply))
+
+
+@relay_exit_leg_app.command("remove")
+def relay_exit_leg_remove(
+    apply: bool = typer.Option(False, "--apply", help="Применить удаление (по умолчанию dry-run)"),
+):
+    """Снять exit-leg: юниты awg2/пула, nft-таблица vds_relay_leg, UFW-правило,
+    конфиг awg2 (0600) и state.protocols['relay_leg']. Клиентский awg0 не тронут.
+
+    Пример: sudo vds relay exit-leg remove --apply"""
+    from src.relay.exit_leg import run_remove
+
+    raise typer.Exit(run_remove(apply=apply))
 
 
 @acme_app.command("issue")

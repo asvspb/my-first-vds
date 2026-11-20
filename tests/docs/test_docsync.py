@@ -228,13 +228,16 @@ def test_extract_commands_real_main_py() -> None:
     # 76 @command-декораторов (в т.ч. 6 logs + 3 logs capture,
     # SPEC-20261116-log-forensics/ADR-012) + probe-watch iwc-leaf
     # + 5 alert-команд (SPEC-20261117-alert-watch)
-    assert len(cmds) == 82
+    # + 2 relay exit-leg (SPEC-20261120-relay-maneuver WP-M2 / ADR-015)
+    assert len(cmds) == 84
     assert len(set(cmds)) == len(cmds)
     assert "vds sysinfo" in cmds and "vds cleanup" in cmds and "vds server-setup" in cmds
     assert "vds gateway probe-watch" in cmds  # iwc-leaf
     assert "vds gateway probe-watch ru-cidr update" in cmds  # вложенность 3 уровня
     assert "vds logs sample" in cmds and "vds logs capture start" in cmds  # logs (ADR-012)
     assert "vds alert watch" in cmds and "vds alert test" in cmds  # alert-watch
+    assert "vds relay exit-leg install" in cmds  # ADR-015/P24 (exit-сторона)
+    assert "vds relay exit-leg remove" in cmds
     allowlist = json.loads((REPO / "docs" / "doc-sync.json").read_text())["reverse"]["legacy_commands_allowlist"]
     assert set(allowlist) <= set(cmds)  # allowlist не протух
 

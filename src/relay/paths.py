@@ -50,5 +50,24 @@ RELAY_CIDR_SOURCE = "https://www.ipdeny.com/ipblocks/data/countries/ru.zone"
 RELAY_SYSCTL_FORWARD_CONF = Path("/etc/sysctl.d/99-vds-relay-forward.conf")
 RELAY_UFW_BEFORE_RULES = Path("/etc/ufw/before.rules")
 
+# --- Выделенная нога relay→exit на exit-узле (ADR-015, TECHDEBT P24) ---
+# Отдельный от клиентского awg0 интерфейс: порт ноги изолирован по IP релея.
+# exit-сторона разворачивается командой `vds relay exit-leg install` на самом
+# exit; релей лишь меняет свой локальный endpoint (WP-M3).
+EXIT_LEG_IFACE = "awg2"
+EXIT_LEG_CONFIG_PATH = Path("/etc/amnezia/awg2.conf")
+EXIT_LEG_SUBNET = "10.11.0.0/30"
+EXIT_LEG_IP = "10.11.0.1"  # адрес exit внутри ноги
+EXIT_LEG_PEER_IP = "10.11.0.2"  # адрес релея внутри ноги (единственный пир)
+EXIT_LEG_BASE_PORT = 51900  # P_base — слушает awg2
+EXIT_LEG_POOL = "51900-51911"  # 12 портов, REDIRECT с saddr релея → P_base
+EXIT_LEG_MTU = 1420  # одинарная инкапсуляция на этой ноге
+EXIT_LEG_UNIT = "vds-awg-relay.service"
+EXIT_LEG_POOL_UNIT = "vds-awg-relay-pool.service"
+EXIT_LEG_NFT_TABLE = "vds_relay_leg"
+EXIT_LEG_NFT_FILE = Path("/etc/vds/relay-leg.nft")
+EXIT_LEG_POOL_SCRIPT = Path("/usr/local/sbin/vds-relay-leg-pool-apply.sh")
+EXIT_LEG_LOCK_FILE = "/var/run/vds-relay-exit-leg.lock"
+
 # Блокировка мутаций (конвенция AGENTS.md §5.3).
 LOCK_FILE = "/var/run/vds-relay.lock"
