@@ -129,6 +129,17 @@ def load_config(path: str = ALERT_ENV_PATH) -> AlertConfig:
     )
 
 
+def relay_ifaces(cfg: AlertConfig) -> tuple[str, ...]:
+    """Интерфейсы ноги релея из `ALERT_RELAY_IFACE` (список через запятую).
+
+    Один носитель — как раньше (`awg0`, `awg2`); два и более — после ADR-016
+    (`awg2,wg-ws0`): пульс считается `ok`, если жив ЛЮБОЙ из них.
+    """
+    raw = (getattr(cfg, "relay_iface", "") or "").strip() or "awg0"
+    items = tuple(part.strip() for part in raw.split(",") if part.strip())
+    return items or ("awg0",)
+
+
 def tg_configured(cfg: AlertConfig) -> bool:
     return bool(cfg.tg_token and cfg.tg_chat_id)
 

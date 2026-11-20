@@ -66,8 +66,10 @@
 **Релей (RU):**
 
 - **AWG `wg-ws0`:** адрес **10.12.0.2/30**, `Table = off`, MTU §4,
-  **`PersistentKeepalive = 25` на стороне релея** — он инициатор WSS-потока,
-  keepalive держит сессию против idle-timeout на NAT/промежуточных устройствах.
+  **`Endpoint = 127.0.0.1:<LOCAL_UDP_PORT>`** (локальный порт wstunnel-клиента),
+  **`PersistentKeepalive = 25`** — релей инициатор WSS-потока, keepalive держит
+  сессию против idle-timeout на NAT/промежуточных устройствах.
+  Юнит `wg-ws0`: `Wants=`/`After=vds-wstunnel-client.service`.
 - **wstunnel client:** подключение к **`wss://ws.<domain>:<WS_PORT>`** — по
   hostname, чтобы (а) прошла валидация LE, (б) ушёл настоящий SNI (ради него и
   заводится домен). Форвард UDP:
@@ -134,7 +136,8 @@ ip route replace default dev <awg1|wg-ws0> table 100
 | `fallback → recovering` | редкая проба `awg1` (`ping -I awg1 10.11.0.1`) успешна |
 | `recovering → primary` | **3** успешных пробы подряд **И** прошло **600 с** |
 | `recovering → fallback` | проба упала — серия сброшена |
-| `fallback → exhausted` | liveness `wg-ws0` провален на тике → alert |
+| `fallback → exhausted` | **3 отказа подряд** liveness `wg-ws0` (как у awg1; одиночный потерянный ping — не повод) → alert |
+| `exhausted → primary`/`fallback` | **автовыход** при стабильном liveness любого носителя (по образцу `maneuver.py`, где `exhausted` снимается оживлением) |
 
 **Две дыры закрыты явно:**
 
@@ -158,6 +161,11 @@ awg|wstunnel [--apply]`, `vds relay carrier install --apply`, `remove --apply`.
 работает как раньше. Пульс `ok`, если на **любом** интерфейсе найден пир релея и
 есть трафик; `blocked` — только если мертвы все. Схема `alert.status` не
 меняется. Вариант «селектор переключает env» отклонён (ADR-016 §9, I-5).
+
+**Реализовано (`src/alert/env.py::relay_ifaces`, `checks.read_relay_signal`):**
+один интерфейс — прямой вызов `_probe_one_iface` (поведение прежнее); несколько —
+проба каждого, `ok` при любом живом, иначе худший живой вердикт;
+`peer_rx` = сумма по носителям (гейт активности между тиками).
 
 ## 7. Критерии приёмки (сводная таблица SPEC)
 

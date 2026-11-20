@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import json
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Literal, Optional
 
-from src.alert.env import AlertConfig
+from src.alert.env import AlertConfig, relay_ifaces
 from src.alert.paths import PROBE_WATCH_PATH
 from src.alert.state import parse_iso
 from src.core.shell import ShellResult, run_list
@@ -290,7 +290,7 @@ def _relay_peer_identity(
     return public_key, address_ip
 
 
-def read_relay_signal(
+def _probe_one_iface(
     *,
     cfg: AlertConfig,
     prev_state: dict,
@@ -298,6 +298,7 @@ def read_relay_signal(
     run: Callable[..., ShellResult] = run_list,
     state_path: Optional[str] = None,
     tcp_probe: Optional[Callable[[str, int, float], bool]] = None,
+    iface: Optional[str] = None,
 ) -> RelaySignal:
     """Пульс плеча relay→exit: `awg show <ALERT_RELAY_IFACE> dump` + пир из gateway state.
 
@@ -316,7 +317,9 @@ def read_relay_signal(
     except Exception:  # StoreError и любые ошибки чтения — «слеп», не алерт
         return _signal("inconclusive", "state_unreadable")
 
-    iface = (getattr(cfg, "relay_iface", "") or "awg0").strip() or "awg0"
+    if iface is None:
+        values = relay_ifaces(cfg)
+        iface = values[0]
     public_key, address_ip = _relay_peer_identity(gateway_state, cfg, iface)
     if not public_key and not address_ip:
         return _signal("inconclusive", "peer_not_found")
@@ -385,6 +388,59 @@ def read_relay_signal(
         icmp_ok=icmp_ok,
         traffic_active=traffic_active,
         peer_rx=awg_peer.rx,
+    )
+
+
+def read_relay_signal(
+    *,
+    cfg: AlertConfig,
+    prev_state: dict,
+    now: datetime,
+    run: Callable[..., ShellResult] = run_list,
+    state_path: Optional[str] = None,
+    tcp_probe: Optional[Callable[[str, int, float], bool]] = None,
+) -> RelaySignal:
+    """Пульс ноги релея с учётом **списка** интерфейсов (ADR-016).
+
+    `ALERT_RELAY_IFACE` может перечислять носители через запятую
+    (`awg2,wg-ws0`): пульс `ok`, если жив **любой**; `blocked` — только если
+    мертвы все. Для одного интерфейса поведение прежнее (прямой вызов
+    `_probe_one_iface`), поэтому существующие тесты и логи не меняются.
+    `peer_rx` в мульти-режиме — сумма по найденным носителям (гейт активности).
+    """
+    ifaces = relay_ifaces(cfg)
+    if len(ifaces) == 1:
+        return _probe_one_iface(
+            cfg=cfg, prev_state=prev_state, now=now, run=run,
+            state_path=state_path, tcp_probe=tcp_probe, iface=ifaces[0],
+        )
+
+    signals = [
+        _probe_one_iface(
+            cfg=cfg, prev_state=prev_state, now=now, run=run,
+            state_path=state_path, tcp_probe=tcp_probe, iface=iface,
+        )
+        for iface in ifaces
+    ]
+    rx_total = sum(sig.peer_rx for sig in signals)
+    active = any(sig.traffic_active for sig in signals)
+
+    ok = next((sig for sig in signals if sig.classification == "ok"), None)
+    if ok is not None:
+        return replace(ok, peer_rx=rx_total, traffic_active=active)
+
+    non_inc = [sig for sig in signals if sig.classification != "inconclusive"]
+    if non_inc:
+        # Худший живой вердикт (blocked важнее degraded): первый по списку.
+        return replace(non_inc[0], peer_rx=rx_total, traffic_active=active)
+
+    details = {sig.detail for sig in signals}
+    detail = next(iter(details)) if len(details) == 1 else "no_live_leg"
+    return _signal(
+        "inconclusive",
+        detail,
+        peer_found=any(sig.peer_found for sig in signals),
+        peer_rx=rx_total,
     )
 
 

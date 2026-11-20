@@ -287,7 +287,10 @@ vds gateway probe-watch ru-cidr install --apply    # RU-CIDR без релея: 
    почему). `--json` машинно читается и не содержит значений секретов. Без root
    статус работает в урезанном виде (`alert.env` 0600 не читается) — это норма,
    для coverage нужен `sudo`.
-7. `sudo vds alert watch --no-send` — прогнать тик без отправки: `relay_pulse` не
+7. `ALERT_RELAY_IFACE` может быть списком (`awg2,wg-ws0`): пульс `ok`, если жив
+   любой носитель — при ADR-016 это обязательно, иначе ложный `relay_blocked`
+   в момент перехода на резерв.
+8. `sudo vds alert watch --no-send` — прогнать тик без отправки: `relay_pulse` не
    должен быть `inconclusive` при живом канале (`idle` допустим, если на `awg1`
    не выставлен `PersistentKeepalive` — см. DEPLOY-RU-RELAY §4).
 

@@ -15,7 +15,7 @@ from src.alert.checks import (
     read_relay_signal,
     read_threat,
 )
-from src.alert.env import AlertConfig
+from src.alert.env import AlertConfig, relay_ifaces
 from src.alert.paths import PROBE_WATCH_PATH
 from src.core.shell import ShellResult
 
@@ -396,3 +396,103 @@ def test_read_lockdown_broken_state_is_inactive(tmp_path):
 
 def test_read_lockdown_missing_state_is_inactive(tmp_path):
     assert read_lockdown(str(tmp_path / "absent.json"))["active"] is False
+
+
+# ---------------------------------------------------------------------------
+# ADR-016: список интерфейсов ноги (awg2,wg-ws0) — пульс ok, если жив любой
+# ---------------------------------------------------------------------------
+
+def _multi_cfg(**over) -> AlertConfig:
+    base = dict(
+        relay_peer="relay", handshake_threshold_s=300, relay_probe_port=443,
+        tcp_timeout_s=3, relay_iface="awg2,wg-ws0",
+    )
+    base.update(over)
+    return AlertConfig(**base)
+
+
+def _multi_run(awg2_dump=None, wg_dump=None, awg2_fail=False, wg_fail=False):
+    mapping = {}
+    if awg2_fail:
+        mapping[("awg", "show", "awg2")] = _res("boom", code=1)
+    elif awg2_dump is not None:
+        mapping[("awg", "show", "awg2")] = _res(awg2_dump)
+    if wg_fail:
+        mapping[("awg", "show", "wg-ws0")] = _res("boom", code=1)
+    elif wg_dump is not None:
+        mapping[("awg", "show", "wg-ws0")] = _res(wg_dump)
+    return FakeRunner(mapping)
+
+
+def test_relay_ifaces_parsing():
+    assert relay_ifaces(AlertConfig(relay_iface="awg2,wg-ws0")) == ("awg2", "wg-ws0")
+    assert relay_ifaces(AlertConfig(relay_iface=" awg2 ")) == ("awg2",)
+    assert relay_ifaces(AlertConfig(relay_iface="")) == ("awg0",)
+    assert relay_ifaces(AlertConfig(relay_iface=",, ")) == ("awg0",)
+
+
+def test_multi_iface_ok_if_second_alive(tmp_path):
+    """awg2 мёртв (старый handshake), wg-ws0 жив → пульс ok (AC-S9)."""
+    state_path = _write_state(tmp_path)
+    dead = int(NOW.timestamp()) - 3600
+    run = _multi_run(
+        awg2_dump=_dump(dead, rx=500),
+        wg_dump=_dump(int(NOW.timestamp()) - 30, rx=700),
+    )
+    signal = read_relay_signal(
+        cfg=_multi_cfg(), prev_state={}, now=NOW, run=run, state_path=state_path,
+    )
+    assert signal.classification == "ok"
+    assert signal.peer_rx == 1200  # сумма по носителям
+
+
+def test_multi_iface_blocked_when_all_dead(tmp_path):
+    state_path = _write_state(tmp_path)
+    dead = int(NOW.timestamp()) - 3600
+    run = _multi_run(
+        awg2_dump=_dump(dead), wg_dump=_dump(dead),
+    )
+    # трафик идёт (rx вырос), handshake мёртв, TCP endpoint отвечает → blocked;
+    # «idle» без активности — отдельная ветка и здесь не проверяется
+    prev = {"sources": {"relay_pulse": {"last_rx": 100}}}
+    signal = read_relay_signal(
+        cfg=_multi_cfg(), prev_state=prev, now=NOW, run=run, state_path=state_path,
+        tcp_probe=lambda host, port, timeout: True,
+    )
+    assert signal.classification == "blocked"
+
+
+def test_multi_iface_one_unavailable_other_ok(tmp_path):
+    state_path = _write_state(tmp_path)
+    run = _multi_run(
+        awg2_fail=True,
+        wg_dump=_dump(int(NOW.timestamp()) - 30),
+    )
+    signal = read_relay_signal(
+        cfg=_multi_cfg(), prev_state={}, now=NOW, run=run, state_path=state_path,
+    )
+    assert signal.classification == "ok"
+
+
+def test_multi_iface_all_unavailable_inconclusive(tmp_path):
+    state_path = _write_state(tmp_path)
+    run = _multi_run(awg2_fail=True, wg_fail=True)
+    signal = read_relay_signal(
+        cfg=_multi_cfg(), prev_state={}, now=NOW, run=run, state_path=state_path,
+    )
+    assert signal.classification == "inconclusive"
+    assert signal.detail == "awg_unavailable"
+
+
+def test_multi_iface_traffic_active_from_any(tmp_path):
+    state_path = _write_state(tmp_path)
+    dead = int(NOW.timestamp()) - 3600
+    run = _multi_run(
+        awg2_dump=_dump(dead, rx=500),
+        wg_dump=_dump(int(NOW.timestamp()) - 30, rx=9999),
+    )
+    prev = {"sources": {"relay_pulse": {"last_rx": 9000}}}
+    signal = read_relay_signal(
+        cfg=_multi_cfg(), prev_state=prev, now=NOW, run=run, state_path=state_path,
+    )
+    assert signal.traffic_active is True  # 12000 > 9000

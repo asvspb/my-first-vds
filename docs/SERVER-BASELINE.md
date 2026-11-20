@@ -480,6 +480,10 @@ cooldown, и лимит; напоминание о локе — раз в `ALERT
 не должны порождать ежечасную пустую сводку); сбой канала — экспоненциальный
 backoff (`60·2^(n−1)` с, до 1 ч).
 
+**Носителей может быть несколько** (ADR-016): `ALERT_RELAY_IFACE=awg2,wg-ws0` —
+пульс `ok`, если жив любой; `blocked` только когда мертвы все (иначе переход на
+резервный носитель даёт ложный `relay_blocked`).
+
 **Проверка:** `sudo vds alert status` (каналы/юниты/coverage, `--json` без
 секретов; без root — урезанный вид, `alert.env` 0600 не читается); `sudo vds alert test [--channel smtp]` — реальная отправка без
 записи state; `journalctl -u vds-alert-watch` — теги `ALERT-SENT / ALERT-FAILED /
