@@ -149,9 +149,10 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 `docs/SPLIT-TRANSPORTS.md` — системный split: AWG и аналоги (Reality/Hy2/XHTTP/CDN);
 `docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…016
 (ADR-016 — p2p link: несколько L4-ортогональных носителей между двумя узлами,
-draft до G2; §4 — инварианты I-1…I-5 + I-2a (nft `wg-ws0`/MSS-clamp, старт
-policy-юнита из state); селектор переключает носитель на **первом rollback**
-манёвра P25, `exhausted` (~22 мин) — только терминальное состояние);
+**принят G2 2026-11-20**, реализация — по SPEC; §4 — инварианты I-1…I-5 + I-2a
+(nft `wg-ws0`/MSS-clamp, старт policy-юнита из state); селектор переключает
+носитель на **первом rollback** манёвра P25, `exhausted` (~22 мин) — терминальное
+состояние; alert-watch — только список интерфейсов ноги);
 `TECHDEBT.md` — бэклог. Контракт схем guard: `docs/contracts/guard-schema-hashes.json`
 (источник правды — клиентский lock, D-17); решения vpn guard — D-16…D-24 в
 `docs/team/reports/DECISIONS-vpn-guard.md`, план v1.1 —

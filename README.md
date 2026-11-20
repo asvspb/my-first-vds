@@ -62,7 +62,7 @@ vds/
 │   ├── vds-alert-watch.timer.tpl        #   тик 2 мин: threat/пульс плеча/лок 443
 │   ├── vds-awg-relay.service.tpl        # exit (ADR-015, P24): awg2 — нога релея
 │   ├── vds-awg-relay-pool.service.tpl   # exit (ADR-015): nft REDIRECT пул 51900-51911
-                                     # ADR-016 (draft): носитель №2 wstunnel-wg в
+                                     # ADR-016 (принят G2): носитель №2 wstunnel-wg в
                                      #   L4-ортогональном резерве к awg (UDP↔TCP);
                                      #   переключение — на первом rollback P25
 │   └── sysctl/99-vds-gateway.conf.tpl
