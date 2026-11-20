@@ -715,3 +715,16 @@ def test_write_env_creates_parent_dir(tmp_path):
     deep = tmp_path / "etc" / "vds" / "wstunnel-client.env"
     ws.write_env(deep, ws.render_client_env("FIXTURE_PREFIX"))
     assert deep.is_file() and deep.stat().st_mode & 0o777 == 0o600
+
+
+def test_write_env_raises_on_write_failure(tmp_path, monkeypatch):
+    """P2 (ревью WP-P2P-6): сбой write_secret_atomic → WstunnelError, не молчание."""
+    import src.core.secrets as secrets_mod
+
+    target = tmp_path / "env" / "client.env"
+    target.parent.mkdir(parents=True, exist_ok=True)  # mkdir пройдёт
+    monkeypatch.setattr(
+        "src.relay.wstunnel.write_secret_atomic", lambda p, t: False
+    )
+    with pytest.raises(ws.WstunnelError, match="не удалось записать"):
+        ws.write_env(target, "FIXTURE")

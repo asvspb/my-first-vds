@@ -67,6 +67,7 @@ vds/
 │   ├── vds-wstunnel-nft.service.tpl     # exit: oneshot nft -c/-f + UFW (9443 только релею)
 │   ├── vds-awg-wg-ws0.service.tpl       # wg-ws0 (plain AWG) на обеих сторонах
 │   ├── (policy) ExecStartPost carrier-default-iface.sh  # table 100 → активный носитель (AC-S4)
+│   ├── Реализация ADR-016 принята (WP-P2P-6 PASS, живой цикл fallback↔primary)
                                      # ADR-016 (принят G2): носитель №2 wstunnel-wg в
                                      #   L4-ортогональном резерве к awg (UDP↔TCP);
                                      #   переключение — на первом rollback P25;

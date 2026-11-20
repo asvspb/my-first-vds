@@ -62,6 +62,7 @@ systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2
                          #   WSS/TLS 9443 + WG; Restart=always, env-файлы секретов 0600)
                          # vds-wstunnel-nft.service.tpl (exit: nft -c/-f + UFW) и
                          # vds-awg-wg-ws0.service.tpl (plain AWG, обе стороны)
+                         #   (ADR-016: носитель №2 + селектор реализованы и приняты — WP-P2P-1…6)
                          # vds-relay-maneuver .service+.timer.tpl (opt-in тик манёвра ноги,
                          #   ADR-015/P25 WP-M4; sandbox: ReadWritePaths +/etc/amnezia,
                          #   CAP_NET_ADMIN CAP_NET_RAW, AF_NETLINK; [Install] только у .timer)
