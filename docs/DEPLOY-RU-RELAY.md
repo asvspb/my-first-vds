@@ -500,7 +500,8 @@ awg1: в wg-ws0 уходят пакеты клиентов, а не 10.12.0.0/30
 **Порядок установки (3 шага, ключи не пересекают узлы):**
 
 1. релей: `sudo vds relay wstunnel init --apply` — создаёт ключи `wg-ws0` и
-   prefix-файл, печатает **публичный** ключ релея;
+   prefix-файл (сам создаёт `/etc/vds` — на релее его нет до установки),
+   печатает **публичный** ключ релея;
 2. `scp` prefix-файла на exit; exit:
    `sudo vds relay wstunnel server --relay-ip <ip> --relay-public-key <key>
    --domain ws.<domain> --prefix-file /tmp/wstunnel-client.env --apply` —

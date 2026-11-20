@@ -5,7 +5,7 @@
   P2-фикс `3a7609a`
 - **Контракт:** [ADR-016](../../adr/ADR-016-p2p-link-multi-carrier.md),
   [SPEC p2p link](../specs/SPEC-20261120-p2p-link-multi-carrier.md)
-- **Полигон:** RU-релей `185.80.91.135` ↔ exit (NL); клиент за релеем — активный
+- **Полигон:** RU-релей `<relay-ip>` ↔ exit (NL); клиент за релеем — активный
 - **Вердикт:** ✅ PASS — полный цикл **primary → fallback → primary** в бою
 
 ## 1. Вендоринг и установка
@@ -20,11 +20,11 @@
 ## 2. Трёхшаговая установка
 
 1. **релей `init`:** ключи `wg-ws0.priv` 0600 + prefix env 0600; публичный ключ
-   `VM8URyw…08=` (в stdout секретов нет);
+   `<relay-pub>` (в stdout секретов нет);
 2. **exit `server`:** conf `wg-ws0` 10.12.0.1/30 (plain, пир релея /32, keepalive 25),
    nft `vds_relay_wstun`, UFW «9443/tcp только с IP релея», юниты
    (`vds-wstunnel-nft`/`vds-awg-wg-ws0`/`vds-wstunnel-server`), deploy-hook LE;
-   печатает публичный ключ exit `eayB+UGq…Sjs=`;
+   печатает публичный ключ exit `<exit-pub>`;
 3. **релей `client`:** conf `wg-ws0` (`Table=off`, MTU 1240, Endpoint
    `127.0.0.1:51822`), `Wants/After=wstunnel-client`, NAT-ветка, перерендер
    policy; **table 100 не тронут** — `default dev awg1`.

@@ -860,8 +860,15 @@ def run_relay_install(
 
 
 def write_env(path: Path, text: str) -> None:
-    """Атомарная запись env-файла 0600 (секрет не попадает в лог)."""
-    write_secret_atomic(path, text)
+    """Атомарная запись env-файла 0600 (секрет не попадает в лог).
+
+    P0 (приёмка 2026-11-20): на релее нет `/etc/vds` (alert.env живёт только
+    на exit), а `write_secret_atomic` родителя не создаёт — файл молча не
+    записывался. Обязательно mkdir.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not write_secret_atomic(path, text):
+        raise WstunnelError(f"не удалось записать {path} (0600)")
 
 
 def run_install(

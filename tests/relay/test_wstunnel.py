@@ -708,3 +708,10 @@ def test_p2_fallback_since_set_on_wstun_recovery(tmp_path, monkeypatch):
     st = carriers.load_state(state_path)
     assert st["fallback_since"] is not None  # теперь prefer_primary сработает
     assert st["state"] == "fallback"
+
+
+def test_write_env_creates_parent_dir(tmp_path):
+    """P0 приёмки: /etc/vds нет на релее — write_env создаёт родителя."""
+    deep = tmp_path / "etc" / "vds" / "wstunnel-client.env"
+    ws.write_env(deep, ws.render_client_env("FIXTURE_PREFIX"))
+    assert deep.is_file() and deep.stat().st_mode & 0o777 == 0o600
