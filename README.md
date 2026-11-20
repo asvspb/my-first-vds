@@ -303,6 +303,8 @@ vds relay wstunnel install --archive <tar.gz> [--apply]  # носитель №2
                                       # sha256 до распаковки, атомарно 0755 в /usr/local/bin;
                                       # пиннинг WSTUNNEL_VERSION/SHA256 (v11.1.0), сеть — отдельно
 vds relay wstunnel status [--json]    # пиннинг, установленная версия, env-файлы секретов 0600
+                                      # wg-ws0 = plain AWG (без Jc/S*), Table=off, MTU 1240,
+                                      # Endpoint 127.0.0.1:<local> — VPN-PROTOCOLS §2.5
 vds relay add-client phone --keepalive 25 --qr
                                      # Пир awg0: .conf (0600), endpoint relay-домен:443,
                                      # DNS = 1.1.1.1,1.0.0.1, AllowedIPs 0.0.0.0/0 (v4-only)

@@ -309,6 +309,13 @@ add-client`). Существующие конфиги не переписыва�
 `listen-port 0` + endpoint по пулу, с liveness-окном 20 с и откатом; авто-таймер
 opt-in в WP-M4.
 
+**Plain-режим AWG (обфускация выключена, ADR-016):** для носителя `wg-ws0`
+(WG **внутри** wstunnel/WSS) обфускация не применяется —
+`render_server_conf(obf={})` / `render_client_conf(obf={}, junk={})` не пишут
+строки `Jc/Jmin/Jmax/S1/S2/H1..H4` (для AmneziaWG это plain-WireGuard).
+Причина: junk/S-паддинг внутри TLS только съедает MTU и TCP-окно, а маскирует
+трафик уже сам WSS.
+
 ## 3. План добавления в VDS Orchestrator
 
 > **Статус: реализовано и работает на asv1/asv2 (актуализировано 2026-11-16).**

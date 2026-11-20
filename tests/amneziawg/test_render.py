@@ -209,3 +209,44 @@ def test_client_keepalive_explicit_and_default_silence() -> None:
     assert "PersistentKeepalive" not in render_client_conf(ClientParams(**base))
     text = render_client_conf(ClientParams(**base, keepalive=113))
     assert "PersistentKeepalive = 113" in text
+
+
+# --- plain-режим (ADR-016, носитель №2 внутри WSS) -------------------------
+
+def test_server_conf_plain_omits_obfuscation():
+    """obf={} → ни одной Jc/S1/H*-строки (plain WG внутри TLS)."""
+    peer = ServerPeer(public_key=CLIENT_PUB, allowed_ips="10.12.0.2/32",
+                      name="relay", keepalive=25)
+    conf = render_server_conf(
+        ServerParams(private_key=SERVER_PRIV, address="10.12.0.1/30",
+                     port=51821, obf={}, peers=(peer,))
+    )
+    assert "ListenPort = 51821" in conf
+    assert "Jc" not in conf and "S1" not in conf and "H1" not in conf
+    assert "PersistentKeepalive = 25" in conf
+
+
+def test_client_conf_plain_omits_obfuscation():
+    conf = render_client_conf(
+        ClientParams(
+            private_key=CLIENT_PRIV,
+            address="10.12.0.2/30",
+            server_pubkey=SERVER_PUB,
+            endpoint="127.0.0.1:51822",
+            junk={},
+            obf={},
+            allowed_ips="0.0.0.0/0",
+        )
+    )
+    assert "Endpoint = 127.0.0.1:51822" in conf
+    assert "Jc" not in conf and "H1" not in conf
+
+
+def test_partial_obf_still_validated():
+    """obf без junk — ошибка (нельзя «наполовину»)."""
+    with pytest.raises(Exception):
+        render_client_conf(
+            ClientParams(private_key=CLIENT_PRIV, address="10.12.0.2/30",
+                         server_pubkey=SERVER_PUB, endpoint="127.0.0.1:51822",
+                         junk={}, obf=OBF)
+        )

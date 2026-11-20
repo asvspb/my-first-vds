@@ -163,8 +163,14 @@ class ClientParams:
 
 
 def render_server_conf(params: ServerParams) -> str:
-    """Вернуть валидный awg-quick .conf сервера (строка, детерминированно)."""
-    validate_obfuscation(params.obf)
+    """Вернуть валидный awg-quick .conf сервера (строка, детерминированно).
+
+    `obf={}` — обфускация ВЫКЛЮЧЕНА: строки Jc/S1/H* не пишутся вовсе (для
+    AWG это plain-WireGuard-семантика). Нужно носителю №2 ADR-016: WG живёт
+    внутри WSS/TLS, и junk-пакеты там только жгут MTU и TCP-окно.
+    """
+    if params.obf:
+        validate_obfuscation(params.obf)
     lines = [
         "[Interface]",
         f"Address = {params.address}",
@@ -172,8 +178,9 @@ def render_server_conf(params: ServerParams) -> str:
         f"PrivateKey = {params.private_key}",
         "SaveConfig = false",
     ]
-    for key in ("Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"):
-        lines.append(f"{key} = {params.obf[key]}")
+    if params.obf:
+        for key in ("Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"):
+            lines.append(f"{key} = {params.obf[key]}")
     for peer in params.peers:
         lines += ["", "[Peer]"]
         if peer.name:
@@ -193,17 +200,19 @@ def render_client_conf(params: ClientParams) -> str:
     S1/S2/H1–H4 берутся из params.obf (те же, что на сервере); Jc/Jmin/Jmax —
     клиентские (params.junk, свой набор).
     """
-    junk = {k: params.junk[k] for k in ("Jc", "Jmin", "Jmax")}
-    validate_obfuscation({**params.obf, **junk})
+    plain = not params.obf and not params.junk
     lines = [
         "[Interface]",
         f"PrivateKey = {params.private_key}",
         f"Address = {params.address}",
     ]
-    for key in ("Jc", "Jmin", "Jmax"):
-        lines.append(f"{key} = {junk[key]}")
-    for key in ("S1", "S2", "H1", "H2", "H3", "H4"):
-        lines.append(f"{key} = {params.obf[key]}")
+    if not plain:  # plain = обфускация выключена (носитель №2 внутри WSS)
+        junk = {k: params.junk[k] for k in ("Jc", "Jmin", "Jmax")}
+        validate_obfuscation({**params.obf, **junk})
+        for key in ("Jc", "Jmin", "Jmax"):
+            lines.append(f"{key} = {junk[key]}")
+        for key in ("S1", "S2", "H1", "H2", "H3", "H4"):
+            lines.append(f"{key} = {params.obf[key]}")
     lines += [
         "",
         "[Peer]",

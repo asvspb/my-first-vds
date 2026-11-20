@@ -50,6 +50,12 @@ WS_CLIENT_ENV = WS_ENV_DIR / "wstunnel-client.env"
 WS_SERVER_UNIT = "vds-wstunnel-server.service"
 WS_CLIENT_UNIT = "vds-wstunnel-client.service"
 
+# nft exit-стороны и конфиг AWG интерфейса (одинаковый путь на обоих узлах)
+EXIT_NFT_TABLE = "vds_relay_wstun"
+EXIT_NFT_FILE = Path("/etc/vds/wstunnel-exit.nft")
+WG_WS_CONF = Path("/etc/amnezia/wg-ws0.conf")
+WG_WS_UNIT = "vds-awg-wg-ws0.service"
+
 # --- сетевые константы носителя №2 ----------------------------------------
 WS_PORT_DEFAULT = 9443          # TCP/TLS, свободен на обоих узлах (SPEC §1)
 WG_WS_IFACE = "wg-ws0"
@@ -58,6 +64,7 @@ WG_WS_LOCAL_UDP_DEFAULT = 51822  # локальный UDP-порт wstunnel-кл
 WG_WS_NET = "10.12.0.0/30"
 WG_WS_EXIT_ADDR = "10.12.0.1/30"
 WG_WS_RELAY_ADDR = "10.12.0.2/30"
+WG_WS_RELAY_PEER = "10.12.0.2/32"  # AllowedIPs пира на exit-стороне
 WG_WS_MTU = 1240
 
 _PREFIX_BYTES = 18  # ~24 символа base62 — как в README-примере
@@ -224,6 +231,118 @@ def client_argv(
     ]
 
 
+def render_exit_conf(
+    *,
+    private_key: str,
+    peer_public_key: str,
+    wg_port: int = WG_WS_PORT_DEFAULT,
+    keepalive: int = 25,
+) -> str:
+    """Серверный .conf exit-стороны: `wg-ws0` 10.12.0.1/30, plain (без obf).
+
+    Обфускация выключена: интерфейс живёт **внутри** wstunnel/WSS, junk только
+    съедает MTU и TCP-окно. Пир — релей (10.12.0.2/32) с keepalive 25, чтобы
+    сессия не умирала на NAT/промежуточных устройствах.
+    """
+    from src.amneziawg.config import ServerParams, ServerPeer, render_server_conf
+
+    peer = ServerPeer(
+        public_key=peer_public_key,
+        allowed_ips=WG_WS_RELAY_PEER,
+        name="relay-wstunnel",
+        keepalive=keepalive,
+    )
+    return render_server_conf(
+        ServerParams(
+            private_key=private_key,
+            address=WG_WS_EXIT_ADDR,
+            port=int(wg_port),
+            obf={},
+            peers=(peer,),
+        )
+    )
+
+
+def render_relay_conf(
+    *,
+    private_key: str,
+    server_public_key: str,
+    local_udp: int = WG_WS_LOCAL_UDP_DEFAULT,
+    mtu: int = WG_WS_MTU,
+    keepalive: int = 25,
+) -> str:
+    """Клиентский .conf релея: `wg-ws0` 10.12.0.2/30 поверх локального UDP.
+
+    Ключевое (ADR-016 I-3):
+    * `Endpoint = 127.0.0.1:<local_udp>` — порт, который слушает wstunnel client;
+    * **`Table = off`** — маршруты ведёт селектор (table 100), иначе wg-quick
+      перезапишет default в main и отрежет SSH (урок sanitize_exit_conf);
+    * `MTU` — из SPEC §4 (1240), поверх TLS/TCP/WS.
+    """
+    if not private_key or not server_public_key:
+        raise WstunnelError("нужны приватный ключ релея и публичный ключ exit")
+    lines = [
+        "[Interface]",
+        f"PrivateKey = {private_key}",
+        f"Address = {WG_WS_RELAY_ADDR}",
+        f"MTU = {int(mtu)}",
+        "Table = off",
+        "SaveConfig = false",
+        "",
+        "[Peer]",
+        f"PublicKey = {server_public_key}",
+        f"Endpoint = 127.0.0.1:{int(local_udp)}",
+        "AllowedIPs = 0.0.0.0/0",
+        f"PersistentKeepalive = {int(keepalive)}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def render_exit_nft(
+    *,
+    relay_ip: str,
+    wan_iface: str,
+    ws_port: int = WS_PORT_DEFAULT,
+    wg_port: int = WG_WS_PORT_DEFAULT,
+    table: str = EXIT_NFT_TABLE,
+) -> str:
+    """nft exit-стороны (ADR-016 §2.2): NAT подсети + изоляция портов.
+
+    * `postrouting` — MASQUERADE 10.12.0.0/30 на WAN (иначе приватный src уйдёт
+      в интернет);
+    * `input` (priority filter − 1) — WSS-порт только с IP релея; WG-порт
+      **только через lo** (kernel AWG не умеет bind на loopback — nft замещает);
+    * `forward` — разрешить 10.12.0.0/30 наружу.
+    """
+    from src.relay.exit_leg import validate_relay_ip, validate_wan_iface
+
+    ip = validate_relay_ip(relay_ip)
+    wan = validate_wan_iface(wan_iface)
+    return (
+        "#!/usr/sbin/nft -f\n"
+        "# VDS p2p carrier 2 (ADR-016): wstunnel/WG. Генерируется\n"
+        "# `vds relay wstunnel` — руками на сервере не править.\n"
+        f"table inet {table}\n"
+        f"flush table inet {table}\n"
+        f"table inet {table} {{\n"
+        "    chain postrouting {\n"
+        "        type nat hook postrouting priority srcnat; policy accept;\n"
+        f'        ip saddr {WG_WS_NET} oifname "{wan}" masquerade\n'
+        "    }\n"
+        "    chain input {\n"
+        "        type filter hook input priority filter - 1; policy accept;\n"
+        f"        ip saddr != {ip} tcp dport {int(ws_port)} drop\n"
+        f"        meta nfproto ipv6 tcp dport {int(ws_port)} drop\n"
+        f'        iifname != "lo" udp dport {int(wg_port)} drop\n'
+        "    }\n"
+        "    chain forward {\n"
+        "        type filter hook forward priority filter; policy accept;\n"
+        f'        ip saddr {WG_WS_NET} oifname "{wan}" accept\n'
+        "    }\n"
+        "}\n"
+    )
+
+
 def write_env(path: Path, text: str) -> None:
     """Атомарная запись env-файла 0600 (секрет не попадает в лог)."""
     write_secret_atomic(path, text)
@@ -293,6 +412,7 @@ __all__ = [
     "WG_WS_NET",
     "WG_WS_EXIT_ADDR",
     "WG_WS_RELAY_ADDR",
+    "WG_WS_RELAY_PEER",
     "WG_WS_MTU",
     "WstunnelError",
     "asset_name",
@@ -303,6 +423,13 @@ __all__ = [
     "extract_binary",
     "installed_version",
     "gen_path_prefix",
+    "EXIT_NFT_TABLE",
+    "EXIT_NFT_FILE",
+    "WG_WS_CONF",
+    "WG_WS_UNIT",
+    "render_exit_conf",
+    "render_relay_conf",
+    "render_exit_nft",
     "render_server_env",
     "render_client_env",
     "server_argv",

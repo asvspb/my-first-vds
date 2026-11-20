@@ -482,7 +482,16 @@ ssh relay 'vds relay wstunnel status --json'   # pinned/installed/env-файлы
 `WSTUNNEL_RESTRICT_HTTP_UPGRADE_PATH_PREFIX` / `WSTUNNEL_HTTP_UPGRADE_PATH_PREFIX`
 — имена есть в README v11.1.0) и **не попадает в argv**.
 
-**Юниты и `wg-ws0`** (интерфейс, NAT, nft/MSS, порядок `Wants/After`) — WP-P2P-2;
+**`wg-ws0` (plain AWG).** Внутри WSS обфускация выключена: конфиг без
+`Jc/Jmin/Jmax/S1/S2/H1..H4` (для AWG это plain-WireGuard). Релей: `Table = off`,
+`MTU 1240`, `Endpoint = 127.0.0.1:<local-udp>` (порт `wstunnel client -L`).
+
+**MASQUERADE 10.12.0.0/30** — в `vds-relay-nat.service` (iptables, одна точка с
+awg1/eth0), **не** в nft: таблица `vds_relay` перегенерируется cidr-таймером.
+В nft-политику добавлены `iifname "wg-ws0" return` и `chain forward` с
+`maxseg size set rt mtu`.
+
+**Юниты** (интерфейс, `Wants/After`) — следующая часть WP-P2P-2;
 живая приёмка — WP-P2P-6; DNS `ws.<domain>` → IP exit делает владелец (OQ-2).
 
 ## Откат (демонтаж)

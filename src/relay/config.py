@@ -113,6 +113,9 @@ def render_nft_policy(cidrs: list[str]) -> str:
         f"    chain prerouting {{\n"
         f"        type filter hook prerouting priority mangle; policy accept;\n"
         f"        iifname \"{RELAY_EXIT_IFACE}\" return\n"
+        # ADR-016: второй носитель p2p — трафик wg-ws0 не метится (идёт своим
+        # маршрутом через селектор), иначе уедет в table 100 по fwmark.
+        f"        iifname \"wg-ws0\" return\n"
         f"        iifname \"awg0\" ip daddr @ru_cidr return\n"
         f"        iifname \"awg0\" ip daddr 10.10.0.0/24 return\n"
         f"        iifname \"awg0\" meta mark set {RELAY_MARK}\n"
@@ -121,6 +124,12 @@ def render_nft_policy(cidrs: list[str]) -> str:
         f"        type nat hook postrouting priority srcnat; policy accept;\n"
         f"        oifname \"{RELAY_EXIT_IFACE}\" ip saddr {RELAY_SUBNET} masquerade\n"
         f"        oifname \"eth0\" ip saddr {RELAY_SUBNET} masquerade\n"
+        f"    }}\n"
+        # ADR-016: MSS-clamp для второго носителя (WG поверх TLS/TCP/WS):
+        # без него клиентские HTTPS-фреймы упираются в PMTUD-blackhole.
+        f"    chain forward {{\n"
+        f"        type filter hook forward priority filter; policy accept;\n"
+        f"        tcp flags syn tcp option maxseg size set rt mtu\n"
         f"    }}\n"
         f"}}\n"
     )

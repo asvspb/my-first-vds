@@ -205,3 +205,55 @@ def test_run_status_reports_pin(monkeypatch, tmp_path):
     assert status["pinned_version"] == "11.1.0"
     assert status["installed_version"] is None
     assert status["env_server"] is False and status["env_client"] is False
+
+
+# --- конфиги wg-ws0 и nft exit-стороны (WP-P2P-2) ------------------------
+
+def test_exit_conf_plain_address_and_keepalive():
+    conf = ws.render_exit_conf(
+        private_key="FIXTURE_PW_WG_WS_EXIT_PRIV=",
+        peer_public_key="FIXTURE_PW_WG_WS_RELAY_PUB=",
+    )
+    assert "Address = 10.12.0.1/30" in conf
+    assert "ListenPort = 51821" in conf
+    assert "AllowedIPs = 10.12.0.2/32" in conf
+    assert "PersistentKeepalive = 25" in conf
+    assert "Jc" not in conf and "H1" not in conf  # plain внутри WSS
+
+
+def test_relay_conf_table_off_loopback_endpoint_and_mtu():
+    conf = ws.render_relay_conf(
+        private_key="FIXTURE_PW_WG_WS_RELAY_PRIV=",
+        server_public_key="FIXTURE_PW_WG_WS_EXIT_PUB=",
+    )
+    assert "Address = 10.12.0.2/30" in conf
+    assert "Table = off" in conf           # иначе wg-quick снесёт default в main
+    assert "MTU = 1240" in conf
+    assert "Endpoint = 127.0.0.1:51822" in conf  # порт wstunnel client -L
+    assert "PersistentKeepalive = 25" in conf
+    assert "Jc" not in conf
+
+
+def test_relay_conf_requires_keys():
+    with pytest.raises(ws.WstunnelError):
+        ws.render_relay_conf(private_key="", server_public_key="PUB")
+
+
+def test_exit_nft_isolation_and_nat():
+    text = ws.render_exit_nft(relay_ip="203.0.113.10", wan_iface="enp0s3")
+    assert "ip saddr 10.12.0.0/30 oifname \"enp0s3\" masquerade" in text
+    assert "ip saddr != 203.0.113.10 tcp dport 9443 drop" in text
+    assert 'iifname != "lo" udp dport 51821 drop' in text
+    assert "meta nfproto ipv6 tcp dport 9443 drop" in text
+    assert "flush table inet vds_relay_wstun" in text
+
+
+def test_exit_nft_rejects_bad_ip():
+    with pytest.raises(Exception):
+        ws.render_exit_nft(relay_ip="not-an-ip", wan_iface="enp0s3")
+
+
+def test_relay_nat_template_has_p2p_branch():
+    text = (TEMPLATES / "vds-relay-nat.service.tpl").read_text(encoding="utf-8")
+    assert "{p2p_subnet}" in text and "{p2p_iface}" in text
+    assert "if [ -n \"{p2p_iface}\" ]" in text

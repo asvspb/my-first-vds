@@ -102,6 +102,25 @@
   блок «Протоколы, которые можно активировать», CDN помечен холодным резервом
   (Q6). Только коммит: pipx/демон не трогались, дерево ubuntuInstaller чистое.
 
+## 2026-11-20: WP-P2P-2 (часть 1) — wg-ws0 plain, nft, NAT-ветка
+
+- **DNS/LЕ готовы:** `ws.asvpersonal.ru` → exit (DNS only, проверено с ноутбука
+  и с exit через 8.8.8.8); LE выпущен `certbot --standalone`
+  (`/etc/letsencrypt/live/ws.asvpersonal.ru/`, до 2027-02-18).
+- **Plain AWG:** `render_server_conf(obf={})` / `render_client_conf(obf={}, junk={})`
+  не пишут `Jc/S1/H*` — внутри WSS обфускация только жжёт MTU/окно.
+- **Конфиги `wg-ws0`:** exit `10.12.0.1/30` + пир `10.12.0.2/32` keepalive 25;
+  релей `10.12.0.2/30`, `Table = off`, `MTU 1240`, `Endpoint = 127.0.0.1:<local>`,
+  keepalive 25 обе стороны.
+- **nft exit** (`vds_relay_wstun`): MASQUERADE 10.12/30 на WAN; `input` —
+  WSS-порт только с IP релея, WG-порт **только lo** (kernel не умеет bind на
+  loopback — замещаем nft), IPv6-дропы; `forward` — 10.12/30 наружу.
+- **nft релея:** `iifname "wg-ws0" return` в prerouting (не метить fwmark 0x1) и
+  `chain forward` с `maxseg size set rt mtu`.
+- **NAT релея:** ветка `p2p_*` в `vds-relay-nat.service` (iptables, одна точка),
+  по умолчанию пустая → правило не ставится; перерендер делает wstunnel-install.
+- **Тесты:** +3 plain-режима, +6 рендеров (conf/nft), nat-шаблон; всего 1434.
+
 ## 2026-11-20: WP-P2P-1 — вендоринг wstunnel + юниты (готово к ревью)
 
 - **Пиннинг (OQ-1):** `WSTUNNEL_VERSION=11.1.0`,

@@ -443,7 +443,10 @@ def _install_nat_unit(wan_if: str) -> None:
     if not install_unit(
         "vds-relay-nat.service.tpl",
         RELAY_NAT_UNIT,
-        ctx={"client_subnet": RELAY_SUBNET, "exit_iface": RELAY_EXIT_IFACE, "wan_if": wan_if},
+        ctx={"client_subnet": RELAY_SUBNET, "exit_iface": RELAY_EXIT_IFACE, "wan_if": wan_if,
+             # ADR-016: по умолчанию носитель №2 не настроен — правило не ставится;
+             # `vds relay wstunnel` перерендерит юнит с p2p_* заполненными.
+             "p2p_subnet": "", "p2p_iface": ""},
     ):
         raise RelayInitError(f"Не удалось установить юнит {RELAY_NAT_UNIT}")
     start = run_list(["systemctl", "start", RELAY_NAT_UNIT], timeout=30)
