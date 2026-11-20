@@ -308,7 +308,8 @@ vds relay wstunnel install --archive <tar.gz> [--apply]  # носитель №2
 vds relay wstunnel status [--json]    # пиннинг, установленная версия, env-файлы секретов 0600
 vds relay carrier status [--json]     # селектор носителей: active/состояние/лимит 3 в час
 vds relay carrier switch --to awg|wstunnel [--apply]  # ручное переключение table 100
-                                      # (lock общий с манёвром P25; авто — хук rollback)
+                                      # (lock общий с манёвром P25; авто — хук rollback;
+                                      #  exhausted — автовыход при живом любом носителе)
 vds relay wstunnel init [--apply]     # релей, шаг 1: ключи wg-ws0 + path-prefix (0600); печатает ПУБЛИЧНЫЙ
 vds relay wstunnel server --relay-ip <ip> --relay-public-key <key> \
     --domain ws.<domain> --prefix-file <env> [--apply]   # exit: wg-ws0 + wss 9443 + nft/UFW

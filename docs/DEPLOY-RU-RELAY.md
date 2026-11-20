@@ -515,7 +515,11 @@ awg1: в wg-ws0 уходят пакеты клиентов, а не 10.12.0.0/30
 (мёртвый резерв → сразу exhausted, AC-S5); в `fallback` тик P25 — no-op без
 траты attempts (AC-S6); возврат — 3 пробы awg1 подряд + ≥600 с (AC-6), при
 этом P25-серия сбрасывается (иначе ложный манёвр); 3/3 провалов wg-ws0 →
-`exhausted`; лимит 3 переключений в час. Команды: `vds relay carrier status`,
+`exhausted`; лимит 3 переключений в час. Надёжность: хук rollback живёт в
+maneuver (под его локом, без повторного захвата); `exhausted_recovery_check` —
+автовыход при живом любом носителе; сброс P25-серии при возврате — в
+`last_sample` (правильное поле); nft-policy перезаписывается атомарно после
+`nft -c -f`. Команды: `vds relay carrier status`,
 `switch --to awg|wstunnel [--apply]`. AC-S4: `vds-relay-policy` через
 ExecStartPost `carrier-default-iface.sh` ставит table 100 по активному
 носителю из state (дефолт awg1, `ip link show` проверяется — юнит не падает).

@@ -710,10 +710,10 @@ def tick(
         save_maneuver_state(st, state_path)
         result.update(acted=True, result="rollback", exhausted=bool(st.get("exhausted")))
         # ADR-016 (WP-P2P-3): rollback первого носителя — сигнал селектору.
-        # Вызов под нашим FileLock: carriers.lock НЕ берёт (анти-deadlock AC-7).
+        # Вызов под нашим FileLock (анти-deadlock AC-7); state селектора — СВОЙ
+        # файл (p2p-carriers.json), НО НЕ maneuver_path (P0-3 ревью: перезапись).
         from src.relay import carriers as _carriers
-        _carrier_action = _carriers.on_maneuver_rollback(state_path)
-        result["carrier"] = _carrier_action
+        result["carrier"] = _carriers.on_maneuver_rollback()
         return result
 
     alive, liveness_ms = wait_liveness()
@@ -746,10 +746,9 @@ def tick(
             st["state"] = "exhausted"
             st["exhausted"] = True
         result.update(acted=True, result="rollback")
-        # ADR-016: хук селектора (уже под нашим FileLock — AC-7).
+        # ADR-016: хук селектора (уже под нашим FileLock — AC-7); без maneuver-path.
         from src.relay import carriers as _carriers
-        _carrier_action = _carriers.on_maneuver_rollback(state_path)
-        result["carrier"] = _carrier_action
+        result["carrier"] = _carriers.on_maneuver_rollback()
     result["exhausted"] = bool(st.get("exhausted"))
     if not save_maneuver_state(st, state_path):
         raise ManeuverError("не удалось сохранить state манёвра (0600).")
@@ -823,14 +822,24 @@ def run_step(
     # снят по устаревшим счётчикам.
     try:
         with FileLock(RELAY_MANEUVER_LOCK_FILE):
-            # ADR-016 (WP-P2P-3, AC-S6): трафик на резерве — P25 не крутит порты.
+            # ADR-016 (WP-P2P-3): сначала автовыход из exhausted (P0-5 ревью),
+            # затем fallback-режим (AC-S6). Порядок: exhausted → fallback.
             from src.relay import carriers as _carriers
+            if _carriers.is_exhausted():
+                recovery = _carriers.exhausted_recovery_check()
+                if recovery.get("action") == "recovered" and recovery.get("to") == _carriers.PRIMARY:
+                    _carriers.reset_p25_state(maneuver_path)
+                console.print(
+                    f"[info][relay] step (exhausted): селектор — "
+                    f"{recovery.get('action')} ({recovery.get('to') or recovery.get('reason')})[/info]"
+                )
+                return 0
             if _carriers.is_fallback():
                 carrier_result = _carriers.fallback_tick(maneuver_path=maneuver_path)
                 console.print(
                     f"[info][relay] step (fallback): носитель №2 активен — P25 no-op; "
-                    f"селектор: {_carrier_result.get('action')} "
-                    f"({ _carrier_result.get('reason') or _carrier_result.get('state') })[/info]"
+                    f"селектор: {carrier_result.get('action')} "
+                    f"({carrier_result.get('reason') or carrier_result.get('state')})[/info]"
                 )
                 return 0
             st = load_maneuver_state(maneuver_path)
@@ -1078,13 +1087,9 @@ def run_rollback(
             st["liveness_ms"] = liveness_ms
             st["failed_ports"] = [p for p in st.get("failed_ports", []) if p != previous]
             _append_attempt(st, now, current, previous, "rollback", liveness_ms)
-            # ADR-016: ручной rollback тоже сигнал селектору (под нашим локом).
-            from src.relay import carriers as _carriers
-            _carrier_result = _carriers.on_maneuver_rollback(state_path)
-            console.print(
-                f"[info][relay] селектор: {_carrier_result.get('action')} "
-                f"({_carrier_result.get('reason') or _carrier_result.get('to')})[/info]"
-            )
+            # ADR-016 (P0-3 ревью): ручной rollback НЕ сигнал селектору — он
+            # выполняется при ОЖИВШЕМ awg1 (alive), селектор здесь только навредил бы;
+            # плюс state_path — это gateway state.json (чужой файл для carriers).
             if not save_maneuver_state(st, maneuver_path):
                 raise ManeuverError("не удалось сохранить state манёвра (0600).")
     except (ManeuverError, OSError) as exc:
@@ -1325,8 +1330,21 @@ def run_tick(
             if os.geteuid() != 0:
                 raise ManeuverError("--apply требует root (systemd-юнит запускает от root)")
             with FileLock(RELAY_MANEUVER_LOCK_FILE):
-                # ADR-016 (AC-S6): fallback — P25 no-op, вместо него тик селектора.
+                # ADR-016 (WP-P2P-3): exhausted-автовыход, затем fallback (AC-S6).
                 from src.relay import carriers as _carriers
+                if _carriers.is_exhausted():
+                    recovery = _carriers.exhausted_recovery_check()
+                    if recovery.get("action") == "recovered" and recovery.get("to") == _carriers.PRIMARY:
+                        _carriers.reset_p25_state(maneuver_path)
+                    console.print(
+                        _journal_tag(
+                            state=f"exhausted({recovery.get('action')})",
+                            port=port, liveness_ok=False, liveness_ms=None,
+                            activity=False, fails=0, acted=False, result=None,
+                        ),
+                        markup=False, highlight=False, soft_wrap=True,
+                    )
+                    return 0
                 if _carriers.is_fallback():
                     carrier_result = _carriers.fallback_tick(maneuver_path=maneuver_path)
                     console.print(

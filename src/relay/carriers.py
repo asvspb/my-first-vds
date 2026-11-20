@@ -111,6 +111,7 @@ def load_state(path: Optional[str] = None) -> dict:
 
 def save_state(state: dict, path: Optional[str] = None) -> bool:
     target = Path(path) if path is not None else CARRIERS_STATE_PATH
+    tmp: Optional[str] = None  # иначе UnboundLocalError в except при mkstemp-сбое
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = __import__("tempfile").mkstemp(
@@ -139,6 +140,12 @@ def active_carrier(state: Optional[dict] = None) -> str:
 def is_fallback(state: Optional[dict] = None) -> bool:
     """P25 в fallback не крутит порты (AC-S6)."""
     return wg_ws0_installed() and active_carrier(state) == WSTUNNEL
+
+
+def is_exhausted(state: Optional[dict] = None) -> bool:
+    """P0-5: селектор в exhausted — тик сначала пробует автовыход."""
+    st = state if state is not None else load_state()
+    return wg_ws0_installed() and str(st.get("state") or "") == STATE_EXHAUSTED
 
 
 # --- пробы ------------------------------------------------------------------
@@ -194,8 +201,17 @@ def _apply_switch(
     if _switches_last_hour(state, now) >= MAX_SWITCHES_PER_HOUR:
         state["state"] = STATE_EXHAUSTED
         state["exhausted_reason"] = "лимит 3 переключений в час исчерпан"
+        # P1-1: сохраняем ДО raise — иначе переход в exhausted не доживёт до диска.
+        save_state(state, state_path)
         raise CarrierError(state["exhausted_reason"])
-    _switch_route(IFACES[to], run=run)
+    try:
+        _switch_route(IFACES[to], run=run)
+    except CarrierError as exc:
+        # P1-1: сбой ip route — фиксируем exhausted на диске и пробрасываем.
+        state["state"] = STATE_EXHAUSTED
+        state["exhausted_reason"] = str(exc)
+        save_state(state, state_path)
+        raise
     state["active"] = to
     state["active_iface"] = IFACES[to]
     state["state"] = STATE_FALLBACK if to == WSTUNNEL else STATE_PRIMARY
@@ -223,7 +239,7 @@ def on_maneuver_rollback(
     state_path: Optional[str] = None,
     *,
     now: Optional[datetime] = None,
-    probe: Optional[Callable[[str, str], bool]] = None,
+    probe_fn: Optional[Callable[[str, str], bool]] = None,
     run: Optional[Callable[..., ShellResult]] = None,
 ) -> dict:
     """Хук из maneuver.py ПОСЛЕ rollback (уже под локом P25).
@@ -242,7 +258,8 @@ def on_maneuver_rollback(
     if active_carrier(state) != PRIMARY:
         return {"action": "noop", "reason": f"active={active_carrier(state)}"}
 
-    wstun_ok = probe(IFACES[WSTUNNEL], PEER_IPS[WSTUNNEL])
+    # P0-1 (ревью 769a7eb): вызов через фолбэк — модульная probe, не затенение.
+    wstun_ok = (probe_fn or probe)(IFACES[WSTUNNEL], PEER_IPS[WSTUNNEL])
     if wstun_ok:
         try:
             _apply_switch(
@@ -262,12 +279,18 @@ def on_maneuver_rollback(
 
 # --- тик в fallback (prefer_primary + анти-джиттер) --------------------------
 
-def _reset_p25_state(maneuver_path: Optional[str]) -> None:
-    """Возврат на primary: сброс P25-серии (иначе старые 3/3 дадут ложный манёвр)."""
+def reset_p25_state(maneuver_path: Optional[str] = None) -> None:
+    """Возврат на primary: сброс P25-серии (иначе старые 3/3 дадут ложный манёвр).
+
+    P0-4 (ревью 769a7eb): счётчик серии живёт в ``last_sample``;
+    верхнеуровневый ``st["consecutive_failures"]`` maneuver.py не читает.
+    """
     from src.relay.maneuver import load_maneuver_state, save_maneuver_state  # лениво
 
     st = load_maneuver_state(maneuver_path)
-    st["consecutive_failures"] = 0
+    if isinstance(st.get("last_sample"), dict):
+        st["last_sample"]["consecutive_failures"] = 0
+    st["cooldown_until"] = None
     st["failed_ports"] = []
     st["exhausted"] = False
     st["state"] = "healthy"
@@ -279,7 +302,7 @@ def fallback_tick(
     maneuver_path: Optional[str] = None,
     *,
     now: Optional[datetime] = None,
-    probe: Optional[Callable[[str, str], bool]] = None,
+    probe_fn: Optional[Callable[[str, str], bool]] = None,
     run: Optional[Callable[..., ShellResult]] = None,
 ) -> dict:
     """Тик селектора при `active == "wstunnel"` (вызывается под локом P25).
@@ -296,7 +319,8 @@ def fallback_tick(
     if active_carrier(state) != WSTUNNEL:
         return {"action": "noop", "reason": f"active={active_carrier(state)}"}
 
-    run_probe = probe or (lambda i, p: probe(i, p, run=run))
+    # P0-1: параметр probe_fn — фолбэк на модульную probe (не затенённую).
+    run_probe = probe_fn or (lambda i, p: probe(i, p, run=run))
 
     # 1) жив ли резерв?
     if run_probe(IFACES[WSTUNNEL], PEER_IPS[WSTUNNEL]):
@@ -320,16 +344,26 @@ def fallback_tick(
     awg_ok = run_probe(IFACES[PRIMARY], PEER_IPS[PRIMARY])
     if awg_ok and min_age_ok:
         state["recover_ok_streak"] = int(state.get("recover_ok_streak") or 0) + 1
+        # P1-3: серия 1..2 — recovering (SPEC §5); сброс — обратно fallback.
+        if state["recover_ok_streak"] >= 1:
+            state["state"] = STATE_RECOVERING
     else:
         state["recover_ok_streak"] = 0
+        if state["state"] == STATE_RECOVERING:
+            state["state"] = STATE_FALLBACK
 
     if state["recover_ok_streak"] >= RECOVER_OK_STREAK:
-        _apply_switch(
-            PRIMARY, state=state, now=moment,
-            reason="awg1 восстановился — возврат на primary (prefer_primary)",
-            state_path=state_path, run=run,
-        )
-        _reset_p25_state(maneuver_path)
+        try:
+            _apply_switch(
+                PRIMARY, state=state, now=moment,
+                reason="awg1 восстановился — возврат на primary (prefer_primary)",
+                state_path=state_path, run=run,
+            )
+        except CarrierError as exc:
+            # P1-1: лимит/сбой маршрута — не поднимать (maneuver ловит только
+            # ManeuverError/OSError): состояние уже сохранено в state.
+            return {"action": "exhausted", "reason": str(exc)}
+        reset_p25_state(maneuver_path)
         return {"action": "switched", "to": PRIMARY, "state": STATE_PRIMARY}
 
     if not save_state(state, state_path):
@@ -347,7 +381,7 @@ def exhausted_recovery_check(
     state_path: Optional[str] = None,
     *,
     now: Optional[datetime] = None,
-    probe: Optional[Callable[[str, str], bool]] = None,
+    probe_fn: Optional[Callable[[str, str], bool]] = None,
     run: Optional[Callable[..., ShellResult]] = None,
 ) -> dict:
     """Автовыход из `exhausted`, когда любой носитель стабильно отвечает."""
@@ -357,7 +391,8 @@ def exhausted_recovery_check(
     state = load_state(state_path)
     if state.get("state") != STATE_EXHAUSTED:
         return {"action": "noop"}
-    run_probe = probe or (lambda i, p: probe(i, p, run=run))
+    # P0-1: параметр probe_fn — фолбэк на модульную probe (не затенённую).
+    run_probe = probe_fn or (lambda i, p: probe(i, p, run=run))
     if run_probe(IFACES[PRIMARY], PEER_IPS[PRIMARY]):
         state["state"] = STATE_PRIMARY
         state["active"] = PRIMARY
@@ -499,9 +534,10 @@ __all__ = [
     "FALLBACK_TO_RECOVER_MIN_S", "RECOVER_OK_STREAK", "WG_WS_FAIL_LIMIT",
     "MAX_SWITCHES_PER_HOUR", "HISTORY_CAP", "CarrierError",
     "default_state", "load_state", "save_state", "wg_ws0_installed",
-    "active_carrier", "is_fallback", "p25_noop_reason", "probe",
+    "active_carrier", "is_fallback", "is_exhausted", "p25_noop_reason",
+    "probe", "reset_p25_state",
     "on_maneuver_rollback", "fallback_tick", "exhausted_recovery_check",
-    "expected" if False else "render_default_iface_script",
+    "render_default_iface_script",
     "ensure_default_iface_script", "run_status", "run_switch",
     "utcnow", "iso", "parse_ts",
 ]

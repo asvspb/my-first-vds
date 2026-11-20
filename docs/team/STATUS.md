@@ -102,6 +102,41 @@
   блок «Протоколы, которые можно активировать», CDN помечен холодным резервом
   (Q6). Только коммит: pipx/демон не трогались, дерево ubuntuInstaller чистое.
 
+## 2026-11-20: WP-P2P-3 — P0×5/P1×4 фикс (ревизия, готово к ревью)
+
+Ревью 769a7eb поймало 5 P0 (краши/потеря state на живом релее — тесты
+пропустили, т.к. везде явно передавали probe и не гоняли живую связку
+maneuver→carriers). Все закрыты + интеграционные мок-тесты:
+
+- **P0-1:** параметр `probe` затенял модульную `probe()` → `probe_fn` во всех
+  трёх точках; фолбэк `(probe_fn or probe)`. Тесты с `probe_fn=None` (только
+  run-инъекция) на все три функции.
+- **P0-2:** `run_step` fallback печатал `_carrier_result` вместо
+  `carrier_result` — NameError.
+- **P0-3:** rollback-хукам передавался ЧУЖОЙ state (maneuver-path в tick,
+  gateway-state в `run_rollback`) — carriers перезаписал бы их. Теперь хук в
+  tick без maneuver-path; из ручного `run_rollback` хук убран совсем (он
+  выполняется при живом awg1 — селектор там только навредил бы).
+- **P0-4:** `reset_p25_state` сбрасывал `st["consecutive_failures"]`, а серия
+  живёт в `st["last_sample"]["consecutive_failures"]` (+ cooldown_until=None);
+  тест заражает именно last_sample.
+- **P0-5:** `exhausted_recovery_check` был мёртвым кодом — теперь
+  `run_step`/`run_tick` (под локом) сначала `is_exhausted()` → автовыход
+  (возврат на PRIMARY сбрасывает P25-серию), затем `is_fallback()`.
+- **P1-1:** `_apply_switch` — лимит 3/час и сбой `ip route` сохраняют
+  exhausted в state до raise; `fallback_tick` возврат обёрнут в try/except
+  (maneuver ловит только ManeuverError/OSError).
+- **P1-2:** `run_switch` сброс P25-серии перенесён внутрь FileLock.
+- **P1-3:** `STATE_RECOVERING` выставляется при `recover_ok_streak ≥ 1`,
+  сброс серии → `STATE_FALLBACK`.
+- **P1-4:** `save_state` — `tmp=None` до try (UnboundLocalError при сбое
+  mkstemp).
+- **P2-1:** мусор в `__all__` почищен. **P2-2:** интеграционные мок-тесты
+  `run_tick`/`run_step` без подмены probe — только общий `run_list`
+  (awg1-пинг мёртв, wg-ws0 жив): rollback → переключение на wstunnel;
+  fallback → ни одного `awg set`; exhausted + живой awg1 → recovery + сброс
+  серии (P0-4-регресс).
+
 ## 2026-11-20: WP-P2P-3 — селектор носителей (готово к ревью, `769a7eb`)
 
 - **`src/relay/carriers.py`:** state-машина `primary/fallback/recovering/exhausted`,
