@@ -1428,6 +1428,79 @@ def relay_wstunnel_install(
         raise typer.Exit(1)
 
 
+@relay_wstunnel_app.command("init")
+def relay_wstunnel_init(
+    apply: bool = typer.Option(False, "--apply", help="Применить (по умолчанию dry-run)"),
+):
+    """Релей, шаг 1: ключи `wg-ws0` + секрет path-prefix (ADR-016).
+
+    Печатает ТОЛЬКО публичный ключ; приватный остаётся в
+    `/etc/amnezia/wg-ws0.priv` (0600), prefix — в `/etc/vds/wstunnel-client.env`
+    (0600, файл передаётся на exit).
+
+    Пример: sudo vds relay wstunnel init --apply"""
+    from src.relay.wstunnel import WstunnelError, run_init
+
+    try:
+        raise typer.Exit(run_init(dry_run=not apply, apply=apply))
+    except WstunnelError as exc:
+        console.print(f"[error][wstunnel] {exc}[/error]")
+        raise typer.Exit(1)
+
+
+@relay_wstunnel_app.command("server")
+def relay_wstunnel_server(
+    relay_ip: str = typer.Option(..., "--relay-ip", help="Публичный IPv4 релея"),
+    relay_public_key: str = typer.Option(..., "--relay-public-key", help="Публичный ключ релея (wg-ws0)"),
+    domain: str = typer.Option(..., "--domain", help="LE-домен: ws.<domain> (DNS only)"),
+    prefix_file: str = typer.Option(..., "--prefix-file", help="env-файл prefix с релея (0600)"),
+    apply: bool = typer.Option(False, "--apply", help="Применить (по умолчанию dry-run)"),
+):
+    """Exit-сторона носителя №2 (ADR-016): `wg-ws0` + wstunnel server (WSS 9443).
+
+    Требует выпущенный LE на `--domain`. Печатает публичный ключ exit — его
+    нужно передать на релей для `vds relay wstunnel client`.
+
+    Пример: sudo vds relay wstunnel server --relay-ip <ip> \
+        --relay-public-key <key> --domain ws.<domain> \
+        --prefix-file /tmp/wstunnel-client.env --apply"""
+    from pathlib import Path
+
+    from src.relay.wstunnel import WstunnelError, run_exit_install
+
+    try:
+        raise typer.Exit(run_exit_install(
+            relay_ip=relay_ip, relay_public_key=relay_public_key, domain=domain,
+            prefix_file=Path(prefix_file), apply=apply,
+        ))
+    except WstunnelError as exc:
+        console.print(f"[error][wstunnel] {exc}[/error]")
+        raise typer.Exit(1)
+
+
+@relay_wstunnel_app.command("client")
+def relay_wstunnel_client(
+    exit_public_key: str = typer.Option(..., "--exit-public-key", help="Публичный ключ exit (wg-ws0)"),
+    domain: str = typer.Option(..., "--domain", help="LE-домен: ws.<domain>"),
+    apply: bool = typer.Option(False, "--apply", help="Применить (по умолчанию dry-run)"),
+):
+    """Релей, шаг 2: конфиг `wg-ws0`, клиент wstunnel, NAT-ветка, юниты.
+
+    `table 100` не переключается — это делает селектор (WP-P2P-3).
+
+    Пример: sudo vds relay wstunnel client --exit-public-key <key> \
+        --domain ws.<domain> --apply"""
+    from src.relay.wstunnel import WstunnelError, run_relay_install
+
+    try:
+        raise typer.Exit(run_relay_install(
+            exit_public_key=exit_public_key, domain=domain, apply=apply,
+        ))
+    except WstunnelError as exc:
+        console.print(f"[error][wstunnel] {exc}[/error]")
+        raise typer.Exit(1)
+
+
 @relay_wstunnel_app.command("status")
 def relay_wstunnel_status(
     json_output: bool = typer.Option(False, "--json", help="Machine-readable вывод"),

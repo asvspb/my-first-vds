@@ -295,6 +295,24 @@ vds gateway probe-watch ru-cidr install --apply    # RU-CIDR без релея: 
    должен быть `inconclusive` при живом канале (`idle` допустим, если на `awg1`
    не выставлен `PersistentKeepalive` — см. DEPLOY-RU-RELAY §4).
 
+### Носитель №2 p2p: wstunnel/WG (ADR-016)
+
+Ставится тремя шагами; приватные ключи не покидают свой узел, в stdout только
+публичные:
+
+1. релей: `sudo vds relay wstunnel init --apply` — ключи `wg-ws0` (0600) +
+   prefix-файл (0600), печатает публичный ключ релея;
+2. `scp` prefix-файла на exit; exit:
+   `sudo vds relay wstunnel server --relay-ip <ip> --relay-public-key <key>
+   --domain ws.<domain> --prefix-file <env> --apply` — `wg-ws0` + wss 9443 +
+   nft/UFW; требует выпущенный LE; печатает публичный ключ exit;
+3. релей: `sudo vds relay wstunnel client --exit-public-key <key>
+   --domain ws.<domain> --apply` — conf `wg-ws0`, клиент, NAT-ветка.
+
+`table 100` **не меняется**: переключение носителя делает селектор на первом
+rollback P25 (WP-P2P-3). Проверка до селектора: `awg show wg-ws0` с обеих
+сторон (handshake), `ping -I wg-ws0 10.12.0.1` с релея.
+
 **Heartbeat (dead-man switch):** раз в `ALERT_HEARTBEAT_H`=24 ч уходит «Сторож
 жив» с числом пропущенных часов и предупреждениями каналов — тишина дольше
 суток сама по себе означает, что сторож или канал не работают.

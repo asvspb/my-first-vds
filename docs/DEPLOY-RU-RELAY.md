@@ -497,7 +497,21 @@ awg1: в wg-ws0 уходят пакеты клиентов, а не 10.12.0.0/30
 («allow (routed)») — ровно поэтому работает и `awg2` без правил. Отдельная nft
 `chain forward` была бы no-op и не обошла бы чужой DROP.
 
-**Юниты** (интерфейс, `Wants/After`) — следующая часть WP-P2P-2;
+**Порядок установки (3 шага, ключи не пересекают узлы):**
+
+1. релей: `sudo vds relay wstunnel init --apply` — создаёт ключи `wg-ws0` и
+   prefix-файл, печатает **публичный** ключ релея;
+2. `scp` prefix-файла на exit; exit:
+   `sudo vds relay wstunnel server --relay-ip <ip> --relay-public-key <key>
+   --domain ws.<domain> --prefix-file /tmp/wstunnel-client.env --apply` —
+   поднимает `wg-ws0`, wss на 9443, nft/UFW, печатает публичный ключ exit;
+3. релей: `sudo vds relay wstunnel client --exit-public-key <key>
+   --domain ws.<domain> --apply` — conf `wg-ws0`, клиент, NAT-ветка, порядок
+   `Wants/After=vds-wstunnel-client.service`. **`table 100` не меняется** —
+   переключение сделает селектор (WP-P2P-3) на первом rollback P25.
+
+Юниты: `vds-wstunnel-nft` (exit, oneshot nft+UFW), `vds-awg-wg-ws0` (plain AWG),
+`vds-wstunnel-server`/`-client` (Restart=always, env 0600).
 живая приёмка — WP-P2P-6; DNS `ws.<domain>` → IP exit делает владелец (OQ-2).
 
 ## Откат (демонтаж)

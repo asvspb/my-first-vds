@@ -102,6 +102,28 @@
   блок «Протоколы, которые можно активировать», CDN помечен холодным резервом
   (Q6). Только коммит: pipx/демон не трогались, дерево ubuntuInstaller чистое.
 
+## 2026-11-20: WP-P2P-2 ч. 2 — keygen, юниты, CLI, state (готово к ревью)
+
+- **CLI (3 шага, ключи не пересекают узлы):** `wstunnel init` (релей: ключи
+  `wg-ws0` в `/etc/amnezia/wg-ws0.priv` 0600 + prefix в env 0600; печатает
+  только публичный) → `wstunnel server` (exit: conf, nft+UFW oneshot, юниты,
+  LE обязателен; печатает публичный ключ exit) → `wstunnel client` (релей: conf
+  `Table=off`/MTU 1240/Endpoint 127.0.0.1, юнит c `Wants/After=wstunnel-client`,
+  перерендер `vds-relay-nat` с `p2p_iface=wg-ws0`, перерендер nft-политики).
+- **state:** `protocols["p2p_wstunnel"]` = `{iface:"wg-ws0", public_key: <ключ
+  ПИРА>, peer_ip:"10.12.0.2", domain, ws_port, wg_port, exit_public_key,
+  installed}` — ровно контракт `_relay_peer_identity` (P0-1). Приватные ключи в
+  state НЕ хранятся; в stdout — только публичные.
+- **Юниты:** `vds-wstunnel-nft` (oneshot `nft -c -f` → `nft -f` + UFW «9443
+  только с IP релея»), `vds-awg-wg-ws0` (plain AWG; на релее `Wants/After`
+  клиента), `vds-wstunnel-server`/`-client` из WP-P2P-1.
+- **table 100 не трогается** — переключение оставлено селектору (WP-P2P-3).
+- **P2 ревью:** `run_install` печатает `expected_sha256()`; для `wg-ws0` без
+  записи в state `_relay_peer_identity` возвращает «неизвестно», не проваливаясь
+  в `clients[]` (тест).
+- **Тесты:** +9 (prefix-парсинг, nft-скрипт apply/remove, keygen, чтение ключа,
+  dry-run init без файлов, отказы server-команды), всего **1453**.
+
 ## 2026-11-20: фикс-пакет по ревью трёх WP (P0×2, P1×2, P2×2)
 
 - **P0-1 (alert, ложный `relay_blocked` на резерве):** `_relay_peer_identity`

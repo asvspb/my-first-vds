@@ -61,6 +61,11 @@ EXIT_NFT_TABLE = "vds_relay_wstun"
 EXIT_NFT_FILE = Path("/etc/vds/wstunnel-exit.nft")
 WG_WS_CONF = Path("/etc/amnezia/wg-ws0.conf")
 WG_WS_UNIT = "vds-awg-wg-ws0.service"
+WG_WS_RAW_PRIV = Path("/etc/amnezia/wg-ws0.priv")  # релей: ключ до появления peer
+WS_NFT_UNIT = "vds-wstunnel-nft.service"
+WS_NFT_SCRIPT = Path("/etc/vds/wstunnel-exit-apply.sh")
+WS_LOCK_FILE = Path("/var/run/vds-wstunnel.lock")
+CERT_ROOT = Path("/etc/letsencrypt/live")
 
 # --- сетевые константы носителя №2 ----------------------------------------
 WS_PORT_DEFAULT = 9443          # TCP/TLS, свободен на обоих узлах (SPEC §1)
@@ -390,6 +395,396 @@ def render_exit_nft(
     )
 
 
+def gen_keypair(run: Optional[Callable[..., ShellResult]] = None) -> tuple[str, str]:
+    """Сгенерировать (private, public) ключи AWG. Секрет — только в 0600-файл."""
+    runner = run or run_list  # late binding: тесты подменяют модульный run_list
+    res = runner(["awg", "genkey"], timeout=10)
+    private_key = (res.stdout or "").strip()
+    if not res.ok or not private_key:
+        raise WstunnelError(f"awg genkey: {res.stderr.strip() or 'пустой ключ'}")
+    from src.relay.exit_leg import _pubkey_from_private  # ленивая зависимость
+
+    return private_key, _pubkey_from_private(private_key)
+
+
+def parse_prefix_env(text: str) -> str:
+    """Достать path-prefix из env-файла (любое из двух WSTUNNEL_*-имён)."""
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key.strip() in (
+            "WSTUNNEL_HTTP_UPGRADE_PATH_PREFIX",
+            "WSTUNNEL_RESTRICT_HTTP_UPGRADE_PATH_PREFIX",
+        ) and value.strip():
+            return value.strip()
+    raise WstunnelError("в файле нет WSTUNNEL_*_PATH_PREFIX — это не prefix-файл")
+
+
+def read_private_key(path: Path = WG_WS_RAW_PRIV) -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise WstunnelError(f"нет файла ключа {path}: сначала `vds relay wstunnel init`") from exc
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("PrivateKey"):
+            return line.partition("=")[2].strip()
+    key = text.strip()
+    if not key:
+        raise WstunnelError(f"{path} пуст")
+    return key
+
+
+def render_nft_script(
+    relay_ip: str,
+    *,
+    ws_port: int = WS_PORT_DEFAULT,
+    remove: bool = False,
+    nft_file: Path = EXIT_NFT_FILE,
+    table: str = EXIT_NFT_TABLE,
+) -> str:
+    """Идемпотентный apply-скрипт exit-стороны (0755, без секретов).
+
+    `nft -c -f` (проверка) → `nft -f` (применение) → UFW «9443/tcp только с IP
+    релея». `remove=True` — снятие таблицы и правила (для sweep/отката).
+    """
+    from src.relay.exit_leg import validate_relay_ip
+
+    ip = validate_relay_ip(relay_ip)
+    if remove:
+        return (
+            "#!/bin/sh\n"
+            "# VDS p2p carrier 2: снятие (ADR-016). Генерируется `vds relay wstunnel`.\n"
+            "set +e\n"
+            f"nft delete table inet {table} 2>/dev/null\n"
+            f"ufw delete allow from {ip} to any port {int(ws_port)} proto tcp 2>/dev/null\n"
+            "exit 0\n"
+        )
+    return (
+        "#!/bin/sh\n"
+        "# VDS p2p carrier 2 (ADR-016): nft + UFW. Генерируется `vds relay wstunnel`.\n"
+        "set -e\n"
+        f"nft -c -f {nft_file}\n"
+        f"nft -f {nft_file}\n"
+        "# UFW: WSS-порт только с IP релея (defense-in-depth к nft input-drop).\n"
+        f"if ufw status 2>/dev/null | grep -q \"Status: active\"; then\n"
+        f"  ufw allow from {ip} to any port {int(ws_port)} proto tcp >/dev/null || true\n"
+        "fi\n"
+    )
+
+
+def _plan(lines: list[str]) -> None:
+    for line in lines:
+        console.print(f"  - {line}")
+
+
+def run_init(dry_run: bool = True, apply: bool = False) -> int:
+    """Релей, шаг 1: ключи `wg-ws0` + path-prefix. Печатает ПУБЛИЧНЫЙ ключ.
+
+    Приватный ключ остаётся в `/etc/amnezia/wg-ws0.priv` (0600), prefix — в
+    `/etc/vds/wstunnel-client.env` (0600); в stdout секретов нет.
+    """
+    exists = WG_WS_RAW_PRIV.is_file()
+    console.print("[info][wstunnel] init (релей): ключи wg-ws0 + prefix[/info]")
+    _plan([
+        f"ключи: {'переиспользуются' if exists else 'будут созданы'} ({WG_WS_RAW_PRIV}, 0600)",
+        f"prefix: {WS_CLIENT_ENV} (0600; файл передаётся на exit)",
+    ])
+    if dry_run and not apply:
+        console.print("[info][wstunnel] dry-run: без --apply ничего не меняем[/info]")
+        return 0
+    if os.geteuid() != 0:
+        console.print("[error][wstunnel] --apply требует root (sudo).[/error]")
+        return 1
+
+    if exists:
+        private_key = read_private_key()
+        from src.relay.exit_leg import _pubkey_from_private
+
+        public_key = _pubkey_from_private(private_key)
+    else:
+        private_key, public_key = gen_keypair()
+        WG_WS_RAW_PRIV.parent.mkdir(parents=True, exist_ok=True)
+        write_secret_atomic(WG_WS_RAW_PRIV, private_key + "\n")
+
+    if not WS_CLIENT_ENV.is_file():
+        write_env(WS_CLIENT_ENV, render_client_env(gen_path_prefix()))
+    console.print(f"[success][wstunnel] публичный ключ релея: {public_key}[/success]")
+    console.print(
+        f"[info][wstunnel] передайте на exit: ключ выше и файл {WS_CLIENT_ENV} "
+        "(0600) — затем `vds relay wstunnel server --relay-public-key … "
+        "--prefix-file … --domain ws.<domain> --relay-ip <ip> --apply`[/info]"
+    )
+    return 0
+
+
+def _exit_conf_private() -> str:
+    """Приватный ключ exit из существующего conf (ключи не перегенерируются)."""
+    if not WG_WS_CONF.is_file():
+        return ""
+    for line in WG_WS_CONF.read_text(encoding="utf-8").splitlines():
+        if line.strip().startswith("PrivateKey"):
+            return line.partition("=")[2].strip()
+    return ""
+
+
+def run_exit_install(
+    *,
+    relay_ip: str,
+    relay_public_key: str,
+    domain: str,
+    prefix_file: Optional[Path] = None,
+    apply: bool = False,
+    state_path: Optional[str] = None,
+) -> int:
+    """Exit-сторона носителя №2: conf + nft/UFW + юниты + state.
+
+    Домен и LE обязательны (ADR-016 I-1: настоящий сертификат — для SNI на
+    магистрали). Печатает публичный ключ exit для `wstunnel client` на релее.
+    """
+    from src.relay import exit_leg
+    from src.gateway.store import load_state, save_state
+
+    try:
+        ip = exit_leg.validate_relay_ip(relay_ip)
+        peer_key = exit_leg.validate_public_key(relay_public_key)
+        host = _validate_hostname(domain)
+        if prefix_file is None:
+            raise WstunnelError("нужен --prefix-file (env-файл с релея, 0600)")
+        prefix = parse_prefix_env(Path(prefix_file).read_text(encoding="utf-8"))
+    except (WstunnelError, OSError, ValueError) as exc:
+        console.print(f"[error][wstunnel] {exc}[/error]")
+        return 1
+
+    cert = CERT_ROOT / host / "fullchain.pem"
+    key = CERT_ROOT / host / "privkey.pem"
+
+    state = load_state(state_path)
+    violation = exit_leg.exit_node_violation(state)
+    if violation:
+        console.print(f"[error][wstunnel] {violation}[/error]")
+        return 1
+
+    console.print("[info][wstunnel] plan (exit, носитель №2):[/info]")
+    _plan([
+        f"wg-ws0: {WG_WS_EXIT_ADDR} ({WG_WS_CONF}, 0600), пир релея {peer_key}",
+        f"wstunnel server: wss 0.0.0.0:{WS_PORT_DEFAULT}, restrict-to 127.0.0.1:{WG_WS_PORT_DEFAULT}",
+        f"TLS: {cert} + {key} (LE обязателен)",
+        f"nft: {EXIT_NFT_FILE} (таблица {EXIT_NFT_TABLE}); UFW: {WS_PORT_DEFAULT}/tcp с {ip}",
+        "юниты: vds-wstunnel-nft, vds-awg-wg-ws0, vds-wstunnel-server",
+    ])
+    if not apply:
+        console.print("[info][wstunnel] dry-run: без --apply ничего не меняем[/info]")
+        return 0
+    if os.geteuid() != 0:
+        console.print("[error][wstunnel] --apply требует root (sudo).[/error]")
+        return 1
+    if not (cert.is_file() and key.is_file()):
+        console.print(
+            f"[error][wstunnel] нет LE-сертификата {cert}. Сначала "
+            f"`certbot certonly --standalone -d {host}` (порт 80).[/error]"
+        )
+        return 1
+
+    from src.core.lock import FileLock
+    from src.core.secrets import write_secret_atomic as _write_secret
+    from src.core.units import install_unit
+
+    try:
+        with FileLock(WS_LOCK_FILE):
+            exit_leg.ensure_ip_forward()
+            wan = exit_leg.detect_wan_iface()
+
+            private_key = _exit_conf_private()
+            if private_key:
+                from src.relay.exit_leg import _pubkey_from_private
+
+                exit_public_key = _pubkey_from_private(private_key)
+            else:
+                private_key, exit_public_key = gen_keypair()
+                WG_WS_CONF.parent.mkdir(parents=True, exist_ok=True)
+                _write_secret(
+                    WG_WS_CONF,
+                    render_exit_conf(private_key=private_key, peer_public_key=peer_key),
+                )
+
+            write_env(WS_SERVER_ENV, render_server_env(prefix))
+            EXIT_NFT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            EXIT_NFT_FILE.write_text(
+                render_exit_nft(relay_ip=ip, wan_iface=wan), encoding="utf-8"
+            )
+            os.chmod(EXIT_NFT_FILE, 0o644)
+            WS_NFT_SCRIPT.write_text(render_nft_script(ip), encoding="utf-8")
+            os.chmod(WS_NFT_SCRIPT, 0o755)
+
+            if not install_unit("vds-wstunnel-nft.service.tpl", WS_NFT_UNIT,
+                                ctx={"script": str(WS_NFT_SCRIPT)}):
+                raise WstunnelError(f"юнит {WS_NFT_UNIT} не установлен")
+            if not install_unit("vds-awg-wg-ws0.service.tpl", WG_WS_UNIT,
+                                ctx={"config_path": str(WG_WS_CONF),
+                                     "after_units": "", "wants_units": ""}):
+                raise WstunnelError(f"юнит {WG_WS_UNIT} не установлен")
+            if not install_unit(WS_SERVER_UNIT + ".tpl", WS_SERVER_UNIT,
+                                ctx={"ws_port": WS_PORT_DEFAULT,
+                                     "wg_port": WG_WS_PORT_DEFAULT,
+                                     "cert": str(cert), "key": str(key)}):
+                raise WstunnelError(f"юнит {WS_SERVER_UNIT} не установлен")
+
+            state = load_state(state_path)
+            state.protocols["p2p_wstunnel"] = {
+                "iface": WG_WS_IFACE,
+                "public_key": peer_key,     # ключ ПИРА (релея), не наш приватный
+                "peer_ip": WG_WS_RELAY_PEER.split("/")[0],
+                "domain": host,
+                "ws_port": WS_PORT_DEFAULT,
+                "wg_port": WG_WS_PORT_DEFAULT,
+                "exit_public_key": exit_public_key,
+                "installed": True,
+            }
+            if not save_state(state, state_path):
+                raise WstunnelError("не удалось сохранить protocols['p2p_wstunnel']")
+    except (WstunnelError, OSError) as exc:
+        console.print(f"[error][wstunnel] {exc}[/error]")
+        return 1
+
+    console.print("[success][wstunnel] exit-сторона поднята (wg-ws0 + wss).[/success]")
+    console.print(f"[info][wstunnel] публичный ключ exit: {exit_public_key}[/info]")
+    console.print(
+        "[info][wstunnel] передайте его на релей и выполните `vds relay wstunnel "
+        "client --exit-public-key … --domain … --apply`[/info]"
+    )
+    return 0
+
+
+def run_relay_install(
+    *,
+    exit_public_key: str,
+    domain: str,
+    apply: bool = False,
+    state_path: Optional[str] = None,
+) -> int:
+    """Релей, шаг 2: conf `wg-ws0`, клиент wstunnel, NAT-ветка, порядок юнитов.
+
+    `table 100` НЕ переключается — это делает селектор (WP-P2P-3) на первом
+    rollback P25. Здесь только поднимаем носитель.
+    """
+    from src.relay import exit_leg, paths as relay_paths
+    from src.gateway.store import load_state, save_state
+
+    try:
+        peer_key = exit_leg.validate_public_key(exit_public_key)
+        host = _validate_hostname(domain)
+        private_key = read_private_key()
+    except (WstunnelError, ValueError) as exc:
+        console.print(f"[error][wstunnel] {exc}[/error]")
+        return 1
+
+    if not Path(relay_paths.RELAY_EXIT_CONFIG_PATH).is_file():
+        console.print(
+            "[error][wstunnel] это не релей (нет "
+            f"{relay_paths.RELAY_EXIT_CONFIG_PATH}) — client-сторона ставится только "
+            "на RU-релее (граница доверия ADR-007/ADR-016).[/error]"
+        )
+        return 1
+
+    console.print("[info][wstunnel] plan (релей, носитель №2):[/info]")
+    _plan([
+        f"wg-ws0: {WG_WS_RELAY_ADDR}, Table=off, MTU {WG_WS_MTU}, "
+        f"Endpoint 127.0.0.1:{WG_WS_LOCAL_UDP_DEFAULT}",
+        f"wstunnel client: wss://{host}:{WS_PORT_DEFAULT} (target 127.0.0.1:{WG_WS_PORT_DEFAULT})",
+        "NAT: MASQUERADE -s <client_subnet> -o wg-ws0 (vds-relay-nat перерендер)",
+        "nft: iifname wg-ws0 return + chain forward MSS (vds-relay-policy)",
+        "table 100 не трогаем — переключение сделает селектор (WP-P2P-3)",
+    ])
+    if not apply:
+        console.print("[info][wstunnel] dry-run: без --apply ничего не меняем[/info]")
+        return 0
+    if os.geteuid() != 0:
+        console.print("[error][wstunnel] --apply требует root (sudo).[/error]")
+        return 1
+
+    from src.core.lock import FileLock
+    from src.core.secrets import write_secret_atomic as _write_secret
+    from src.core.shell import run_list as _run
+    from src.core.units import install_unit
+
+    try:
+        with FileLock(WS_LOCK_FILE):
+            WG_WS_CONF.parent.mkdir(parents=True, exist_ok=True)
+            _write_secret(
+                WG_WS_CONF,
+                render_relay_conf(private_key=private_key, server_public_key=peer_key),
+            )
+            if not WS_CLIENT_ENV.is_file():
+                raise WstunnelError(f"нет {WS_CLIENT_ENV}: сначала `vds relay wstunnel init`")
+
+            if not install_unit("vds-wstunnel-client.service.tpl", WS_CLIENT_UNIT,
+                                ctx={"domain": host, "ws_port": WS_PORT_DEFAULT,
+                                     "local_udp": WG_WS_LOCAL_UDP_DEFAULT,
+                                     "wg_port": WG_WS_PORT_DEFAULT}):
+                raise WstunnelError(f"юнит {WS_CLIENT_UNIT} не установлен")
+            if not install_unit("vds-awg-wg-ws0.service.tpl", WG_WS_UNIT,
+                                ctx={"config_path": str(WG_WS_CONF),
+                                     "after_units": f" {WS_CLIENT_UNIT}",
+                                     "wants_units": f" {WS_CLIENT_UNIT}"}):
+                raise WstunnelError(f"юнит {WG_WS_UNIT} не установлен")
+
+            wan = exit_leg.detect_wan_iface()
+            if not install_unit(
+                "vds-relay-nat.service.tpl", relay_paths.RELAY_NAT_UNIT,
+                ctx={"client_subnet": relay_paths.RELAY_SUBNET,
+                     "exit_iface": relay_paths.RELAY_EXIT_IFACE,
+                     "wan_if": wan, "p2p_iface": WG_WS_IFACE},
+            ):
+                raise WstunnelError("не удалось перерендерить vds-relay-nat.service")
+
+            # nft-политика релея: перерендер из локального агрегата RU-CIDR
+            from src.relay.config import render_nft_policy
+
+            cidrs = []
+            if relay_paths.RELAY_CIDR_LIST.is_file():
+                cidrs = [ln.strip() for ln in
+                         relay_paths.RELAY_CIDR_LIST.read_text(encoding="utf-8").splitlines()
+                         if ln.strip()]
+            relay_paths.RELAY_DIR.mkdir(parents=True, exist_ok=True)
+            relay_paths.RELAY_NFT_POLICY_FILE.write_text(render_nft_policy(cidrs),
+                                                        encoding="utf-8")
+            os.chmod(relay_paths.RELAY_NFT_POLICY_FILE, 0o644)
+
+            for unit in (relay_paths.RELAY_NAT_UNIT, relay_paths.RELAY_POLICY_UNIT):
+                res = _run(["systemctl", "restart", unit], timeout=30)
+                if not res.ok:
+                    raise WstunnelError(
+                        f"{unit}: {res.stderr.strip() or res.stdout.strip()}"
+                    )
+
+            state = load_state(state_path)
+            meta = dict(state.protocols.get("p2p_wstunnel") or {})
+            meta.update({
+                "iface": WG_WS_IFACE,
+                "public_key": peer_key,        # ключ ПИРА (exit)
+                "peer_ip": WG_WS_EXIT_ADDR.split("/")[0],
+                "domain": host,
+                "ws_port": WS_PORT_DEFAULT,
+                "wg_port": WG_WS_PORT_DEFAULT,
+                "relay_installed": True,
+            })
+            state.protocols["p2p_wstunnel"] = meta
+            if not save_state(state, state_path):
+                raise WstunnelError("не удалось сохранить protocols['p2p_wstunnel']")
+    except (WstunnelError, OSError) as exc:
+        console.print(f"[error][wstunnel] {exc}[/error]")
+        return 1
+
+    console.print(
+        "[success][wstunnel] носитель №2 поднят на релее (wg-ws0); table 100 "
+        "не менялся — до первого rollback P25 трафик идёт через awg1.[/success]"
+    )
+    return 0
+
+
 def write_env(path: Path, text: str) -> None:
     """Атомарная запись env-файла 0600 (секрет не попадает в лог)."""
     write_secret_atomic(path, text)
@@ -409,7 +804,7 @@ def run_install(
     """
     checks = [
         f"архив: {archive}",
-        f"ожидаемый sha256: {WSTUNNEL_SHA256}",
+        f"ожидаемый sha256: {expected_sha256()}",
         f"куда: {WSTUNNEL_BIN}",
     ]
     for line in checks:
@@ -486,4 +881,14 @@ __all__ = [
     "write_env",
     "run_install",
     "run_status",
+    "gen_keypair",
+    "parse_prefix_env",
+    "read_private_key",
+    "render_nft_script",
+    "run_init",
+    "run_exit_install",
+    "run_relay_install",
+    "WG_WS_RAW_PRIV",
+    "WS_NFT_UNIT",
+    "WS_NFT_SCRIPT",
 ]

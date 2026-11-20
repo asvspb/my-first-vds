@@ -60,6 +60,8 @@ systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2
                          #   sandbox: RestrictAddressFamilies включает AF_NETLINK — netlink для `awg show`)
                          # vds-wstunnel-{server,client}.service.tpl (ADR-016, носитель №2:
                          #   WSS/TLS 9443 + WG; Restart=always, env-файлы секретов 0600)
+                         # vds-wstunnel-nft.service.tpl (exit: nft -c/-f + UFW) и
+                         # vds-awg-wg-ws0.service.tpl (plain AWG, обе стороны)
                          # vds-relay-maneuver .service+.timer.tpl (opt-in тик манёвра ноги,
                          #   ADR-015/P25 WP-M4; sandbox: ReadWritePaths +/etc/amnezia,
                          #   CAP_NET_ADMIN CAP_NET_RAW, AF_NETLINK; [Install] только у .timer)
@@ -89,6 +91,9 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 | `vds relay maneuver remove [--apply]` | Снять `.timer`+`.service` (stop+disable+rm, идемпотентно); `/var/lib/vds/relay-maneuver.json` сохраняется как история |
 | `vds relay wstunnel install --archive <tar.gz> [--apply]` | Носитель №2 p2p (ADR-016, WP-P2P-1): установка бинарника из **локального** архива релиза; sha256 проверяется **до** распаковки (пиннинг `WSTUNNEL_VERSION`/`WSTUNNEL_SHA256` = v11.1.0), атомарно 0755 в `/usr/local/bin`; dry-run по умолчанию; сеть модуль не трогает |
 | `vds relay wstunnel status [--json]` | Пиннинг, установленная версия, наличие env-файлов секретов (0600) |
+| `vds relay wstunnel init [--apply]` | Релей, шаг 1: ключи `wg-ws0` (`/etc/amnezia/wg-ws0.priv` 0600) + path-prefix (`/etc/vds/wstunnel-client.env` 0600); печатает только публичный ключ |
+| `vds relay wstunnel server --relay-ip … --relay-public-key … --domain ws.<domain> --prefix-file … [--apply]` | Exit: `wg-ws0` 10.12.0.1/30 + wstunnel server wss:9443 (`--restrict-to`), nft `vds_relay_wstun` + UFW, юниты; требует LE; пишет `protocols["p2p_wstunnel"]`; печатает публичный ключ exit |
+| `vds relay wstunnel client --exit-public-key … --domain … [--apply]` | Релей, шаг 2: conf `wg-ws0` (`Table=off`, MTU 1240, Endpoint 127.0.0.1), юнит клиента, NAT-ветка, перерендер policy; **table 100 не трогает** (селектор) |
 | Носитель №2: `wg-ws0` | Plain AWG (`obf={}` — без `Jc/S1/H*`), `Table = off`, `MTU 1240`, `Endpoint = 127.0.0.1:<local>`; клиент форвардит на **`127.0.0.1:<wg>`** (строка = `--restrict-to`); MASQUERADE на релее — `-s <client_subnet> -o wg-ws0` (ветка `p2p_iface`, iptables, не nft); на exit forward-цепочки нет — `DEFAULT_FORWARD_POLICY=ACCEPT`; `chain forward` MSS-clamp + `iifname "wg-ws0" return` — в nft `vds_relay`; ключ пира для alert — `protocols["p2p_wstunnel"]` |
 | `sudo vds alert install --apply` | Сторож угрозы на exit-узле (SPEC-20261117): юниты `vds-alert-watch.service`/`.timer` из `vds-alert-watch.service.tpl`/`vds-alert-watch.timer.tpl`, `/etc/vds/alert.env` 0600; dry-run без `--apply`; флаги `--channel tg,smtp`, `--interval 2m`, `--handshake-threshold 300s`, `--heartbeat 24h`, `--force`; на релее нужен `--allow-relay-node` (не делать); каденция: повтор уровня 30 мин, `threat_high_still` — `ALERT_HIGH_REMINDER_H` (6 ч, 1..24; ключ печатается в плане install), подавленные `*_still` не кормят summary; `ALERT_RELAY_IFACE` принимает список (`awg2,wg-ws0`) — пульс ok, если жив любой |
 | `sudo vds alert test [--channel tg\|smtp]` | Тестовая отправка без записи state (проверить почту/бота) |

@@ -286,10 +286,14 @@ def _relay_peer_identity(
         )
 
     wstun_iface = str(wstun.get("iface") or P2P_WSTUN_IFACE)
-    if iface in (P2P_WSTUN_IFACE, wstun_iface) and wstun:
+    if iface in (P2P_WSTUN_IFACE, wstun_iface):
         public_key, peer_ip = _identity(wstun)
         if public_key:
             return public_key, peer_ip
+        if not wstun:
+            # До установки носителя №2 записи нет: для wg-ws0 честнее вернуть
+            # «неизвестно», чем провалиться в clients[] (чужой ключ awg0).
+            return "", ""
 
     leg_iface = str(leg.get("iface") or "")
     use_leg = bool(leg) and (

@@ -411,6 +411,26 @@ def _multi_cfg(**over) -> AlertConfig:
     return AlertConfig(**base)
 
 
+def _write_state_with_wstun(tmp_path):
+    """state с relay_leg (awg2) И p2p_wstunnel (wg-ws0, своя пара ключей)."""
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "clients": [],
+                "protocols": {
+                    "relay_leg": {"iface": "awg2", "public_key": PEER_PUB, "peer_ip": "10.11.0.2"},
+                    "p2p_wstunnel": {"iface": "wg-ws0", "public_key": WG_PUB, "peer_ip": WG_IP},
+                },
+                "ufw_lockdown": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
 def _multi_run(awg2_dump=None, wg_dump=None, awg2_fail=False, wg_fail=False):
     mapping = {}
     if awg2_fail:
@@ -433,11 +453,11 @@ def test_relay_ifaces_parsing():
 
 def test_multi_iface_ok_if_second_alive(tmp_path):
     """awg2 мёртв (старый handshake), wg-ws0 жив → пульс ok (AC-S9)."""
-    state_path = _write_state(tmp_path)
+    state_path = _write_state_with_wstun(tmp_path)
     dead = int(NOW.timestamp()) - 3600
     run = _multi_run(
-        awg2_dump=_dump(dead, rx=500),
-        wg_dump=_dump(int(NOW.timestamp()) - 30, rx=700),
+        awg2_dump=_dump_pub(PEER_PUB, "10.11.0.2", dead, rx=500),
+        wg_dump=_dump_pub(WG_PUB, WG_IP, int(NOW.timestamp()) - 30, rx=700),
     )
     signal = read_relay_signal(
         cfg=_multi_cfg(), prev_state={}, now=NOW, run=run, state_path=state_path,
@@ -447,10 +467,11 @@ def test_multi_iface_ok_if_second_alive(tmp_path):
 
 
 def test_multi_iface_blocked_when_all_dead(tmp_path):
-    state_path = _write_state(tmp_path)
+    state_path = _write_state_with_wstun(tmp_path)
     dead = int(NOW.timestamp()) - 3600
     run = _multi_run(
-        awg2_dump=_dump(dead), wg_dump=_dump(dead),
+        awg2_dump=_dump_pub(PEER_PUB, "10.11.0.2", dead),
+        wg_dump=_dump_pub(WG_PUB, WG_IP, dead),
     )
     # трафик идёт (rx вырос), handshake мёртв, TCP endpoint отвечает → blocked;
     # «idle» без активности — отдельная ветка и здесь не проверяется
@@ -463,10 +484,10 @@ def test_multi_iface_blocked_when_all_dead(tmp_path):
 
 
 def test_multi_iface_one_unavailable_other_ok(tmp_path):
-    state_path = _write_state(tmp_path)
+    state_path = _write_state_with_wstun(tmp_path)
     run = _multi_run(
         awg2_fail=True,
-        wg_dump=_dump(int(NOW.timestamp()) - 30),
+        wg_dump=_dump_pub(WG_PUB, WG_IP, int(NOW.timestamp()) - 30),
     )
     signal = read_relay_signal(
         cfg=_multi_cfg(), prev_state={}, now=NOW, run=run, state_path=state_path,
@@ -475,7 +496,7 @@ def test_multi_iface_one_unavailable_other_ok(tmp_path):
 
 
 def test_multi_iface_all_unavailable_inconclusive(tmp_path):
-    state_path = _write_state(tmp_path)
+    state_path = _write_state_with_wstun(tmp_path)
     run = _multi_run(awg2_fail=True, wg_fail=True)
     signal = read_relay_signal(
         cfg=_multi_cfg(), prev_state={}, now=NOW, run=run, state_path=state_path,
@@ -485,11 +506,11 @@ def test_multi_iface_all_unavailable_inconclusive(tmp_path):
 
 
 def test_multi_iface_traffic_active_from_any(tmp_path):
-    state_path = _write_state(tmp_path)
+    state_path = _write_state_with_wstun(tmp_path)
     dead = int(NOW.timestamp()) - 3600
     run = _multi_run(
-        awg2_dump=_dump(dead, rx=500),
-        wg_dump=_dump(int(NOW.timestamp()) - 30, rx=9999),
+        awg2_dump=_dump_pub(PEER_PUB, "10.11.0.2", dead, rx=500),
+        wg_dump=_dump_pub(WG_PUB, WG_IP, int(NOW.timestamp()) - 30, rx=9999),
     )
     prev = {"sources": {"relay_pulse": {"last_rx": 9000}}}
     signal = read_relay_signal(
@@ -561,3 +582,16 @@ def test_wg_ws0_foreign_key_and_ip_not_used(tmp_path):
     )
     assert sig_wg.peer_found is False
     assert sig_wg.detail == "peer_not_in_dump"
+
+
+def test_wg_ws0_without_state_entry_is_unknown(tmp_path):
+    """P2 ревью: нет protocols["p2p_wstunnel"] → peer_not_found, без фолбэка в clients[]."""
+    from src.alert.checks import _probe_one_iface
+
+    state_path = _write_state(tmp_path)  # только clients[] (awg0-пир)
+    sig = _probe_one_iface(
+        cfg=_multi_cfg(), prev_state={}, now=NOW,
+        run=FakeRunner({}), state_path=state_path, iface="wg-ws0",
+    )
+    assert sig.detail == "peer_not_found"
+    assert sig.peer_found is False

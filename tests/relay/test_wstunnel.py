@@ -290,3 +290,78 @@ def test_client_argv_rejects_non_hostname(bad):
 
 def test_client_argv_accepts_fqdn():
     assert ws.client_argv(domain="ws.example.net")[-1] == "wss://ws.example.net:9443"
+
+
+# --- WP-P2P-2 ч. 2: init/server/client (dry-run и чистые части) -----------
+
+def test_parse_prefix_env_both_names():
+    assert ws.parse_prefix_env("WSTUNNEL_HTTP_UPGRADE_PATH_PREFIX=abc\n") == "abc"
+    assert ws.parse_prefix_env("# c\nWSTUNNEL_RESTRICT_HTTP_UPGRADE_PATH_PREFIX=xyz\n") == "xyz"
+    with pytest.raises(ws.WstunnelError):
+        ws.parse_prefix_env("TG_BOT_TOKEN=secret\n")
+
+
+def test_render_nft_script_applies_and_restricts():
+    text = ws.render_nft_script("203.0.113.10")
+    assert "nft -c -f" in text and "nft -f" in text
+    assert "ufw allow from 203.0.113.10 to any port 9443 proto tcp" in text
+    assert "set -e" in text
+
+
+def test_render_nft_script_remove_branch():
+    text = ws.render_nft_script("203.0.113.10", remove=True)
+    assert "nft delete table inet vds_relay_wstun" in text
+    assert "ufw delete allow from 203.0.113.10" in text
+
+
+def test_gen_keypair_reads_awg(monkeypatch):
+    calls = []
+
+    def fake_run(argv, timeout=None, check=False):
+        calls.append(list(argv))
+        return ShellResult(stdout="FIXTURE_PW_WG_PRIV=\n", stderr="", returncode=0)
+
+    monkeypatch.setattr(ws, "run_list", fake_run)
+    monkeypatch.setattr(
+        "src.relay.exit_leg._pubkey_from_private", lambda k: "FIXTURE_PUB_FROM_PRIV"
+    )
+    priv, pub = ws.gen_keypair()
+    assert priv == "FIXTURE_PW_WG_PRIV=" and pub == "FIXTURE_PUB_FROM_PRIV"
+    assert calls and calls[0][:2] == ["awg", "genkey"]
+
+
+def test_read_private_key_from_conf_and_raw(tmp_path):
+    conf = tmp_path / "conf"
+    conf.write_text("[Interface]\nPrivateKey = FIXTURE_PW_K=\n", encoding="utf-8")
+    assert ws.read_private_key(conf) == "FIXTURE_PW_K="
+    raw = tmp_path / "raw"
+    raw.write_text("FIXTURE_PW_RAW=\n", encoding="utf-8")
+    assert ws.read_private_key(raw) == "FIXTURE_PW_RAW="
+    with pytest.raises(ws.WstunnelError):
+        ws.read_private_key(tmp_path / "missing")
+
+
+def test_run_init_dry_run_prints_public_only(monkeypatch, tmp_path):
+    """Dry-run не создаёт файлов и не печатает приватный ключ."""
+    monkeypatch.setattr(ws, "WG_WS_RAW_PRIV", tmp_path / "priv")
+    monkeypatch.setattr(ws, "WS_CLIENT_ENV", tmp_path / "client.env")
+    assert ws.run_init(dry_run=True, apply=False) == 0
+    assert not (tmp_path / "priv").exists()
+
+
+def test_exit_install_rejects_without_prefix_file(capsys):
+    code = ws.run_exit_install(
+        relay_ip="203.0.113.10", relay_public_key="FIXTURE_PUB_RELAY",
+        domain="ws.example.net", prefix_file=None, apply=False,
+    )
+    assert code == 1
+    assert "prefix-file" in capsys.readouterr().out
+
+
+def test_exit_install_rejects_ip_domain():
+    code = ws.run_exit_install(
+        relay_ip="203.0.113.10", relay_public_key="FIXTURE_PUB_RELAY",
+        domain="203.0.113.10", prefix_file=__import__("pathlib").Path("/dev/null"),
+        apply=False,
+    )
+    assert code == 1

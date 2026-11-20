@@ -64,6 +64,8 @@ vds/
 │   ├── vds-awg-relay-pool.service.tpl   # exit (ADR-015): nft REDIRECT пул 51900-51911
 │   ├── vds-wstunnel-server.service.tpl  # exit (ADR-016): WSS 9443 + WG за --restrict-to
 │   ├── vds-wstunnel-client.service.tpl  # релей: WSS-клиент, UDP-форвард на wg-ws0
+│   ├── vds-wstunnel-nft.service.tpl     # exit: oneshot nft -c/-f + UFW (9443 только релею)
+│   ├── vds-awg-wg-ws0.service.tpl       # wg-ws0 (plain AWG) на обеих сторонах
                                      # ADR-016 (принят G2): носитель №2 wstunnel-wg в
                                      #   L4-ортогональном резерве к awg (UDP↔TCP);
                                      #   переключение — на первом rollback P25;
@@ -303,6 +305,11 @@ vds relay wstunnel install --archive <tar.gz> [--apply]  # носитель №2
                                       # sha256 до распаковки, атомарно 0755 в /usr/local/bin;
                                       # пиннинг WSTUNNEL_VERSION/SHA256 (v11.1.0), сеть — отдельно
 vds relay wstunnel status [--json]    # пиннинг, установленная версия, env-файлы секретов 0600
+vds relay wstunnel init [--apply]     # релей, шаг 1: ключи wg-ws0 + path-prefix (0600); печатает ПУБЛИЧНЫЙ
+vds relay wstunnel server --relay-ip <ip> --relay-public-key <key> \
+    --domain ws.<domain> --prefix-file <env> [--apply]   # exit: wg-ws0 + wss 9443 + nft/UFW
+vds relay wstunnel client --exit-public-key <key> --domain ws.<domain> [--apply]
+                                      # релей, шаг 2: conf wg-ws0, клиент, NAT-ветка (table 100 не трогает)
                                       # wg-ws0 = plain AWG (без Jc/S*), Table=off, MTU 1240,
                                       # Endpoint 127.0.0.1:<local> — VPN-PROTOCOLS §2.5
 vds relay add-client phone --keepalive 25 --qr
