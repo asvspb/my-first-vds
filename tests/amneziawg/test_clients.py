@@ -345,12 +345,14 @@ class TestRemoveClient:
 
     def test_remove_live_peer_removal_no_restart(self, env: Env) -> None:
         """P24: remove-client не рестартует awg0 — только живое awg set remove."""
-        clients.add_client("alpha", state_path=env.state_path)
+        added = clients.add_client("alpha", state_path=env.state_path)
         env.calls.clear()
         clients.remove_client("alpha", apply=True, state_path=env.state_path)
         assert ["awg", "show", "awg0", "peers"] in env.calls
         assert ["awg", "set", "awg0", "peer", FIX_CLI_PUB, "remove"] in env.calls
         assert ["systemctl", "restart", "vds-amneziawg.service"] not in env.calls
+        # P2-1: клиентский .conf удалён только после успеха живого удаления
+        assert not Path(added["conf_path"]).exists()
 
     def test_remove_peer_not_on_iface_conf_only(self, env: Env) -> None:
         """P24: stale-пир (нет на интерфейсе) — conf-only, awg set не вызывается."""
@@ -365,13 +367,15 @@ class TestRemoveClient:
 
     def test_apply_live_removal_failure_restores_conf(self, env: Env) -> None:
         """P24: сбой живого удаления — откат awg0.conf, state не тронут."""
-        clients.add_client("alpha", state_path=env.state_path)
+        added = clients.add_client("alpha", state_path=env.state_path)
         env.calls.clear()
         env.set_remove_fails = True
         with pytest.raises(clients.AWGClientError, match="живым awg set"):
             clients.remove_client("alpha", apply=True, state_path=env.state_path)
         assert "# alpha" in env.server_conf.read_text(encoding="utf-8")
         assert [c["name"] for c in _awg_clients(_read_state(env.state_path))] == ["alpha"]
+        # P2-1: клиентский .conf при сбое живого удаления НЕ удаляется
+        assert Path(added["conf_path"]).exists()
 
     def test_remove_missing_public_key_refused(self, env: Env) -> None:
         """P24: PublicKey пира не найден в блоке — отказ ДО мутаций."""

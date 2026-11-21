@@ -20,8 +20,9 @@ P24-инвариант владельца); при сбое живого уда�
 клиентском .conf (0600); в stdout/выводе — только пути и адреса (SPEC §5).
 
 remove_client: dry-run по умолчанию (SPEC §5) — возвращает план; `--apply`
-удаляет [Peer] из серверного .conf, клиентский .conf и запись из state,
-рестарт юнита с откатом при сбое.
+удаляет [Peer] из серверного .conf и живым `awg set … peer … remove` снимает
+пир БЕЗ рестарта; при сбое живого удаления — откат awg0.conf (клиентский
+.conf не тронут); успех — удаление клиентского .conf и записи из state.
 """
 
 import os
@@ -395,13 +396,15 @@ def remove_client(
         write_secret_atomic(str(backup_path), server_text, mode=0o600)
 
         write_secret_atomic(str(AWG_CONFIG_PATH), new_server_text, mode=0o600)
-        if conf_path:
-            Path(conf_path).unlink(missing_ok=True)
         try:
             _remove_peer_live(AWG_IFACE, pubkey)
         except AWGClientError:
             write_secret_atomic(str(AWG_CONFIG_PATH), server_text, mode=0o600)
             raise
+        # P2-1: клиентский .conf — только после успеха живого удаления,
+        # иначе при сбое awg set он удалён, а awg0.conf откатился.
+        if conf_path:
+            Path(conf_path).unlink(missing_ok=True)
 
         new_state = store_remove_client(state, name)  # StoreError: не найден
         save_state(new_state, state_path)
