@@ -500,8 +500,17 @@ maneuver→carriers). Все закрыты + интеграционные мо�
   `default dev awg1`, fwmark→100, нога поднялась **сама** на `51900` из
   персистнутого `Endpoint` (handshake 72 с, ping 31 мс 0 %, egress = exit IP),
   `maneuver.timer` остался `disabled`; `awg1.conf.bak-pre-leg` снят.
-- **Осталось:** soak 24 ч → удалить старый пир релея с `awg0` asv2 (окно с
-  2026-11-21 ~05:30 UTC); `--enable-auto` — решение владельца после первого живого
+- **Хвост 1 — ✅ ВЫПОЛНЕН 2026-11-21 05:31 UTC** (окно): legacy-пир релея
+  `10.9.0.5` снят с `awg0` asv2 живым `awg set … peer … remove` (P24-prep,
+  без рестарта юнита — `NRestarts=0`, ActiveEnterTimestamp не тронут,
+  handshakes клиентов не сброшены); `awg0` = 3 пира (10.9.0.2/.3/.4), backup
+  `.bak-pre-mutation` снят; нога релея жива (awg1 handshake свежий,
+  `ping -I awg1` 3/3 ~31 мс, `table 100 = awg1`); alert `relay_blocked` = 0.
+  Код на exit синхронизирован с HEAD (sha256 `clients.py`/`install.py`
+  сверены с `git show`). Там же P28-деплой: hook регенерирован
+  (`vds acme issue`, skip-ветка), фильтр на диске, smoke ws/unset → rc 0
+  без рестарта — [TECHDEBT P28](../../TECHDEBT.md) закрыт.
+- **Осталось:** `--enable-auto` — решение владельца после первого живого
   эпизода с клиентом за релеем (live-валидация ветки gate по `awg0`).
 
 ## Активный цикл: alert-watch + fast alerts/scout (2026-11-17)

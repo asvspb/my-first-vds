@@ -569,7 +569,7 @@ TTL — снимать подавление и пере-парсить. Схем
 снова эмитит; в выводе виден путь файла; после починки файла подавление
 исчезает сразу.
 
-## P28 — hysteria2 deploy-hook без фильтра $RENEWED_DOMAINS (2026-11-20, открыт)
+## P28 — hysteria2 deploy-hook без фильтра $RENEWED_DOMAINS (2026-11-20) — ✅ ЗАКРЫТ 2026-11-21
 
 **Статус (2026-11-20/21):** код закрыт — фильтр в `render_deploy_hook`
 (`src/acme/install.py`) + тесты пробельного матча и sh-семантики +
@@ -577,10 +577,17 @@ mapped-доки (README/VPN-PROTOCOLS/DEPLOY) в коммитах этого ц�
 Ревью P28 (P1-1/P1-2) закрыто: `${RENEWED_DOMAINS:-}` POSIX-guard + тест
 unset на всём отрендеренном hook; прямых вызовов hook в `src/` нет
 (запускает только certbot), skip-ветка `acme issue` доходит до
-`install_deploy_hook` (src/acme/install.py:363–374). Осталось: регенерировать
-hook на exit-узле в утреннем окне 2026-11-21 (идемпотентный путь — `vds acme
-issue` того же домена) вместе с Хвостом 1 (P24), после чего запись
-закрывается.
+`install_deploy_hook` (src/acme/install.py:363–374). **Деплой выполнен
+2026-11-21 05:32 UTC** (окно Хвоста 1 P24): идемпотентный `vds acme issue
+asv2.<domain>` — skip-ветка «уже есть и валиден (84 дн.)» → hook
+регенерирован на exit (на диске `case " ${RENEWED_DOMAINS:-} " in`, grep
+подтверждён). Пост-проверки: дымовой прогон с `RENEWED_DOMAINS="ws.<domain>"`
+и unset → rc 0 без рестарта; `vds-hysteria2` и `vds-wstunnel-server`
+ActiveEnterTimestamp не изменились. Примечания: у `acme issue` нет флага
+`--apply` — команда применяет по умолчанию (dry-run только через
+`--dry-run`); при первых дымовых прогонах по ещё старому hook (до
+регенерации) `vds-hysteria2` перезапускался один раз (05:32:13) — штатное
+поведение старого hook, без последствий.
 
 **Факт.** `/etc/letsencrypt/renewal-hooks/deploy/vds-hysteria2-cert.sh`
 (`src/acme/install.py`) копирует сертификат и рестартует `vds-hysteria2`
