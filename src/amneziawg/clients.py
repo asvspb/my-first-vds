@@ -223,12 +223,18 @@ def _remove_peer_live(iface: str, pubkey: str) -> bool:
 
     Остальные пиры (и их handshakes) не затрагиваются — P24-инвариант
     владельца: клиенты (mobile/Windows/laptop) не теряют handshake.
-    Пира на интерфейсе нет (stale) или интерфейс не поднят — conf-only
-    удаление, True не требуется (новый conf применит `awg-quick up`).
+    Сбой `awg show` — отказ (P2-2: не маскировать под stale-пир). Пира нет
+    в живом дампе — conf-only удаление, True не требуется (новый conf
+    применит `awg-quick up`).
     """
     dump = run_list(["awg", "show", iface, "peers"], timeout=10)
+    if not dump.ok:
+        raise AWGClientError(
+            f"Не удалось получить список пиров {iface} (awg show): "
+            f"{dump.stderr.strip()}"
+        )
     if pubkey not in dump.stdout.split():
-        return False  # stale-пир / интерфейс не поднят — правка conf достаточна
+        return False  # stale-пир — правка conf достаточна
     result = run_list(["awg", "set", iface, "peer", pubkey, "remove"], timeout=10)
     if not result.ok:
         raise AWGClientError(

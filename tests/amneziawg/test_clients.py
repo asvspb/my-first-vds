@@ -49,6 +49,7 @@ class Env:
         self.lock_file = str(tmp_path / "clients.lock")
         self.restart_fails = False
         self.set_remove_fails = False
+        self.show_fails = False
         self.live_peers = FIX_CLI_PUB  # пир «alpha/beta» числится живым по умолчанию
 
     @property
@@ -76,6 +77,8 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
         e.calls.append(args)
         key = " ".join(args)
         if args == ["awg", "show", "awg0", "peers"]:
+            if e.show_fails:
+                return ShellResult(stdout="", stderr="mock awg show failure", returncode=1)
             return ShellResult(stdout=e.live_peers, stderr="", returncode=0)
         if args[:3] == ["awg", "set", "awg0"] and args[-1] == "remove":
             if e.set_remove_fails:
@@ -375,6 +378,18 @@ class TestRemoveClient:
         assert "# alpha" in env.server_conf.read_text(encoding="utf-8")
         assert [c["name"] for c in _awg_clients(_read_state(env.state_path))] == ["alpha"]
         # P2-1: клиентский .conf при сбое живого удаления НЕ удаляется
+        assert Path(added["conf_path"]).exists()
+
+    def test_show_failure_refused_not_masked(self, env: Env) -> None:
+        """P2-2: сбой awg show — отказ ДО мутаций, не маскировать под stale-пир."""
+        added = clients.add_client("alpha", state_path=env.state_path)
+        conf_before = env.server_conf.read_bytes()
+        env.calls.clear()
+        env.show_fails = True
+        with pytest.raises(clients.AWGClientError, match="awg show"):
+            clients.remove_client("alpha", apply=True, state_path=env.state_path)
+        assert env.server_conf.read_bytes() == conf_before
+        # P2-1: клиентский .conf тоже не тронут (удаление идёт после живого)
         assert Path(added["conf_path"]).exists()
 
     def test_remove_missing_public_key_refused(self, env: Env) -> None:
