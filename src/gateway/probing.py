@@ -34,7 +34,7 @@ TCP-портов {443, 8443, 2053} (W1-1, SPEC-20261116-probe-coverage) без
   иначе geo: unknown — честно;
 - threat-level машина (SPEC §2): quiet/elevated/high с гистерезисом
   (high = RU-PROBE-SUSPECT 2 окна подряд; BURST — максимум elevated),
-  decay-выходом из high (72 окна без новых RU-IP, ЗАМОРОЖЕН при активном
+  decay-выходом из high (24 окна без новых RU-IP, ЗАМОРОЖЕН при активном
   локе 443 — §9.A) и flapping-защитой (даунгрейд не раньше 2 окон после
   апгрейда); собственные клиенты (AWG endpoints + серверный IP + whitelist
   /etc/vds-probe-watch/allow-ips.txt) из new_ru_ips исключаются (§11);
@@ -674,7 +674,7 @@ def update_threat(
     - elevated: 1 окно PROBE-BURST ИЛИ 1 окно RU-PROBE-SUSPECT; выход —
       3 тихих окна подряд;
     - high: RU-PROBE-SUSPECT 2 окна подряд (BURST сам по себе — шум,
-      максимум elevated); выход — 72 окна без новых RU-IP → elevated →
+      максимум elevated); выход — 24 окна без новых RU-IP → elevated →
       ещё 3 тихих → quiet; decay заморожен при lockdown.active;
     - high недостижим при geo unknown (threat_reason объясняет);
     - flapping-защита: даунгрейд не раньше 2 окон после апгрейда.
@@ -1916,7 +1916,7 @@ def build_explain(
     # threat-level машина (SPEC-20261116-probe-response §2)
     threat_row_note = (
         "quiet→elevated (BURST/RU-SUSPECT 1 окно)→high (RU-SUSPECT 2 подряд); "
-        "decay high = 72 окна без новых RU-IP, заморожен при lockdown; "
+        "decay high = 24 окна без новых RU-IP, заморожен при lockdown; "
         "исключаются свои: AWG-endpoints + серверный IP + "
         f"{OWN_IPS_FILE}"
     )
