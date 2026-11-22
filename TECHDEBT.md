@@ -72,7 +72,13 @@
 
 ---
 
-## P5. Почистить репозиторий — ~10 мин
+## P5. Почистить репозиторий — ~10 мин — ✅ ВЫПОЛНЕНО 2026-11-22
+
+> Закрыто (2026-11-22, коммит `a2cf988`): `.gitignore` уже содержит
+> `__pycache__/`, `*.pyc`, `.kilo/`, `.v2c/` — бинарных артефактов в git нет
+> (`git ls-files` пуст по маскам). Остаток — DEPRECATED-маркер в шапке
+> `local-init.sh` (`use scripts/8_vds-server.sh`); README:36 уже помечал его
+> устаревшим. Docsync-трейлер `Docs: none — README:36 уже описывает… (P5)`.
 
 **Проблема:** в корне закоммичен `__pycache__/zt-reconcile.cpython-310.pyc`; `.kilo/`, `.v2c/` — служебные каталоги без оговорки.
 
@@ -363,7 +369,14 @@ before.rules при inactive ufw всё равно мёртв) + миграци�
 в ЦОД РФ. В relay-профиль SERVER-BASELINE добавить резолвер: локальный
 DC-резолвер или DoH (cloudflared), не Google-UDP напрямую.
 
-## P19 — `CursorStore.save`: read-modify-write без `threading.Lock` (P2, 2026-11-17)
+## P19 — `CursorStore.save`: read-modify-write без `threading.Lock` (P2, 2026-11-17) — ✅ ВЫПОЛНЕНО 2026-11-22
+
+> Закрыто (2026-11-22, ubuntuInstaller `94bcad8`): классовый
+> `CursorStore._lock = threading.Lock` сериализует read-modify-write в
+> `save()` (классовый — два reader-потока шарят один `cursor.json`).
+> Тест `tests/guard/test_reader_sources.py::test_concurrent_save_no_lost_update`
+> — 4 источника × 100 save, итог содержит последний курсор каждого источника.
+>
 
 **Факт.** Два reader-потока (`journal:user`/`journal:system`) пишут
 `guard/cursor.json`. После HF `78ce00c` запись атомарна (уникальный
@@ -378,7 +391,18 @@ read→modify→replace не сериализован: при совпадени
 **Критерий:** 4 потока × 100 save → итоговый `cursor.json` содержит
 последний курсор каждого источника, без потерянных обновлений.
 
-## P20 — `vds relay remove-client` отсутствует (2026-11-17)
+## P20 — `vds relay remove-client` отсутствует (2026-11-17) — ✅ ВЫПОЛНЕНО 2026-11-22
+
+> Закрыто (2026-11-22, vds `d221ec7`): `src/relay/clients.py::remove_client`
+> по образцу amneziawg `remove_client` — `[Peer]` из awg0.conf, клиентский
+> `.conf` (P2-1: только после успеха живого удаления), запись state;
+> **живое удаление** `awg set awg0 peer … remove` вместо рестарта юнита
+> (P24-инвариант: остальные пиры не теряют handshake), откат конфига при
+> сбое, повторный remove идемпотентен. Команда `vds relay remove-client
+> NAME [--apply]` + TUI-пункт; счётчик leaf-команд docsync 98→99.
+> Тесты `TestRemoveClient` (dry-run/apply/rollback/idempotent); доки —
+> README, DEPLOY-RU-RELAY §9, AGENTS.md. Живая приёмка на релее — при
+> следующем деплое.
 
 **Факт.** У AWG-сервера релея есть только `vds relay add-client`; удалить пир
 можно лишь правкой `/etc/amnezia/awg0.conf` + `systemctl restart
@@ -393,7 +417,16 @@ vds-relay-awg` (так удалён тестовый `smoke-asv2` при рас�
 **Критерий.** Пиры: добавить → удалить → в конфиге и в `awg show awg0` нет
 пира, остальные не тронуты; повторный `remove` идемпотентен.
 
-## P21 — `unparsed_ratio`: стартовый баннер Xray засчитывается как app-строка (2026-11-17)
+## P21 — `unparsed_ratio`: стартовый баннер Xray засчитывается как app-строка (2026-11-17) — ✅ ВЫПОЛНЕНО 2026-11-22
+
+> Закрыто (2026-11-22, ubuntuInstaller `a19b8a9`): `XRAY_BANNER_RE` в
+> `vpnm/guard/parse.py` — три баннерные строки (`Xray <ver> (…Penetrates
+> Everything.)`, слоган, `infra/conf/serial: Reading config`) =
+> `ignored_infra`, no event, вне AC-5-знаменателя. Матч по сообщению, а не
+> по proto: без proto-хинта юнит content-детектится в `unknown`. Спека AC-5
+> не менялась — только учёт. Тесты: `test_xray_startup_banner_is_ignored_infra`
+> + `test_banner_replay_24h_ratio_under_5pct` (12 баннеров + 5 app →
+> ratio ≤ 0.05, было 0.75 в T0.5).
 
 **Факт.** AC-5 меряет `unparsed / app_lines`. Старт каждого Xray-профиля
 пишет 3 строки, которые не несут телеметрии:
