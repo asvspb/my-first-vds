@@ -11,7 +11,8 @@
   → ORDER-DECISION архлида (A2 → guard v1.1 → C → B; 1 окно = 1 контур) +
   REVIEW WP-A1 (APPROVE с правками, все приняты).
 - **WP-A0 (read-only, asv2):** `8443/tcp` занят **живым XHTTP-инбаундом xray**
-  (path `/62985630…`, mode auto) — конфликт с wstunnel отсутствует; дельта И43
+  (случайный path — секрет, не `/xhttp`, SPEC-20261116-surface-hardening §2.1;
+  mode auto) — конфликт с wstunnel отсутствует; дельта И43
   = ровно 2 клиентских поля; `xray run -test` v26.1.23 с xmux+scMax* → OK.
   A2 — **без рестарта asv2** (ревью P1): только клиентский деплой vpnm +
   T-XM6 + окно probe/silence против живого asv2:8443.
