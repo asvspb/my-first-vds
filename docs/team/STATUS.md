@@ -5,6 +5,41 @@
 > Счётчики тестов в исторических записях — моментальные снимки (OQ-9):
 > актуальный baseline — `pytest -q`, число в живых доках не хранится.
 
+## 2026-11-22: roadmap-цикл архлида (порядок A2→guard v1.1→C→B) + pre-flights
+
+- **Промпт/вердикт:** [PROMPT-20261122-cycle-order-gemini-architect](reports/PROMPT-20261122-cycle-order-gemini-architect.md)
+  → ORDER-DECISION архлида (A2 → guard v1.1 → C → B; 1 окно = 1 контур) +
+  REVIEW WP-A1 (APPROVE с правками, все приняты).
+- **WP-A0 (read-only, asv2):** `8443/tcp` занят **живым XHTTP-инбаундом xray**
+  (path `/62985630…`, mode auto) — конфликт с wstunnel отсутствует; дельта И43
+  = ровно 2 клиентских поля; `xray run -test` v26.1.23 с xmux+scMax* → OK.
+  A2 — **без рестарта asv2** (ревью P1): только клиентский деплой vpnm +
+  T-XM6 + окно probe/silence против живого asv2:8443.
+- **WP-A1 ЗАПУШЕН:** ubuntuInstaller `fab43fb` (`XHTTP_SC`: scMaxEachPostBytes
+  `800000-1200000`, scMinPostsIntervalMs `100-300` — соседи xmux) + vds
+  `be73326` (SPEC §6). 🪤 **`origin` у meta-клона ubuntuMastering/ubuntuInstaller
+  — локальный путь; GitHub-remote только в каноническом клоне
+  `/home/asv-spb/Dev/ubuntuInstaller`** — первый пуш fab43fb ушёл в локальное
+  зеркало, на GitHub доставлен из канонического клона (P0 ревью).
+- **WP-B0 (compat-gate):** вердикт **ADR-005-AMENDMENT-REQUIRED** — сборки
+  «AWG 1.5» в PPA нет; I1–I5 в kernel с дерева 2.0 (`ac946a9`); конфиги 3.1
+  несовместимы со старыми клиентами (AmneziaVPN ≥5.0.1.5 = AWG 3.1);
+  `amneziawg-go 1.5` — только беты; Rc1–Rc3 не подтвердились.
+- **WP-B5 (ключевой факт):** **asv2, релей и ноутбук уже на kmod
+  `3.1.20261113-02` / tools `v3.1.20260812`** (dpkg-строки «1.0.0» —
+  упаковочные артефакты) → канарейка бинаря (WP-B2.1 вердикта) вычеркнута;
+  B = конфиг-дельта I1–I5 в клиентские .conf + перевыпуск. maneuver.timer
+  **не выключается** на окнах A2/C (ревью P1) — пауза только при реальном
+  рестарте awg1/awg2 в B.
+- **Скоуп B (ADR-005-lite, зафиксирован ревью):** только опциональные I1–I5
+  (по умолчанию выкл), без S3/S4/диапазонных H/HeaderProtectionKey; после
+  включения — 1 ночной тик C + 0 FP G-13 с CPS.
+- **Открытые вопросы владельцу:** версии AmneziaVPN на телефонах (≥5.0.1.5?);
+  G6-close 24.11 15:24 MSK + деплой клиентского бандла (D1/D3/D6 + D-17).
+- **Порядок (финал):** G6-close → A2 (client-only) → guard v1.1 → C →
+  B (ADR-005-lite). Соответствует условию смены порядка Риска №1
+  ORDER-DECISION (B0 = amendment ⇒ C легально идёт после guard v1.1).
+
 ## 2026-11-20/21: оценка живучести + эшелоны до потолка (ревью архитектора)
 
 - **Отчёт:** [REVIEW-20261120-resilience-roadmap](reports/REVIEW-20261120-resilience-roadmap.md)

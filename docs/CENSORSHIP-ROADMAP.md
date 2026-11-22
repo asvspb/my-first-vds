@@ -102,7 +102,7 @@ CDN-транспорт — отдельный origin-инблэнд на TCP 205
 
 | Слой | Компонент | Состояние |
 |---|---|---|
-| Транспорт | Xray (Reality/XHTTP), Hysteria2 (+obfs/hop), AWG | ✅ Reality/Hy2/AWG на **asv2** (asv1 выведен 2026-11-16); CDN — холодный резерв (Q6) |
+| Транспорт | Xray (Reality/XHTTP), Hysteria2 (+obfs/hop), AWG | ✅ Reality/Hy2/AWG на **asv2** (asv1 выведен 2026-11-16); **XHTTP-инбаунд жив на asv2 `:8443`** (WP-A0, 2026-11-22); CDN — холодный резерв (Q6) |
 | Мультиплексирование | Xray fallbacks (SNI), отдельные порты | ✅ |
 | Оркестрация | `src/gateway/` (state, links, blockcheck, init) | ✅; `gateway init` реализован (GR-16), hub-подписки — нет (W5) |
 | Наблюдаемость | `src/sysinfo/`, `status`-команды, healthcheck-таймер, probe-watch | ✅ health (W1: `vds-gateway-health.timer`) + probe-watch v3 (W1-1 SPEC-probe-coverage: probers4 на tcp/{443,8443,2053} + 5-мин FAST-CONTOUR-тег в сэмплере); метрики/alerts — нет (W5) |
