@@ -368,3 +368,95 @@ class TestChooseEndpoint:
         assert relay_clients._is_public_ip("127.0.0.1") is False
         assert relay_clients._is_public_ip("198.51.100.9") is False  # RFC 5737
         assert relay_clients._is_public_ip("8.8.8.8") is True
+
+
+class TestRemoveClient:
+    def _setup(self, monkeypatch, tmp_path: Path) -> tuple[str, str]:
+        path, state = _state(tmp_path)
+        monkeypatch.setattr(relay_clients, "RELAY_CONFIG_PATH", tmp_path / "awg0.conf")
+        monkeypatch.setattr(relay_clients, "RELAY_CLIENTS_DIR", tmp_path / "clients")
+        monkeypatch.setattr(relay_clients, "LOCK_FILE", str(tmp_path / "lock"))
+        monkeypatch.setattr(relay_clients.os, "geteuid", lambda: 0)
+        monkeypatch.setattr(
+            relay_clients, "_gen_client_keys",
+            lambda: ("FIXTURE_PW_CLIENT_PRIV=", "FIXTURE_UUID_CLIENT_PUB="),
+        )
+        monkeypatch.setattr(
+            relay_clients, "_run_checked",
+            lambda args, timeout, what: "FIXTURE_PW_CLIENT_PSK_0123456789abcdef0123456789abcdef012=",
+        )
+        monkeypatch.setattr(
+            relay_clients, "run_list",
+            lambda args, timeout=None: ShellResult(stdout="", stderr="", returncode=0),
+        )
+        monkeypatch.setattr(
+            relay_clients, "_resolve_public", lambda host, port: ["203.0.113.10"],
+        )
+        (tmp_path / "awg0.conf").write_text(SERVER_CONF, encoding="utf-8")
+        result = relay_clients.add_client("phone", state_path=path)
+        conf_path = result["conf_path"]
+        return path, conf_path
+
+    def test_dry_run_does_not_mutate(self, monkeypatch, tmp_path: Path):
+        path, conf_path = self._setup(monkeypatch, tmp_path)
+        result = relay_clients.remove_client("phone", state_path=path)
+        assert result["dry_run"] is True
+        assert len(result["plan"]) == 4
+        assert "# phone" in (tmp_path / "awg0.conf").read_text(encoding="utf-8")
+        assert Path(conf_path).exists()
+
+    def test_apply_removes_peer_conf_and_state(self, monkeypatch, tmp_path: Path):
+        from src.gateway.store import load_state
+
+        path, conf_path = self._setup(monkeypatch, tmp_path)
+        live: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            relay_clients, "_remove_peer_live",
+            lambda iface, pubkey: live.append((iface, pubkey)) or True,
+        )
+        restarts: list[list[str]] = []
+        monkeypatch.setattr(
+            relay_clients, "run_list",
+            lambda args, timeout=None: restarts.append(args)
+            or ShellResult(stdout="", stderr="", returncode=0),
+        )
+        result = relay_clients.remove_client("phone", apply=True, state_path=path)
+        assert result["dry_run"] is False
+        conf_text = (tmp_path / "awg0.conf").read_text(encoding="utf-8")
+        assert "# phone" not in conf_text
+        assert "FIXTURE_UUID_CLIENT_PUB=" not in conf_text
+        # P24: живое удаление вместо рестарта — остальные пиры не тронуты
+        assert live == [("awg0", "FIXTURE_UUID_CLIENT_PUB=")]
+        assert restarts == []
+        # клиентский .conf удалён после успеха живого удаления (P2-1)
+        assert not Path(conf_path).exists()
+        state = load_state(path)
+        assert all(c.name != "phone" for c in state.clients)
+
+    def test_apply_live_removal_failure_rolls_back_conf(self, monkeypatch, tmp_path: Path):
+        path, conf_path = self._setup(monkeypatch, tmp_path)
+
+        def boom(iface: str, pubkey: str) -> bool:
+            raise relay_clients.AWGClientError("awg set fail")
+
+        monkeypatch.setattr(relay_clients, "_remove_peer_live", boom)
+        with pytest.raises(relay_clients.AWGClientError):
+            relay_clients.remove_client("phone", apply=True, state_path=path)
+        conf_text = (tmp_path / "awg0.conf").read_text(encoding="utf-8")
+        assert "# phone" in conf_text  # откат конфига
+        assert Path(conf_path).exists()  # клиентский .conf пережил сбой
+
+    def test_repeat_remove_is_idempotent(self, monkeypatch, tmp_path: Path):
+        from src.gateway.store import load_state
+
+        path, _conf = self._setup(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            relay_clients, "_remove_peer_live",
+            lambda iface, pubkey: True,
+        )
+        relay_clients.remove_client("phone", apply=True, state_path=path)
+        # повторный remove: клиента нет ни в state, ни в conf — не ошибка
+        result = relay_clients.remove_client("phone", apply=True, state_path=path)
+        assert result["dry_run"] is False
+        state = load_state(path)
+        assert all(c.name != "phone" for c in state.clients)

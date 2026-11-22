@@ -415,6 +415,12 @@ systemctl list-timers vds-relay-cidr.timer
   уже записан; поставить `sudo apt install qrencode`. Секреты в QR идут
   через stdin, в argv/логи не попадают. Альтернатива без установки —
   скопировать `.conf` на клиентский хост и импортировать файлом.
+- **Удаление клиента (P20, 2026-11-22):** `sudo vds relay remove-client NAME
+  [--apply]` — убирает `[Peer]` из `/etc/amnezia/awg0.conf`, клиентский
+  `.conf` и запись из state, а пир удаляется **живо** (`awg set awg0 peer …
+  remove`, без рестарта юнита — остальные пиры не теряют handshake, P24).
+  Dry-run по умолчанию; откат конфига при сбое; повторный `remove`
+  идемпотентен.
 - **Endpoint клиента.** Порядок выбора: явный `--endpoint` → `state.domain`
   → канонический `relay.asvpersonal.ru` → публичный IP сервера. Имя,
   совпадающее с hostname/FQDN самой машины, **пропускается с warning**:

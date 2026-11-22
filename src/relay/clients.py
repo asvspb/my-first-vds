@@ -23,7 +23,16 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from src.amneziawg.clients import _append_peer, _gen_client_keys, _validate_server_conf
+from src.amneziawg.clients import (
+    AWGClientError,
+    _append_peer,
+    _gen_client_keys,
+    _peer_block_bounds,
+    _peer_public_key,
+    _remove_peer,
+    _remove_peer_live,
+    _validate_server_conf,
+)
 from src.amneziawg.config import (
     ClientParams,
     gen_obfuscation_params,
@@ -40,10 +49,12 @@ from src.gateway.store import (
     load_state,
     save_state,
 )
+from src.gateway.store import remove_client as store_remove_client
 from src.relay.paths import (
     LOCK_FILE,
     RELAY_CLIENTS_DIR,
     RELAY_CONFIG_PATH,
+    RELAY_IFACE,
     RELAY_MTU,
     RELAY_PORT,
     RELAY_SUBNET,
@@ -462,3 +473,77 @@ def list_clients(state_path: Optional[str] = None):
     """Пиры awg0 из gateway store (для будущего remove; вывод без секретов)."""
     state = load_state(state_path)
     return [c for c in state.clients if c.protocol == "relay-awg"]
+
+
+def remove_client(
+    name: str,
+    apply: bool = False,
+    state_path: Optional[str] = None,
+) -> dict:
+    """Удалить релейного AWG-клиента. Dry-run по умолчанию (P20): план без
+    изменений; apply=True — [Peer] из /etc/amnezia/awg0.conf, клиентский
+    .conf, запись из state и ЖИВОЕ удаление пира `awg set … remove` (БЕЗ
+    рестарта юнита: остальные пиры не теряют handshake — P24-инвариант;
+    откат конфига при сбое). Повторный вызов по несуществующему клиенту
+    идемпотентен (сообщение, exit 0 через return)."""
+    if os.geteuid() != 0:
+        raise RelayClientError("Требуется root (запустите через sudo).")
+
+    state = load_state(state_path)
+    profile = next(
+        (c for c in state.clients if c.name == name and c.protocol == "relay-awg"),
+        None,
+    )
+    conf_path = str(profile.extra.get("conf_path", "")) if profile else ""
+    address = str(profile.extra.get("address", "")) if profile else "?"
+
+    # Идемпотентность: клиента нет ни в state, ни в конфиге — не ошибка.
+    if profile is None and not RELAY_CONFIG_PATH.exists():
+        console.print(
+            f"[warning][relay] Клиент '{name}' не найден в state и "
+            f"{RELAY_CONFIG_PATH} отсутствует — удалять нечего.[/warning]"
+        )
+        return {"name": name, "dry_run": False, "plan": [], "conf_path": ""}
+
+    server_text = (
+        RELAY_CONFIG_PATH.read_text(encoding="utf-8") if RELAY_CONFIG_PATH.exists() else ""
+    )
+    peer_present = bool(server_text) and _peer_block_bounds(server_text, name) is not None
+    plan = [
+        f"peer '{name}' ({address}) из {RELAY_CONFIG_PATH}",
+        f"конфиг {conf_path}" if conf_path else "клиентский .conf (путь не записан)",
+        f"запись '{name}' из state.json",
+        f"живое удаление пира из {RELAY_IFACE} (awg set … peer … remove) — "
+        "БЕЗ рестарта юнита, остальные пиры не теряют handshake (P24)",
+    ]
+    if not peer_present:
+        plan[0] += " (Peer-секция в конфиге уже отсутствует)"
+    if not apply:
+        return {"name": name, "dry_run": True, "plan": plan, "conf_path": conf_path}
+
+    with FileLock(LOCK_FILE):
+        if peer_present and server_text:
+            _validate_server_conf(server_text)
+            pubkey = _peer_public_key(server_text, name)
+            new_server_text = _remove_peer(server_text, name)
+
+            backup_path = RELAY_CONFIG_PATH.with_name(
+                RELAY_CONFIG_PATH.name + BACKUP_SUFFIX
+            )
+            write_secret_atomic(str(backup_path), server_text, mode=0o600)
+            write_secret_atomic(str(RELAY_CONFIG_PATH), new_server_text, mode=0o600)
+            try:
+                _remove_peer_live(RELAY_IFACE, pubkey)
+            except (AWGClientError, RelayClientError):
+                write_secret_atomic(str(RELAY_CONFIG_PATH), server_text, mode=0o600)
+                raise
+            # P2-1: клиентский .conf — только после успеха живого удаления.
+            if conf_path:
+                Path(conf_path).unlink(missing_ok=True)
+
+        if profile is not None:
+            new_state = store_remove_client(state, name)  # StoreError: не найден
+            save_state(new_state, state_path)
+
+    console.print(f"[change][relay] Клиент '{name}' удалён ({address}).[/change]")
+    return {"name": name, "dry_run": False, "plan": plan, "conf_path": conf_path}

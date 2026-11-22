@@ -335,6 +335,13 @@ vds relay add-client phone --keepalive 25 --qr
                                      #  самой машины пропускается, нерезолв → IP сервера)
                                      # (--dns IP[,IP] — переопределить DNS;
                                      #  --qr — QR в терминале через qrencode)
+vds relay remove-client phone [--apply]
+                                     # Удалить пира awg0: [Peer] из awg0.conf,
+                                     # клиентский .conf, запись state + ЖИВОЕ
+                                     # удаление `awg set … remove` (БЕЗ рестарта,
+                                     # остальные пиры не теряют handshake — P24).
+                                     # Dry-run по умолчанию; повторный remove
+                                     # идемпотентен (P20)
 ```
 
 Ссылки импортируются в v2rayNG / NekoRay / Hiddify / sing-box; AmneziaWG-конфиг —

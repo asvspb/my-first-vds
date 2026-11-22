@@ -232,7 +232,8 @@ def test_extract_commands_real_main_py() -> None:
     # + 7 relay maneuver (status/history/step/rollback — WP-M3;
     #   tick/install/remove — opt-in таймер, WP-M4 / ADR-015)
     # + 5 relay wstunnel (WP-P2P-1/2) + 2 relay carrier (status/switch — WP-P2P-3)
-    assert len(cmds) == 98
+    # + relay remove-client (TECHDEBT P20)
+    assert len(cmds) == 99
     assert len(set(cmds)) == len(cmds)
     assert "vds sysinfo" in cmds and "vds cleanup" in cmds and "vds server-setup" in cmds
     assert "vds gateway probe-watch" in cmds  # iwc-leaf

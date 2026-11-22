@@ -316,6 +316,7 @@ def main_menu(ctx: typer.Context):
                     questionary.Choice("Развёртывание релея (init, dry-run по умолчанию)", "init"),
                     questionary.Choice("Статус (status)", "status"),
                     questionary.Choice("Добавить клиента (add-client)", "add_client"),
+                    questionary.Choice("Удалить клиента (remove-client)", "remove_client"),
                     questionary.Choice("Назад", "back"),
                 ]
             ).ask()
@@ -340,6 +341,14 @@ def main_menu(ctx: typer.Context):
                 if name:
                     try:
                         relay_add_client(name=name)
+                    except typer.Exit:
+                        pass
+                questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
+            elif relay_choice == "remove_client":
+                name = questionary.text("Имя клиента для удаления:", default="phone").ask()
+                if name:
+                    try:
+                        relay_remove_client(name=name, apply=questionary.confirm("Применить удаление (--apply)?", default=False).ask() or False)
                     except typer.Exit:
                         pass
                 questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата...").ask()
@@ -1374,6 +1383,34 @@ def relay_add_client(
     except (StoreError, RelayClientError) as exc:
         console.print(f"[error][relay] {exc}[/error]")
         raise typer.Exit(1)
+
+
+@relay_app.command("remove-client")
+def relay_remove_client(
+    name: str = typer.Argument(..., help="Имя клиента (напр. phone, laptop)"),
+    apply: bool = typer.Option(False, "--apply", help="Применить удаление (по умолчанию dry-run)"),
+):
+    """Удалить релейного AWG-клиента (P20): [Peer] из /etc/amnezia/awg0.conf,
+    клиентский .conf, запись из state + ЖИВОЕ удаление пира `awg set … remove`
+    (БЕЗ рестарта юнита — остальные пиры не теряют handshake, P24).
+    Откат конфига при сбое; повторный remove идемпотентен.
+
+    Пример: sudo vds relay remove-client smoke-asv2 --apply"""
+    from src.amneziawg.clients import AWGClientError
+    from src.core.logger import console
+    from src.gateway.store import StoreError
+    from src.relay.clients import RelayClientError, remove_client
+
+    try:
+        result = remove_client(name, apply=apply)
+    except (AWGClientError, StoreError, RelayClientError) as exc:
+        console.print(f"[error][relay] {exc}[/error]")
+        raise typer.Exit(1)
+    if result["dry_run"]:
+        console.print("[info][relay] DRY-RUN план remove-client:[/info]")
+        for step in result["plan"]:
+            console.print(f"[info][relay]   - {step}[/info]")
+        console.print("[info][relay] Запустите с --apply для исполнения.[/info]")
 
 
 @relay_exit_leg_app.command("install")
