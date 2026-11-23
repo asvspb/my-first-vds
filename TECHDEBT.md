@@ -748,3 +748,16 @@ tests/logs/test_report.py.
 **Действие.** Отдельное изменение контракта SPEC-20261116-log-forensics §7.6:
 verdict clean/quiet при findings == [] и валидном coverage. НЕ менять молча
 внутри P31.
+
+## P35 — ubuntuInstaller: 3 pre-existing падения tests/guard/test_export.py (2026-11-24, открыт)
+
+**Факт.** На чистом HEAD ubuntuInstaller `ce5a314` (до WP-QR5) прогон
+`pytest -q` даёт 3 failed в `tests/guard/test_export.py`:
+`test_export_since_filter_uses_findings_window`, `test_cli_export_blocks_a_secret_already_on_disk`,
+`test_cli_export_to_stdout` (остальной набор зелёный; WP-QR5/QR6 добавили
+новые тесты и не привнесли регрессий — падает тот же набор из трёх).
+Воспроизведено кодером WP-QR5 stash-проверкой — регрессия не из QR-цикла.
+
+**Действие.** Отдельный фикс-проход (не смешивать с QR-деплоем в паузе после
+G6): диагностика root cause + фикс + регтест в ubuntuInstaller; прогон полного
+`pytest -q` до нуля падений.
