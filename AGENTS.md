@@ -51,6 +51,11 @@ src/
 ├── alert/               # сторож угрозы на exit-узле (SPEC-20261117): paths, env (/etc/vds/alert.env),
 │                        # state (alert-state.json), channels (SMTP/Telegram на stdlib), checks (threat/
 │                        # awg dump/лок), watch (тик), cli (install/remove/test/status). Только уведомления
+├── dms/                 # dead-man-switch пинг Healthchecks (SPEC-20261124-quiet-exit §5, P37):
+│                        # paths, env (/etc/vds/dms.env 0600, URL маскируется), gate (ping только
+│                        # при живых ногах: exit = awg0+awg2+wstunnel-server; relay = awg0+table 100+
+│                        # data-plane носителя; отказ → /fail мгновенно), cli (install/remove/test/
+│                        # status/ping). Исходящий HTTPS на stdlib urllib; 0 входящих портов
 └── system/              # setup, cleanup, ufw (harden/ssh-port — SPEC-20261116; CDN-порт — CF-CIDR-набор)
 systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2(-hop/-obfs)/vds-amneziawg(-nat)/
                          # vds-relay-{exit,nat,policy,cidr}.service.tpl; vds-awg-relay(-pool).service.tpl
@@ -58,6 +63,9 @@ systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2
                          # vds-probe-rucidr / vds-logs-sample / vds-logs-daily /
                          # vds-alert-watch .service+.timer.tpl (сторож: тик 2 мин, exit-узел;
                          #   sandbox: RestrictAddressFamilies включает AF_NETLINK — netlink для `awg show`)
+                         # vds-dms-ping .service+.timer.tpl (DMS P37: тик 5 мин + RandomizedDelaySec 20s;
+                         #   sandbox: RestrictAddressFamilies включает AF_INET — исходящий HTTPS,
+                         #   в отличие от alert-watch; [Install] только у .timer)
                          # vds-wstunnel-{server,client}.service.tpl (ADR-016, носитель №2:
                          #   WSS/TLS 9443 + WG; Restart=always, env-файлы секретов 0600)
                          # vds-wstunnel-nft.service.tpl (exit: nft -c/-f + UFW) и
@@ -68,7 +76,7 @@ systemd/                 # таймеры/сервисы; vds-xray/vds-hysteria2
                          #   CAP_NET_ADMIN CAP_NET_RAW, AF_NETLINK; [Install] только у .timer)
                          # (vds-logs-sample/daily: ReadWritePaths /var/lib/vds + /var/run для FileLock);
                          # sysctl/99-vds-gateway.conf.tpl
-tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/, amneziawg/, acme/, relay/, alert/
+tests/                   # unit-тесты (pytest, без root/сети): core/, gateway/, xray/, hysteria2/, amneziawg/, acme/, relay/, alert/, dms/
 docs/                    # TEAM.md, DEPLOY.md, DEPLOY-RU-RELAY.md, VPN-PROTOCOLS.md, CDN-FRONTS.md,
                          # CENSORSHIP-ROADMAP.md, CENSORSHIP-PATTERNS.md, MIGRATE-VDS.md, adr/, team/
 install.sh, preinstall.sh, local-init.sh, myhelp.sh
@@ -108,6 +116,11 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 | `vds alert status [--json]` | Каналы/юниты/coverage; JSON без секретов; без root — урезанно (env 0600) |
 | `vds alert watch --no-send` | Один тик сторожа без отправки и без записи state (отладка); `--config` — путь к env (в юните фиксирован) |
 | `sudo vds alert remove --apply [--purge]` | Снять юниты; `--purge` удаляет alert.env и alert-state.json |
+| `sudo vds dms install --role exit\|relay [--apply]` | DMS-пинг Healthchecks (P37, SPEC-20261124-quiet-exit §5): юниты `vds-dms-ping.service`/`.timer` (тик 5 мин, RandomizedDelaySec 20s, sandbox с AF_INET — исходящий HTTPS) + `/etc/vds/dms.env` 0600 (`DMS_PING_URL`/`DMS_ROLE`/`DMS_EXIT_HOST`); dry-run без `--apply` |
+| `sudo vds dms test` | Один реальный пинг «руками» (gate + GET или `GET <URL>/fail` при мёртвой ноге); URL не печатается |
+| `vds dms status [--json]` | Роль/конфиг (URL только маской `***`)/юниты; без root — урезанно (env 0600) |
+| `vds dms ping [--config <путь>]` | ExecStart юнита: gate по роли → GET или `/fail`; exit-код всегда 0 |
+| `sudo vds dms remove --apply [--purge]` | Снять юниты; `--purge` удаляет dms.env |
 | `python -m compileall -q src` | Синтаксическая проверка |
 | `pytest -q` | Юнит-тесты (`tests/`, без root/сети/docker) |
 | `bash install.sh` | Установка (root, на сервере) |

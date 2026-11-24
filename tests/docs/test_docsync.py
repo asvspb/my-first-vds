@@ -234,13 +234,15 @@ def test_extract_commands_real_main_py() -> None:
     # + 5 relay wstunnel (WP-P2P-1/2) + 2 relay carrier (status/switch — WP-P2P-3)
     # + relay remove-client (TECHDEBT P20)
     # + acme check-80-window (SPEC-20261124 quiet-exit WP-QX-1)
-    assert len(cmds) == 100
+    # + 5 dms-команд (SPEC-20261124 quiet-exit WP-QX-4, P37 DMS)
+    assert len(cmds) == 105
     assert len(set(cmds)) == len(cmds)
     assert "vds sysinfo" in cmds and "vds cleanup" in cmds and "vds server-setup" in cmds
     assert "vds gateway probe-watch" in cmds  # iwc-leaf
     assert "vds gateway probe-watch ru-cidr update" in cmds  # вложенность 3 уровня
     assert "vds logs sample" in cmds and "vds logs capture start" in cmds  # logs (ADR-012)
     assert "vds alert watch" in cmds and "vds alert test" in cmds  # alert-watch
+    assert "vds dms install" in cmds and "vds dms ping" in cmds  # DMS (WP-QX-4)
     assert "vds relay exit-leg install" in cmds  # ADR-015/P24 (exit-сторона)
     assert "vds relay exit-leg remove" in cmds
     allowlist = json.loads((REPO / "docs" / "doc-sync.json").read_text())["reverse"]["legacy_commands_allowlist"]

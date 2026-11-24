@@ -800,6 +800,14 @@ blackhole — ext-EU зелёный, алерт ≤ 15 мин, RestrictAddressFa
 vpn-guard.service не изменился. Источник: docs/team/reports/
 INCIDENT-20261124-asv2-tcp-blackhole.md §5/§7 (Q1-INC).
 
+**DMS-реализация = WP-QX-4 (done 2026-11-24, `src/dms/` + `vds dms`
+install/remove/test/status/ping + `vds-dms-ping.*.tpl`): п.3 (Healthchecks
+HTTPS-push с exit и релея, gate на живых ногах, /fail мгновенно) реализован.
+Разворачивание — после деплоя ES-1 (SPEC-20261124-quiet-exit §2, WP-QX-1/2):
+`vds dms install --role exit|relay --apply` + заполнение `DMS_PING_URL` в
+`/etc/vds/dms.env` (0600) владельцем. П.1 (TCP-проба asv2:443) — диагностика
+инцидента, отдельная задача; п.2 (вторая точка) — с P30.
+
 ## P38 — селектор носителей релея: failover exit-A ↔ exit-B → ADR-017 (2026-11-24, открыт; DECISION Q4-PRI)
 
 **Факт.** ADR-016/P25: селектор на релее переключает носители awg1↔wg-ws0,

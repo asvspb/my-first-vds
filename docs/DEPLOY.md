@@ -333,6 +333,31 @@ vds gateway probe-watch ru-cidr install --apply    # RU-CIDR без релея: 
    должен быть `inconclusive` при живом канале (`idle` допустим, если на `awg1`
    не выставлен `PersistentKeepalive` — см. DEPLOY-RU-RELAY §4).
 
+### DMS — dead-man-switch пинг Healthchecks (P37, SPEC-20261124-quiet-exit §5)
+
+Оба узла (exit и relay) шлют исходящий HTTPS GET на уникальный URL
+Healthchecks (настроен владельцем; TG при просрочке). Ноль входящих портов.
+На реле хранится только `DMS_PING_URL` — осознанный трейд-офф (утечка
+деградирует мониторинг релея, exit не затронут).
+
+1. `sudo vds dms install --role exit` (на exit) / `--role relay` (на релей) —
+   dry-run план; флаги `--interval` (5m), `--force`.
+2. Заполнить `/etc/vds/dms.env` (0600): `DMS_PING_URL` (уникальный URL
+   Healthchecks на каждый узел), `DMS_ROLE`, `DMS_EXIT_HOST`. URL нигде не
+   печатается — ни в stdout, ни в journal, ни в `vds dms status --json`
+   (только маска `***`).
+3. `sudo vds dms install --apply` — юниты `vds-dms-ping.service`/`.timer`
+   (тик 5 мин + RandomizedDelaySec 20s; sandbox: `RestrictAddressFamilies`
+   включает `AF_INET` — исходящий HTTPS; `[Install]` только у таймера).
+4. Проверка: `sudo vds dms test` — один реальный пинг с gate; при мёртвой ноге
+   уходит `GET <URL>/fail` (мгновенный алерт). Теги journal:
+   `DMS-PING ok|failed|gatefail|skip`, `DMS-FAIL sent|send_failed` — URL в них
+   не попадает.
+5. Gate (ping только при живых ногах — иначе DMS ложно успокаивает мониторинг):
+   exit = `awg0` UP + `awg2` UP + `vds-wstunnel-server.service` active;
+   relay = `awg0` UP + policy `table 100` + data-plane носителя
+   (`ping -c1 -W3 10.11.0.1` или `10.12.0.1`); отказ обоих носителей → `/fail`.
+
 ### Носитель №2 p2p: wstunnel/WG (ADR-016)
 
 Ставится тремя шагами; приватные ключи не покидают свой узел, в stdout только

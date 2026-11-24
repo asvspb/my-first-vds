@@ -218,6 +218,14 @@ handshake на exit-узле законно стареет часами и пу�
 gateway `state.json`; на релее с битым/пустым state отказ не сработает — проверьте
 вручную.
 
+**DMS на релее ставится** (SPEC-20261124-quiet-exit §5, P37):
+`vds dms install --role relay --apply` + `DMS_PING_URL` в `/etc/vds/dms.env`
+(0600, уникальный URL Healthchecks). Gate: `awg0` UP + policy `table 100` +
+data-plane активного носителя (`ping -c1 -W3 10.11.0.1` awg / `10.12.0.1`
+wg-ws0); отказ обоих носителей → мгновенный `GET <URL>/fail`. `DMS_PING_URL`
+на реле — осознанный трейд-офф (утечка деградирует мониторинг релея, exit не
+затронут); URL в stdout/journal/`status --json` не печатается (маска `***`).
+
 ### 4.1 Изолированная нога на exit (`awg2`, P24/ADR-015)
 
 Пока не включено в бою: `awg2` и пул портов ставятся отдельной командой на

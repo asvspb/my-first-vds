@@ -88,6 +88,7 @@ table 100 по активному носителю (дефолт awg1, `ip link 
 | certbot + таймер | да | ✅ `acme issue` | — |
 | healthcheck-таймер | да | ✅ `gateway healthcheck --install-timer` | — |
 | сторож угрозы (уведомления) | нет | ✅ `alert install --apply` (exit-узел; на релее запрещён) | §5.15 |
+| DMS-пинг Healthchecks (P37) | нет | ✅ `dms install --role exit\|relay --apply` (оба узла; URL — владелец) | §5.16 |
 | fail2ban, NTP, journald, logrotate, limits | NTP да, остальное default | ❌ не автоматизировано | §3 |
 | Провайдерский файрвол/anti-DDoS | неизвестно | ❌ только панель хостера | §6 |
 | Cloudflare DNS/records | apex + CDN | ❌ только панель/API CF | §6 |
@@ -507,6 +508,23 @@ keepalive (И44), поэтому свежесть handshake в простое н
 **Откат:** `sudo vds alert remove --apply` (юниты сняты, `alert.env` сохранён) →
 `sudo vds alert remove --apply --purge` (удалить `alert.env` и
 `alert-state.json`). UFW/`probe-watch.json`/`state.json` не затрагиваются.
+
+### 5.16 Правило знаний: DMS dead-man-switch `vds-dms-ping` (SPEC-20261124-quiet-exit §5)
+
+| Артефакт | Путь | Права | Заметки |
+|---|---|---|---|
+| `vds-dms-ping.service` / `.timer` | `/etc/systemd/system/` | 0644 | тик 5 мин + RandomizedDelaySec 20s; `[Install]` только у таймера |
+| Конфиг | `/etc/vds/dms.env` | 0600 | `DMS_PING_URL` (секрет, маска `***` в выводе), `DMS_ROLE=exit\|relay`, `DMS_EXIT_HOST` |
+
+Gate: ping только при живых ногах (exit: awg0+awg2+wstunnel-server;
+relay: awg0+table 100+data-plane носителя), отказ → `GET <URL>/fail` мгновенно.
+`RestrictAddressFamilies` юнита включает `AF_INET` — исходящий HTTPS (в отличие
+от alert-watch). Разворачивание — после деплоя ES-1 (quiet-exit, WP-QX-1/2).
+
+**Проверка:** `sudo vds dms test` (реальный GET с gate); `journalctl -u
+vds-dms-ping` — теги `DMS-PING ok|failed|gatefail|skip`, `DMS-FAIL sent`;
+`vds dms status --json` — URL только маской. **Откат:** `sudo vds dms remove
+--apply` (env сохранён); `--purge` удаляет `dms.env`.
 
 ## 6. Провайдер и DNS (руками, без API-токена не автоматизируется)
 

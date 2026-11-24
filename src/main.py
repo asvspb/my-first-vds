@@ -85,6 +85,13 @@ alert_app = typer.Typer(
         "плеча/лок 443 → Telegram/SMTP. Только уведомления; dry-run по умолчанию"
     )
 )
+dms_app = typer.Typer(
+    help=(
+        "DMS — dead-man-switch пинг Healthchecks (SPEC-20261124-quiet-exit §5, "
+        "P37): исходящий HTTPS с gate на живых ногах, /fail при мёртвой ноге. "
+        "dry-run по умолчанию"
+    )
+)
 app.add_typer(zerotier_app, name="zerotier")
 app.add_typer(wireguard_app, name="wireguard")
 app.add_typer(coturn_app, name="coturn")
@@ -100,6 +107,7 @@ gateway_app.add_typer(probe_watch_app, name="probe-watch")
 probe_watch_app.add_typer(probe_rucidr_app, name="ru-cidr")
 app.add_typer(logs_app, name="logs")
 app.add_typer(alert_app, name="alert")
+app.add_typer(dms_app, name="dms")
 
 @app.callback(invoke_without_command=True)
 def main_menu(ctx: typer.Context):
@@ -2341,6 +2349,77 @@ def alert_watch(
     from src.alert.watch import run_tick
 
     raise typer.Exit(run_tick(config_path=config, no_send=no_send))
+
+
+@dms_app.command("install")
+def dms_install(
+    apply: bool = typer.Option(False, "--apply", help="Исполнить (по умолчанию dry-run)"),
+    role: str = typer.Option("exit", "--role", help="Роль узла: exit|relay (gate различается)"),
+    interval: str = typer.Option("5m", "--interval", help="Период тика таймера (5m)"),
+    force: bool = typer.Option(False, "--force", help="Перезаписать существующий dms.env"),
+):
+    """Установить DMS-пинг: юниты + /etc/vds/dms.env (0600).
+
+    Dry-run по умолчанию. Секрет (DMS_PING_URL) в юнит не попадает:
+    процесс читает env сам; URL нигде не печатается.
+
+    Примеры:
+      sudo vds dms install --role exit --apply
+      sudo vds dms install --role relay --apply
+    """
+    from src.dms.cli import cmd_install
+
+    raise typer.Exit(cmd_install(apply=apply, role=role, interval=interval, force=force))
+
+
+@dms_app.command("remove")
+def dms_remove(
+    apply: bool = typer.Option(False, "--apply", help="Исполнить (по умолчанию dry-run)"),
+    purge: bool = typer.Option(False, "--purge", help="Удалить также dms.env"),
+):
+    """Снять юниты DMS (dms.env сохраняется; --purge удаляет и его)."""
+    from src.dms.cli import cmd_remove
+
+    raise typer.Exit(cmd_remove(apply=apply, purge=purge))
+
+
+@dms_app.command("test")
+def dms_test():
+    """Один реальный пинг «руками» (gate + GET или GET /fail; root).
+
+    Без записи state. URL не печатается — только теги DMS-SENT/DMS-FAILED.
+
+    Примеры:
+      sudo vds dms test
+    """
+    from src.dms.cli import cmd_test
+
+    raise typer.Exit(cmd_test())
+
+
+@dms_app.command("status")
+def dms_status(
+    json_out: bool = typer.Option(False, "--json", help="Машиночитаемый JSON (URL маской)"),
+):
+    """Состояние DMS: конфиг (URL маской), юниты. Без root — урезанно."""
+    from src.dms.cli import cmd_status
+
+    raise typer.Exit(cmd_status(json_out=json_out))
+
+
+@dms_app.command("ping")
+def dms_ping(
+    config: str = typer.Option(
+        "/etc/vds/dms.env", "--config", help="Путь к конфигу (в юните — фиксированный)"
+    ),
+):
+    """Служебная команда: один тик DMS (его зовёт таймер). Exit-код всегда 0.
+
+    Пинг только при живых ногах (gate); при мёртвой ноге — GET <URL>/fail.
+    """
+    from src.dms.gate import run_ping_locked
+
+    raise typer.Exit(run_ping_locked(config_path=config))
 
 
 if __name__ == "__main__":

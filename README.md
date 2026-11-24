@@ -60,6 +60,8 @@ vds/
 │   ├── vds-relay-cidr.timer.tpl         #   еженедельное обновление
 │   ├── vds-alert-watch.service.tpl      # сторож угрозы на exit-узле (SPEC-20261117)
 │   ├── vds-alert-watch.timer.tpl        #   тик 2 мин: threat/пульс плеча/лок 443
+│   ├── vds-dms-ping.service.tpl         # DMS dead-man-switch (P37, SPEC-20261124): AF_INET — исходящий HTTPS
+│   ├── vds-dms-ping.timer.tpl           #   тик 5 мин + RandomizedDelaySec 20s; [Install] только у таймера
 │   ├── vds-awg-relay.service.tpl        # exit (ADR-015, P24): awg2 — нога релея
 │   ├── vds-awg-relay-pool.service.tpl   # exit (ADR-015): nft REDIRECT пул 51900-51911
 │   ├── vds-wstunnel-server.service.tpl  # exit (ADR-016): WSS 9443 + WG за --restrict-to
@@ -238,6 +240,16 @@ vds alert status                    # Каналы/юниты/coverage; --json �
 vds alert watch --no-send           # Один тик без отправки и без записи state (отладка)
 vds alert remove --apply            # Снять юниты (alert.env сохраняется; --purge — удалить)
 # Секреты сторожа живут только в /etc/vds/alert.env (0600); в юнит не попадают.
+
+vds dms install --role exit --apply   # DMS-пинг Healthchecks (P37, SPEC-20261124-quiet-exit §5):
+vds dms install --role relay --apply  #   юниты vds-dms-ping + /etc/vds/dms.env (0600); dry-run без --apply
+vds dms test                        # Один реальный пинг «руками» (root): gate + GET или GET <URL>/fail
+vds dms status --json               # Роль/конфиг/юниты; URL только маской "***"
+vds dms ping                        # ExecStart юнита: gate по роли → GET или /fail; exit всегда 0
+vds dms remove --apply --purge      # Снять юниты (+ удалить dms.env)
+# Ping уходит только при живых ногах (gate): exit = awg0+awg2+wstunnel-server;
+# relay = awg0 UP + table 100 + data-plane носителя (10.11.0.1 | 10.12.0.1).
+# Отказ gate → мгновенный GET <URL>/fail. URL нигде не печатается.
 # Сторож только уведомляет: probe-watch.json, state.json, UFW он не меняет.
 # На RU-рееле install отказывает (--allow-relay-node делать не надо).
 
@@ -427,6 +439,7 @@ Gateway-таймеры (ставятся по явной команде, не п
 | `vds-logs-daily.timer` (`vds-logs-daily.service.tpl`/`vds-logs-daily.timer.tpl`) | ежедневный отчёт/ротация лог-конвейера (ADR-012); `ReadWritePaths=/var/lib/vds /var/run` (runtime-lock) | `vds logs install --apply` |
 | `vds-alert-watch.timer` (`vds-alert-watch.service.tpl`/`vds-alert-watch.timer.tpl`) | сторож угрозы на exit-узле: threat из `probe-watch.json`, пульс плеча relay→exit по `awg show <iface> dump` (`ALERT_RELAY_IFACE` — список `awg2,wg-ws0`, ok если жив любой; ключ пира — из `protocols["relay_leg"]` для awg2 и `protocols["p2p_wstunnel"]` для wg-ws0), лок 443; доставка в Telegram/SMTP, heartbeat раз в сутки (SPEC-20261117); `ReadWritePaths=/var/lib/vds /var/run`; `RestrictAddressFamilies` включает `AF_NETLINK` (иначе `awg show` → «Address family not supported») | `vds alert install --apply` |
 | `vds-relay-maneuver.timer` (`vds-relay-maneuver.service.tpl`/`vds-relay-maneuver.timer.tpl`) | opt-in тик манёвра ноги relay→exit (ADR-015/P25 WP-M4): `state`-тег в journal, exit-код всегда 0; `ReadWritePaths=/var/lib/vds /var/run /etc/amnezia` (persist Endpoint), `CAP_NET_ADMIN CAP_NET_RAW`, `AF_NETLINK`; авторежим по умолчанию **выкл** | `vds relay maneuver install --apply [--enable-auto]` |
+| `vds-dms-ping.timer` (`vds-dms-ping.service.tpl`/`vds-dms-ping.timer.tpl`) | DMS dead-man-switch (P37, SPEC-20261124-quiet-exit §5): тик 5 мин + RandomizedDelaySec 20s; gate на живых ногах (exit: awg0+awg2+wstunnel-server; relay: awg0+table 100+data-plane носителя), отказ → `GET <DMS_PING_URL>/fail` мгновенно; sandbox: `RestrictAddressFamilies` включает `AF_INET` (исходящий HTTPS — в отличие от alert-watch); `[Install]` только у таймера; URL не печатается нигде | `vds dms install --role exit\|relay --apply` (оба узла) |
 
 Таймеры ZeroTier (архив) активируются **только** при явной установке
 `vds zerotier install` (опциональный сценарий):
@@ -479,6 +492,7 @@ journalctl -u vds-watchdog -n 20
 | `/etc/letsencrypt/live/<domain>/` | LE-сертификаты (ACME, HTTP-01) |
 | `/usr/local/bin/vds` | Симлинк команды `vds` |
 | `/etc/vds/alert.env` | Каналы и параметры сторожа угрозы (0600; единственный носитель TG-токена и SMTP App Password) |
+| `/etc/vds/dms.env` | Конфиг DMS-пинга (0600): `DMS_PING_URL` (секрет, маскируется в выводе), `DMS_ROLE=exit\|relay`, `DMS_EXIT_HOST` |
 | `/var/lib/vds/alert-state.json` | Состояние сторожа: последние отправки, окно лимита, backoff каналов (0600) |
 | `/etc/systemd/system/vds-*.service` | Systemd-сервисы |
 
