@@ -44,7 +44,7 @@ src/
 ├── hysteria2/           # QUIC (443): adapter, install, clients, config, hop, obfs, status, sysctl, remove
 ├── amneziawg/           # AmneziaWG (UDP 51825): install, clients (add — рестарт; remove — живое awg set peer remove без рестарта, P24), status, remove
 ├── relay/               # RU-relay (ADR-007): init, status, clients, cidr (AWG udp/443 + Reality tcp/443 + policy-routing до exit-ноды)
-├── acme/                # ACME/LE: issue (HTTP-01) + deploy-hook для Hysteria2
+├── acme/                # ACME/LE: issue (HTTP-01) + deploy-hook для Hysteria2; window_hook (окно 80/tcp: pre/open + post/close, check-80-window — SPEC-20261124)
 ├── gateway/             # paths, store (state.json 0600), links, blockcheck, init (идемпотентное развёртывание), probing (probe-watch: телеметрия+threat-level+auto-lockdown+verified_session_ips anti Self-DoS, SPEC probe-response; probers4 на tcp/{443,8443,2053} + быстрый контур fast_contour_check в 5-мин сэмплере vds-logs-sample, SPEC probe-coverage W1-1; RU-PROBE-SUSPECT = syn_valid + syn_valid_extra + порог Σ delta ≥ 6 по новым RU-IP, новизна 24 ч (seen_ru_ips, время — aware UTC), decay выходит из high за 24 окна, PROBE-BURST — только 443), probing_rucidr (RU-CIDR)
 ├── sysinfo/             # dashboard
 ├── logs/                # log-forensics (ADR-012): install, collect (sample), report/analyze, capture
@@ -78,10 +78,13 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 
 | Команда | Что делает |
 |---|---|
+| `vds gateway init --profile quiet-exit --relay-ip <IP> [--relay-pubkey <pub>] [--ws-domain ws.<domain>] [--acme-email <email>] [--ws-prefix-file <file>] --apply` | Тихий exit (SPEC-20261124 WP-QX-1): awg0 + oob-laptop + UFW allowlist + ACME-окно 80/tcp + (pending без pubkey) exit-leg/wstunnel; НЕ ставит xray/hysteria2/zerotier/coturn/healthcheck/probe-таймеры (P0-2); `--protocols` с прямыми транспортами → exit 2; state.protocols["quiet_exit"]={installed, relay_ips, oob_ssh_only, pending} (P1-4/P1-8: повторный init дозавершает, смена RELAY_IP аддитивна) |
+| `vds acme issue … --window-80` / `vds acme check-80-window` | Окно HTTP-01 (SPEC P1-5): 80/tcp открывается ДО certbot, закрытие в finally + renewal-hooks pre/open + post/close (маркер /run/vds-acme-80-opened, post выполняется certbot всегда); периодический чек: 80 открыт вне окна → WARN exit 1 |
 | `python -m src.main --help` | Справка CLI |
 | `python -m src.main` | TUI-меню |
 | `python -m src.main sysinfo` | Dashboard |
 | `vds system ufw harden --profile gateway/relay/exit-cascade` | Идемпотентный UFW hardening (SPEC-20261116; dry-run по умолчанию, `--apply`, `--undo`; hop-диапазон из state нормализуется `-`→`:`) |
+| `vds system ufw harden --profile quiet-exit [--no-direct-awg --yes-i-have-vnc] [--close-public-ssh] [--apply]` | Тихий exit (SPEC-20261124 WP-QX-1): 0 публичных TCP; 51825/udp + per-RELAY_IP 51900/udp и 9443/tcp + OOB-1 (`allow in on awg0 to 10.9.0.1 port <ssh>`); `_PROTOCOL_RULES` игнорируются — 80/443/8443/2053 не открываются (закрытие TECHDEBT P39); слушатели 443/8443/2053 → ERROR, план НЕ применяется; lock-443 guard инертен (P0-2). `--no-direct-awg` требует `--yes-i-have-vnc` (P1-7). Фаза 2 `--close-public-ssh --apply` (деструктивно): preflight awg0 UP + fresh handshake oob-laptop ≤3 мин + sshd, провал → abort exit 1; state `quiet_exit.oob_ssh_only=True` |
 | `vds system ufw ssh-port --to 49222 [--finalize]` | Двухфазный перенос SSH-порта (22 закрывается только `--finalize`; откат Фазы A сам перезапускает ssh.socket/ssh, drop-in 0644) |
 | `vds relay init --exit <ip> --domain <домен> --sni <RU_SNI> --apply` | RU-relay (ADR-007): AWG udp/443 + Reality tcp/443 + policy-routing до exit-ноды; целевая ОС — Ubuntu 24.04 (`docs/DEPLOY-RU-RELAY.md`) |
 | `vds relay add-client NAME [--endpoint HOST[:PORT]] [--dns IP[,IP]] [--qr]` | Пир awg0 + .conf 0600 (MTU 1280, `AllowedIPs = 0.0.0.0/0` v4-only, `DNS = 1.1.1.1, 1.0.0.1` через exit); endpoint = домен клиентов (имя машины пропускается, нерезолв → IP сервера, P22); `--qr` — ANSIUTF8 в терминале через stdin (без qrencode — warning), P23 |

@@ -670,3 +670,11 @@ wstunnel: HTTP-01 с открытием 80/tcp на 30 с в pre/post-hook (по
 0 open TCP; `relay carrier status` — оба носителя зелёные; ssh 10.9.0.1 OK.
 Комбайн (Hy2/XHTTP/direct-Reality/CDN) на exit — снят (Q2-PRI, dormant-код,
 клиентские профили → `vpn profile archive`).
+
+Реализация кода (WP-QX-1, SPEC-20261124): профиль UFW `quiet-exit` и
+`gateway init --profile quiet-exit` (pending-семантика `--relay-pubkey`,
+P1-4); прямые транспорты с профилем — fail-fast exit 2; закрытие
+публичного SSH — Фаза 2 `harden --close-public-ssh --apply` с preflight
+fresh-handshake oob-laptop ≤3 мин (P1-3); окно 80/tcp — `acme issue
+--window-80` + renewal-hooks pre/open + post/close + периодический чек
+`vds acme check-80-window` (P1-5).

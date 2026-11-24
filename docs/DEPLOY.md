@@ -78,6 +78,11 @@ vds gateway init --apply \
 | `--demo-clients` | off | создать phone/mob/laptop и напечатать ссылки |
 | `--apply` | off | исполнить (иначе dry-run) |
 | `--require-domain` | off | DNS не подтверждён → exit 1 вместо skip с warning |
+| `--profile quiet-exit` | — | профиль тихого exit (SPEC-20261124): relay-only; подробности ниже |
+| `--relay-ip` | — | quiet-exit: IPv4 релея (allowlist 51900/udp + 9443/tcp; обязателен, fail-fast exit 2) |
+| `--relay-pubkey` | — | quiet-exit: публичный ключ awg1 релея; без него exit-leg/wstunnel — pending (P1-4), повторный init дозавершает |
+| `--ws-domain` | — | quiet-exit: домен сертификата wstunnel (`ws.<domain>`) |
+| `--ws-prefix-file` | — | quiet-exit: prefix-файл релея (`/etc/vds/wstunnel-client.env`) для wstunnel server |
 
 Шаги: Reality → Hysteria2 → (домен) ACME → apply-cert → use-domain → XHTTP → CDN
 → obfs → hop → AmneziaWG → healthcheck-таймер. Уже установленное скипается по
@@ -85,6 +90,29 @@ state (расхождение state/мёртвый юнит — warning и пе�
 не резолвящемся в публичный IP, доменные шаги (ACME/XHTTP/CDN) пропускаются с
 warning, остальное ставится. Занятый чужим процессом порт → fail **до** любых
 изменений, с владельцем порта. Повторный вызов — «изменений не требуется», exit 0.
+
+#### Профиль quiet-exit (SPEC-20261124-quiet-exit, WP-QX-1)
+
+`--profile quiet-exit` — развёртывание «тихого» exit-узла (DECISION Q1-PRI:
+vpn start = relay-only). Вместе с `--protocols`, содержащим любой из
+reality/hysteria2/xhttp/cdn/obfs/hop/awg — fail-fast **exit 2**; `--relay-ip`
+обязателен (IPv4, P1-6 allowlist v4-only).
+
+Ставится: amneziawg (awg0 51825/udp + admin-клиент `oob-laptop` — OOB-1),
+ACME `ws.<domain>` c окном 80/tcp (`--window-80`, P1-5), нога релея
+(exit-leg awg2) и wstunnel server (9443/tcp) — **pending** без
+`--relay-pubkey`/prefix-файла релея (дозавершаются повторным init),
+UFW harden `quiet-exit`, alert-watch. **НЕ ставится** (P0-2): xray,
+hysteria2, zerotier, coturn, `vds-gateway-health.timer`, probe-watch /
+probe-rucidr. Состояние: `state.protocols["quiet_exit"] = {installed,
+relay_ips, oob_ssh_only, pending, ws_domain, no_direct_awg}` (аддитивно,
+FileLock; смена RELAY_IP — правка `relay_ips` + re-harden, P1-8).
+
+Фаза 2 (закрыть публичный SSH, IQ-3) — отдельная операция **после** живого
+OOB-1: `sudo vds system ufw harden --profile quiet-exit --close-public-ssh
+--apply` — preflight awg0 UP + fresh handshake пира oob-laptop ≤3 мин
+(`awg show awg0`, P1-3) + sshd listener; любой провал → abort exit 1 без
+изменений. DMS (P37) — WP-QX-4, отдельный шаг после реализации.
 
 ### Приёмка на чистой VM/VDS (чеклист)
 
@@ -139,6 +167,14 @@ vds xray use-domain --domain example.com
 - `acme issue` — выпуск LE-сертификата + deploy-hook (P28: фильтр
   `${RENEWED_DOMAINS:-}` — рестарт только своего сертификата, skip-ветка
   «уже выдан» hook всё равно перегенерирует); «уже выдан» → exit 0.
+- `acme issue --window-80` (quiet-exit, P1-5): при валидном существующем
+  сертификате certbot не запускается и окно не открывается; при выдаче
+  80/tcp открывается ДО certbot и закрывается в finally; renewal-hooks
+  `pre/vds-acme-80-open.sh` + `post/vds-acme-80-close.sh` (маркер
+  `/run/vds-acme-80-opened`) обслуживают штатный certbot.timer renew.
+- `vds acme check-80-window` — периодический fail-safe чек: 80/tcp открыт
+  вне окна → `[warning]` + exit 1 (алерт); stale-маркер без правила —
+  подчищается.
 - `add-transport xhttp`:
   - `--mode port` — XHTTP на публичном порту **8443** (рекомендуется при DPI-давлении);
   - `--mode fallback` — SNI-разделение за Reality на 443;

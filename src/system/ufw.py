@@ -178,6 +178,22 @@ class PlanItem:
 class HardeningOpts:
     allow_from: Optional[str] = None  # IP релея для exit-cascade
     ssh_port: Optional[int] = None  # переопределение; иначе из state (pending/final)
+    no_direct_awg: bool = False  # quiet-exit: не открывать 51825/udp (SPEC P1-7)
+    yes_i_have_vnc: bool = False  # quiet-exit: подтверждение VNC-пути для --no-direct-awg
+
+
+# ---------------------------------------------------------------------------
+# quiet-exit профиль (SPEC-20261124-quiet-exit §2, §10 P0-1/P1-3/P1-6/P1-7)
+# ---------------------------------------------------------------------------
+
+QUIET_EXIT_KEY = "quiet_exit"  # ключ state.protocols
+QUIET_EXIT_AWG_PORT = 51825  # OOB-1 (awg0)
+QUIET_EXIT_LEG_PORTS = (("51900", "udp"), ("9443", "tcp"))  # allowlist RELAY_IP
+QUIET_EXIT_FORBIDDEN_PORTS = ("443", "8443", "2053")  # слушатель → нарушение
+QUIET_EXIT_AWG_IFACE = "awg0"
+QUIET_EXIT_OOB_PEER = "oob-laptop"  # admin-клиент OOB-1 (init ставит его)
+QUIET_EXIT_HANDSHAKE_FRESH_S = 180  # fresh handshake пира OOB-1 ≤ 3 мин (P1-3)
+AWG0_CONF_PATH = Path("/etc/amnezia/awg0.conf")
 
 
 def _now_iso() -> str:
@@ -362,14 +378,33 @@ _PROTOCOL_RULES: dict[str, tuple[str, str]] = {
 }
 
 
+def quiet_exit_relay_ips(state: GatewayState) -> list[str]:
+    """RELAY_IP-allowlist из state.protocols['quiet_exit'].relay_ips (P1-4/P1-8)."""
+    meta = state.protocols.get(QUIET_EXIT_KEY) or {}
+    raw = meta.get("relay_ips")
+    if not isinstance(raw, list):
+        return []
+    return [str(ip).strip() for ip in raw if str(ip).strip()]
+
+
 def profile_service_specs(state: GatewayState, profile: str) -> tuple[list[str], list[tuple[str, str]]]:
     """Набор правил профиля: [(spec|from-spec, src)], 443-транспорты для каскада.
 
     Возвращает (specs, cascade_443) где cascade_443 = [("tcp"|"udp", transport)].
+    quiet-exit (SPEC-20261124 §2/P0-1): игнорирует _PROTOCOL_RULES кроме
+    amneziawg (закрывает TECHDEBT P39 — 80/tcp автоматически не открывается);
+    per relay_ip: allow 51900/udp + 9443/tcp; 51825/udp — если не --no-direct-awg.
     """
     protocols = state.protocols
     specs: list[str] = []
     cascade_443: list[tuple[str, str]] = []
+    if profile == "quiet-exit":
+        if not _quiet_exit_no_direct_awg(state):
+            specs.append(f"{QUIET_EXIT_AWG_PORT}/udp")
+        for ip in quiet_exit_relay_ips(state):
+            for port, proto in QUIET_EXIT_LEG_PORTS:
+                specs.append(f"from {ip} to any port {port} proto {proto}")
+        return specs, []
     if profile == "relay":
         # ADR-007: AWG udp/443 + Reality tcp/443; relay init сам делает
         # `ufw allow 443/udp` — harden детектирует и печатает [skip].
@@ -401,6 +436,42 @@ def profile_service_specs(state: GatewayState, profile: str) -> tuple[list[str],
         # одно правило на весь диапазон, напр. "20000:20500/udp" (SPEC §9)
         specs.append(hop_spec if "/" in hop_spec else f"{hop_spec}/udp")
     return specs, cascade_443
+
+
+def _quiet_exit_no_direct_awg(state: GatewayState) -> bool:
+    """--no-direct-awg из state.meta quiet_exit (флаг записывается harden'ом)."""
+    meta = state.protocols.get(QUIET_EXIT_KEY) or {}
+    return bool(meta.get("no_direct_awg"))
+
+
+def quiet_exit_violations(ss_lines: Optional[list[str]]) -> list[str]:
+    """Слушатели на 443/8443/2053 (не loopback) — ERROR «нарушение quiet-exit»."""
+    if ss_lines is None:
+        return []
+    out: list[str] = []
+    for line in ss_lines:
+        parts = line.split()
+        if len(parts) < 4 or parts[0] != "LISTEN":
+            continue
+        local = parts[3]
+        if "@" not in local and local.count(":") == 0:
+            continue
+        try:
+            port = local.rsplit(":", 1)[1]
+        except IndexError:
+            continue
+        if not port.isdigit() or port not in QUIET_EXIT_FORBIDDEN_PORTS:
+            continue
+        if local.startswith("127.") or local.startswith("[::1]") or local.startswith("::1"):
+            continue
+        who = ""
+        mu = re.search(r'\(\("([^"]+)"', line[line.find("users:("):] if "users:(" in line else "")
+        if mu:
+            who = f" [{mu.group(1)}]"
+        out.append(
+            f"нарушение quiet-exit: слушатель {port} (TCP-портов не должно быть: {port}/tcp{who})"
+        )
+    return out
 
 
 def resolve_ssh_ports(state: GatewayState, opts: HardeningOpts) -> list[int]:
@@ -443,8 +514,10 @@ def build_plan(
     ss_lines: Optional[list[str]] = None,
 ) -> list[PlanItem]:
     """План hardening: defaults → ssh-лимит → сервисные порты → forwarding → enable."""
-    if profile not in ("gateway", "relay", "exit-cascade"):
-        raise UfwError(f"Неизвестный профиль {profile!r} (gateway|relay|exit-cascade)")
+    if profile not in ("gateway", "relay", "exit-cascade", "quiet-exit"):
+        raise UfwError(
+            f"Неизвестный профиль {profile!r} (gateway|relay|exit-cascade|quiet-exit)"
+        )
     plan: list[PlanItem] = []
 
     # 1. defaults (до enable не активны — SPEC §1.10.2)
@@ -465,7 +538,40 @@ def build_plan(
 
     # 3. сервисные порты профиля (SPEC §1.10.4)
     specs, cascade_443 = profile_service_specs(state, profile)
-    if profile == "exit-cascade":
+    if profile == "quiet-exit" and opts.no_direct_awg:
+        # P1-7: --no-direct-awg в этом прогоне — 51825/udp не открывается
+        # (state-флаг записывается в run_harden для последующих прогонов)
+        specs = [s for s in specs if s != f"{QUIET_EXIT_AWG_PORT}/udp"]
+    if profile == "quiet-exit":
+        if opts.no_direct_awg and not opts.yes_i_have_vnc:
+            raise UfwError(
+                "--no-direct-awg закрывает 51825/udp → OOB-1 умирает, единственный "
+                "fallback — VNC-консоль (SPEC P1-7). Подтвердите: --yes-i-have-vnc."
+            )
+        if not opts.no_direct_awg:
+            plan.append(PlanItem(
+                "check",
+                "Фаза 1 (IQ-3): публичный SSH limit ОСТАЁТСЯ до проверки OOB-1 "
+                "(ssh 10.9.0.1) — закрытие отдельным `harden --close-public-ssh --apply`",
+                "warn",
+            ))
+        # OOB-1: allow in on awg0 to 10.9.0.1 port <ssh> (v4-only, P1-6).
+        # Детекция дубля через snapshot-парсер для interface-правил ненадёжна —
+        # ufw сам идемпотентен на apply («Skipping adding»).
+        oob_spec = (
+            f"in on {QUIET_EXIT_AWG_IFACE} to 10.9.0.1 port "
+            f"{final_ssh_port(state)} proto tcp"
+        )
+        plan.append(PlanItem(
+            "rule", f"ufw allow {oob_spec} (OOB-1)", "add",
+            {"action": "allow", "spec": oob_spec},
+        ))
+        for spec in specs:
+            plan.append(_rule_item("allow", spec, snapshot))
+        # слушатели 443/8443/2053 → ERROR (нарушение quiet-exit, SPEC §10 P0-1)
+        for viol in quiet_exit_violations(ss_lines):
+            plan.append(PlanItem("check", viol, "warn"))
+    elif profile == "exit-cascade":
         if not opts.allow_from:
             raise UfwError(
                 "Профиль exit-cascade требует --allow-from <relay-ip>: без него "
@@ -529,6 +635,9 @@ def build_plan(
         ports = set(specs)
         # Слушатель P_base ноги открыт from-правилом; для сверки слушателей
         # он всё равно «покрыт» (P1-2).
+        if profile == "quiet-exit":
+            # штатные слушатели: 51900/udp, 9443/tcp (allowlist RELAY_IP) + 51825/udp
+            ports |= {f"{p}/{pr}" for p, pr in QUIET_EXIT_LEG_PORTS}
         leg = state.protocols.get("relay_leg") or {}
         if leg.get("installed"):
             ports.add(f"{leg.get('base_port') or 51900}/udp")
@@ -707,8 +816,9 @@ def run_harden(
 
     # Guard SPEC §9.C: harden при активном локе 443 — отказ (журналы не смешиваются);
     # обход только осознанным --force с записью в журнал лока.
+    # quiet-exit (P0-2): путь lock-443 инертен (нет широких TCP-портов) — guard не применяется.
     ld_state = get_lockdown(state)
-    if ld_state["active"]:
+    if ld_state["active"] and profile != "quiet-exit":
         if apply and not force:
             console.print(
                 "[error][ufw] Активен lock-443 — harden отказан (SPEC §9.C: смесь журналов "
@@ -748,9 +858,23 @@ def run_harden(
     for item in plan:
         tag = {"add": "add", "skip": "skip", "warn": "warning"}[item.action]
         console.print(f"  [{tag}] {item.detail}")
+    # quiet-exit: слушатели 443/8443/2053 — ERROR, план не применяется (SPEC §10 P0-1)
+    if profile == "quiet-exit" and any("нарушение quiet-exit" in p.detail for p in plan):
+        console.print(
+            "[error][ufw] quiet-exit: обнаружены слушатели на запрещённых TCP-портах "
+            "(443/8443/2053) — план НЕ применяется. Снимите транспорты "
+            "(`vds xray remove --apply` и т.п.) и повторите.[/error]"
+        )
+        return 1
     if not apply:
         console.print("[info][ufw] Dry-run: ничего не изменено. Для применения — --apply.[/info]")
         return 0
+    # quiet-exit: зафиксировать флаг --no-direct-awg в state (P1-7; файл-правды для
+    # повторных прогонов harden)
+    if profile == "quiet-exit":
+        qx_meta = dict(state.protocols.get(QUIET_EXIT_KEY) or {})
+        qx_meta["no_direct_awg"] = bool(opts.no_direct_awg)
+        state.protocols[QUIET_EXIT_KEY] = qx_meta
 
     with FileLock(lock_path or LOCK_PATH):
         snapshot = _ufw_snapshot_combined()
@@ -960,6 +1084,192 @@ def run_undo(
 # ---------------------------------------------------------------------------
 # ssh-port: двухфазный перенос (WP-2b)
 # ---------------------------------------------------------------------------
+
+_AWG_SHOW_PEER = re.compile(r"^peer:\s*([A-Za-z0-9+/=]{40,})\s*$", re.MULTILINE)
+_AWG_SHOW_HANDSHAKE = re.compile(
+    r"latest handshake:\s*([^,\n]+)(?:,\s*([0-9]+)\s*(seconds?|secs?))?\s*ago\s*$",
+    re.MULTILINE,
+)
+
+
+def _handshake_seconds(spec: str, extra_seconds: int = 0) -> int:
+    """'1 minute, 12 seconds ago' → 72 (секунды); '1 day, ...' → большое число.
+
+    Чистая функция для тестов. Непарсящаяся строка — большое число (не fresh).
+    """
+    text = spec.strip().lower()
+    total = extra_seconds
+    for count, unit in re.findall(r"(\d+)\s*(day|hour|minute|second|min|sec)s?", text):
+        n = int(count)
+        if unit.startswith("day"):
+            total += n * 86400
+        elif unit.startswith("hour"):
+            total += n * 3600
+        elif unit.startswith("min"):
+            total += n * 60
+        else:
+            total += n
+    return total if text else 10**9
+
+
+def awg0_fresh_handshake(
+    conf_path: Optional[Path] = None,
+    peer_name: str = QUIET_EXIT_OOB_PEER,
+    fresh_s: int = QUIET_EXIT_HANDSHAKE_FRESH_S,
+) -> tuple[bool, str]:
+    """Preflight OOB-1 (SPEC §10 P1-3): у пира `peer_name` интерфейса awg0
+    свежий handshake (≤ fresh_s секунд)? Возвращает (ok, диагностическое
+    сообщение без ключей)."""
+    conf_path = conf_path or AWG0_CONF_PATH
+    if not conf_path.is_file():
+        return False, f"конфиг {conf_path} отсутствует (amneziawg не установлен?)"
+    try:
+        conf_text = conf_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return False, f"конфиг {conf_path} не читается: {exc}"
+    bounds = _peer_block_bounds_quiet(conf_text, peer_name)
+    if bounds is None:
+        return False, f"пир '{peer_name}' не найден в {conf_path}"
+    pubkey = ""
+    for line in conf_text.split("\n")[bounds[0]:bounds[1]]:
+        if line.strip().startswith("PublicKey = "):
+            pubkey = line.split("=", 1)[1].strip()
+            break
+    if not pubkey:
+        return False, f"PublicKey пира '{peer_name}' не найден в конфиге"
+    res = run_list(["awg", "show", "awg0"], timeout=10)
+    if not res.ok:
+        return False, "awg show awg0 не удался (интерфейс не поднят?)"
+    peers = [m.group(1) for m in _AWG_SHOW_PEER.finditer(res.stdout)]
+    if not peers:
+        return False, "awg show awg0: ни одного пира не видно"
+    for m in _AWG_SHOW_PEER.finditer(res.stdout):
+        if m.group(1) != pubkey:
+            continue
+        tail = res.stdout[m.start():]
+        hm = _AWG_SHOW_HANDSHAKE.search(tail)
+        if not hm:
+            return False, f"пир '{peer_name}' есть, но handshake ещё не было"
+        seconds = _handshake_seconds(hm.group(1), int(hm.group(2) or 0))
+        if seconds <= fresh_s:
+            return True, f"handshake пира '{peer_name}' свежий (~{seconds} с)"
+        return False, (
+            f"handshake пира '{peer_name}' устарел (~{seconds} с > {fresh_s} с) — "
+            "подключитесь по OOB-1 (ssh 10.9.0.1) и повторите"
+        )
+    return False, f"пир '{peer_name}' не поднят на awg0 (нет в live-состоянии)"
+
+
+def _peer_block_bounds_quiet(text: str, name: str) -> Optional[tuple[int, int]]:
+    """[Peer]-блок с комментарием `# name` — та же разметка, что в amneziawg/clients."""
+    lines = text.split("\n")
+    peer_indices = [i for i, ln in enumerate(lines) if ln.strip() == "[Peer]"]
+    for idx, start in enumerate(peer_indices):
+        end = peer_indices[idx + 1] if idx + 1 < len(peer_indices) else len(lines)
+        if any(ln.strip() == f"# {name}" for ln in lines[start:end]):
+            return start, end
+    return None
+
+
+def run_close_public_ssh(
+    apply: bool = False,
+    state_path: Optional[str] = None,
+    lock_path: Optional[str] = None,
+) -> int:
+    """Фаза 2 quiet-exit (SPEC IQ-3/§10 P1-3): закрыть публичный SSH.
+
+    Деструктивная операция (явное подтверждение — --apply). Preflight
+    (любой провал → exit 1, изменений нет): awg0 UP + свежий handshake пира
+    oob-laptop (≤ 3 мин, `awg show awg0`) + sshd listener жив. Применение:
+    удалить limit/allow публичных ssh-портов (22 и/или pending N);
+    state.protocols['quiet_exit'].oob_ssh_only = True.
+    """
+    if apply and os.geteuid() != 0:
+        console.print("[error][ufw-qx] --apply требует root (sudo).[/error]")
+        return 2
+    if not command_exists("ufw"):
+        console.print("[error][ufw-qx] ufw не установлен.[/error]")
+        return 1
+    try:
+        state = load_state(state_path)
+    except StoreError as exc:
+        console.print(f"[error][ufw-qx] {exc}[/error]")
+        return 1
+
+    ssh_ports = resolve_ssh_ports(state, HardeningOpts())
+    # Preflight 1: awg0 UP + fresh handshake пира OOB-1 (P1-3)
+    ok, detail = awg0_fresh_handshake()
+    console.print(
+        f"[{'success' if ok else 'error'}][ufw-qx] preflight OOB-1: {detail}[/{'success' if ok else 'error'}]"
+    )
+    if not ok:
+        return 1
+    # Preflight 2: sshd listener жив (после закрытия вход остаётся через OOB-1)
+    listener_port = ssh_ports[-1]
+    if not port_listening(listener_port):
+        console.print(
+            f"[error][ufw-qx] sshd не слушает порт {listener_port} — отказ "
+            "(проверьте sshd, затем повторите).[/error]"
+        )
+        return 1
+
+    snapshot = _ufw_snapshot_combined()
+    plan: list[PlanItem] = []
+    for port in ssh_ports:
+        for action in ("limit", "allow"):
+            spec = f"{port}/tcp"
+            if snapshot.has(action, spec):
+                plan.append(PlanItem(
+                    "rule", f"ufw delete {action} {spec}", "add",
+                    {"action": action, "spec": spec, "delete": True},
+                ))
+    console.print(
+        "[info][ufw-qx] Фаза 2: закрытие публичного SSH (вход только через "
+        f"OOB-1: ssh 10.9.0.1 -p {listener_port}). План:[/info]"
+    )
+    for item in plan:
+        console.print(f"  [{item.action}] {item.detail}")
+    if not plan:
+        console.print("[info][ufw-qx] публичных ssh-правил уже нет (идемпотентно).[/info]")
+    if not apply:
+        console.print(
+            "[info][ufw-qx] Dry-run: ничего не изменено. Для закрытия — "
+            "--apply (деструктивно; убедитесь, что OOB-1 работает, ВТОРОЙ "
+            "терминал держать открытым, VNC-путь доступен).[/info]"
+        )
+        return 0
+
+    with FileLock(lock_path or LOCK_PATH):
+        snapshot = _ufw_snapshot_combined()
+        for port in ssh_ports:
+            for action in ("limit", "allow"):
+                spec = f"{port}/tcp"
+                if not snapshot.has(action, spec):
+                    continue
+                res = run_list(["ufw", "delete", action, spec], timeout=15)
+                out = (res.stdout + res.stderr).lower()
+                if res.ok or "could not" in out or "not found" in out:
+                    console.print(f"[success][ufw-qx] удалено: ufw delete {action} {spec}[/success]")
+                else:
+                    console.print(
+                        f"[error][ufw-qx] ufw delete {action} {spec} не удался: "
+                        f"{res.stderr.strip() or res.stdout.strip()}[/error]"
+                    )
+                    return 1
+        qx_meta = dict(state.protocols.get(QUIET_EXIT_KEY) or {})
+        qx_meta.update({"oob_ssh_only": True, "closed_ts": _now_iso()})
+        state.protocols[QUIET_EXIT_KEY] = qx_meta
+        try:
+            save_state(state, state_path)
+        except (StoreError, OSError) as exc:
+            console.print(f"[error][ufw-qx] Правила удалены, но state не сохранён: {exc}[/error]")
+            return 1
+    console.print(
+        "[success][ufw-qx] Публичный SSH закрыт. Вход: OOB-1 "
+        f"(ssh 10.9.0.1 -p {listener_port}); fallback при отказе awg0 — "
+        "VNC-консоль хостера.[/success]"
+    )
+    return 0
 
 
 def ssh_socket_active() -> bool:

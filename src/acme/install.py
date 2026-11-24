@@ -295,8 +295,15 @@ def run_issue(
     email: str,
     dry_run: bool = False,
     state_path: str | None = None,
+    window_80: bool = False,
 ) -> int:
-    """Точка входа `vds acme issue`. 0 — успех (в т.ч. «уже выдан» / dry-run)."""
+    """Точка входа `vds acme issue`. 0 — успех (в т.ч. «уже выдан» / dry-run).
+
+    window_80=True (SPEC-20261124 quiet-exit P1-5): при НЕвалидном сертификате
+    80/tcp открывается ДО certbot и закрывается в finally (primary-выдача в
+    30-с окне; renewal-hook'и — src/acme/window_hook.py). При валидном
+    существующем сертификате certbot не запускается — окно не открывается.
+    """
     tag = "[acme]"
     if os.geteuid() != 0:
         console.print(f"[error]{tag} Требуется root (запустите через sudo).[/error]")
@@ -355,12 +362,36 @@ def run_issue(
         if install_certbot() != 0:
             return 1
 
+    from src.acme.window_hook import close_80_window, install_window_hooks, open_80_window
+
+    need_window = window_80 and not (
+        already and (cert_days_left(ACME_LETSENCRYPT_LIVE(domain) / FULLCHAIN_NAME) or 0) > 0
+    )
     with FileLock(LOCK_FILE):
+        window_opened = False
         try:
-            info = issue_certificate(domain, email)
-        except AcmeError as exc:
-            console.print(f"[error]{tag} {exc}[/error]")
-            return 1
+            if need_window:
+                if not install_window_hooks():
+                    console.print(
+                        f"[error]{tag} renewal-hook'и окна 80/tcp не установлены — "
+                        "выдача прервана (quiet-exit: вне окна 80 закрыт).[/error]"
+                    )
+                    return 1
+                if not open_80_window():
+                    console.print(
+                        f"[error]{tag} окно 80/tcp не открылось — выдача прервана.[/error]"
+                    )
+                    return 1
+                window_opened = True
+            try:
+                info = issue_certificate(domain, email)
+            except AcmeError as exc:
+                console.print(f"[error]{tag} {exc}[/error]")
+                return 1
+        finally:
+            if window_opened:
+                # P1-5: закрытие окна в finally — certbot падает, окно всё равно закрыто
+                close_80_window()
 
         if not info["issued"]:
             console.print(

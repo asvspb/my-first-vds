@@ -43,12 +43,25 @@ from src.gateway.paths import (
     XHTTP_INTERNAL_PORT,
     XRAY_UNIT,
 )
+from src.relay.paths import EXIT_LEG_UNIT
 from src.gateway.store import GatewayState, StoreError, load_state
 
 VALID_PROTOCOLS = ("reality", "hysteria2", "obfs", "hop", "xhttp", "cdn", "awg")
 DEFAULT_PROTOCOLS = "reality,hysteria2"
 DEFAULT_SNI = "www.google.com"
 DEFAULT_HOP_RANGE = "20000-20500"
+
+# quiet-exit профиль (SPEC-20261124-quiet-exit §2, §10 P0-2/P1-4):
+# relay-only exit — прямые транспорты (Reality/Hy2/XHTTP/CDN/obfs/hop)
+# на этом узле запрещены; awg-ветка --protocols тоже не используется
+# (awg ставится шагом профиля).
+QUIET_EXIT_PROFILE = "quiet-exit"
+QUIET_EXIT_FORBIDDEN_PROTOCOLS = ("reality", "hysteria2", "obfs", "hop", "xhttp", "cdn", "awg")
+QUIET_EXIT_STATE_KEY = "quiet_exit"
+QUIET_EXIT_OOB_CLIENT = "oob-laptop"
+# Prefix-file для `wstunnel server` — артефакт РЕЛЕЯ (ADR-016): передаётся
+# владельцем; без него шаг остаётся pending (см. run_quiet_exit_init).
+QUIET_EXIT_WSTUNNEL_PREFIX_DEFAULT = "/etc/vds/wstunnel-client.env"
 
 # Протокол → ключ state.protocols (как пишут сами модули-установщики).
 STATE_KEY = {
@@ -141,6 +154,7 @@ class InitPlan:
     steps: list[Step] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    pending: list[str] = field(default_factory=list)  # P1-4: отложенные шаги quiet-exit
 
 
 def _cli(prefix: list[str]) -> list[str]:
@@ -607,6 +621,346 @@ def _verify_step(step: Step, domain: str | None, state_path: str | None) -> bool
     return True
 
 
+def _qx_state(state: GatewayState) -> dict:
+    """Метаданные профиля quiet_exit из state.protocols (без секретов)."""
+    meta = state.protocols.get(QUIET_EXIT_STATE_KEY) or {}
+    return dict(meta) if isinstance(meta, dict) else {}
+
+
+def _qx_pending(state: GatewayState) -> list[str]:
+    return [str(p) for p in _qx_state(state).get("pending") or []]
+
+
+def _qx_installed(state: GatewayState, key: str) -> bool:
+    return bool(state.protocols.get(key, {}).get("installed"))
+
+
+def build_quiet_exit_plan(
+    relay_ip: str,
+    relay_pubkey: str | None,
+    ws_domain: str | None,
+    email: str | None,
+    no_direct_awg: bool,
+    state_path: str | None = None,
+    ws_prefix_file: str | None = None,
+) -> InitPlan:
+    """План `gateway init --profile quiet-exit` (SPEC §2, §10 P1-4).
+
+    Ставится: amneziawg (awg0 + oob-laptop) + ufw quiet-exit + alert.
+    ПЕРЕДАЁТСЯ НА РЕЛЕЙ (relay_ip): exit-leg (awg2) + wstunnel server — при
+    отсутствии --relay-pubkey / ws-ключей шаги помечаются PENDING и
+    дозавершаются повторным init (skip-логика по state).
+    НЕ ставится (P0-2): xray, hysteria2, zerotier, coturn,
+    vds-gateway-health.timer, probe-watch/probe-rucidr.
+    """
+    plan = InitPlan()
+    try:
+        state = load_state(state_path)
+    except StoreError as exc:
+        plan.errors.append(f"Не удалось прочитать состояние: {exc}")
+        return plan
+    pending = _qx_pending(state)
+    apply_args = "--apply"
+
+    plan.steps.append(
+        Step("awg-quiet", f"AmneziaWG awg0 (UDP {AWG_PORT_DEFAULT}) — OOB-1",
+             _cli(["amneziawg", "install"]))
+    )
+    client_names = {c.name for c in state.clients}
+    plan.steps.append(
+        Step("awg-oob-client", f"OOB-1 admin-клиент {QUIET_EXIT_OOB_CLIENT}",
+             _cli(["amneziawg", "add-client", QUIET_EXIT_OOB_CLIENT]))
+    )
+
+    # ACME ws.<domain>: только с доменом и email; иначе — pending (см. ниже).
+    if ws_domain and email:
+        plan.steps.append(
+            Step("acme-ws", f"LE-сертификат {ws_domain} (HTTP-01, окно 80/tcp)",
+                 _cli(["acme", "issue", "--domain", ws_domain, "--email", email,
+                       "--window-80"]))
+        )
+    elif ws_domain and not email:
+        plan.warnings.append(
+            "acme-ws: задан --ws-domain без --acme-email — шаг отложен "
+            "(повторите init с --acme-email)."
+        )
+    elif not ws_domain:
+        plan.warnings.append(
+            "acme-ws: --ws-domain не задан — шаг отложен (wstunnel TLS требует "
+            "сертификат; OOB-1 и UFW работают и без него)."
+        )
+
+    # Нога релея (awg2): без --relay-pubkey — pending (P1-4).
+    if relay_pubkey:
+        plan.steps.append(
+            Step("exit-leg", f"exit-leg awg2 10.11.0.0/30 от {relay_ip} (пул 51900-51911)",
+                 _cli(["relay", "exit-leg", "install", "--relay-ip", relay_ip,
+                       "--public-key", relay_pubkey, apply_args]))
+        )
+    else:
+        if "exit-leg" not in pending:
+            pending.append("exit-leg")
+        plan.warnings.append(
+            "exit-leg: --relay-pubkey не задан — шаг отложен (P1-4). Получите "
+            "публичный ключ awg1 на релее и повторите "
+            "`vds gateway init --profile quiet-exit --relay-ip <ip> --relay-pubkey <pub> --apply`."
+        )
+
+    # UFW quiet-exit: allowlist от relay_ip сразу (P1-4).
+    ufw_args = ["system", "ufw", "harden", "--profile", "quiet-exit"]
+    if no_direct_awg:
+        ufw_args += ["--no-direct-awg", "--yes-i-have-vnc"]
+    ufw_args.append(apply_args)
+    plan.steps.append(
+        Step("ufw-quiet", f"UFW harden quiet-exit (allowlist {relay_ip}: 51900/udp, 9443/tcp)",
+             _cli(ufw_args))
+    )
+
+    # wstunnel server: требует pubkey релея + prefix-файл от релея (ADR-016);
+    # без них — pending с готовой командой.
+    if relay_pubkey and ws_domain:
+        plan.steps.append(
+            Step("wstunnel-server", f"wstunnel server wg-ws0 (9443/tcp) для {ws_domain}",
+                 _cli(["relay", "wstunnel", "server", "--relay-ip", relay_ip,
+                       "--relay-public-key", relay_pubkey, "--domain", ws_domain,
+                       "--prefix-file", ws_prefix_file or QUIET_EXIT_WSTUNNEL_PREFIX_DEFAULT,
+                       apply_args]))
+        )
+        if ws_prefix_file is None and not Path(QUIET_EXIT_WSTUNNEL_PREFIX_DEFAULT).is_file():
+            if "wstunnel-server" not in pending:
+                pending.append("wstunnel-server")
+            plan.warnings.append(
+                "wstunnel-server: prefix-файл релея не найден "
+                f"({QUIET_EXIT_WSTUNNEL_PREFIX_DEFAULT}) — шаг отложен (P1-4); "
+                "передайте файл с релея и повторите init с --ws-prefix-file."
+            )
+            for step in plan.steps:
+                if step.name == "wstunnel-server":
+                    step.skip_reason = (
+                        f"PENDING (P1-4): prefix-файл релея не найден "
+                        f"({QUIET_EXIT_WSTUNNEL_PREFIX_DEFAULT}) — повторите init с --ws-prefix-file"
+                    )
+    else:
+        if "wstunnel-server" not in pending:
+            pending.append("wstunnel-server")
+        plan.warnings.append(
+            "wstunnel-server: нужен --relay-pubkey и --ws-domain — шаг отложен (P1-4)."
+        )
+
+    plan.steps.append(
+        Step("alert-quiet", "Сторож угрозы vds-alert-watch (exit-узел)",
+             _cli(["alert", "install", apply_args]))
+    )
+    plan.warnings.append(
+        "DMS (P37) на quiet-exit — отдельный WP-QX-4 (`vds dms install`): "
+        "в этот init не входит, добавьте после реализации."
+    )
+
+    # Скипы по state (после сборки шагов).
+    for step in plan.steps:
+        if step.name == "awg-quiet":
+            if _state_installed(state, "amneziawg") and unit_active(AWG_UNIT):
+                step.skip_reason = "awg0 уже установлен и активен (state.protocols['amneziawg'])"
+            continue
+        if step.name == "awg-oob-client":
+            if QUIET_EXIT_OOB_CLIENT in client_names:
+                step.skip_reason = f"клиент {QUIET_EXIT_OOB_CLIENT} уже есть (state.clients)"
+            continue
+        if step.name == "acme-ws":
+            meta = state.protocols.get("acme") or {}
+            if (
+                meta.get("installed")
+                and str(meta.get("domain") or "") == (ws_domain or "")
+                and (ACME_LETSENCRYPT_LIVE(ws_domain or "") / "fullchain.pem").is_file()
+            ):
+                step.skip_reason = "сертификат ws-домена уже выпущен (state.protocols['acme'])"
+            continue
+        if step.name == "exit-leg":
+            if _qx_installed(state, "relay_leg") and unit_active(EXIT_LEG_UNIT):
+                step.skip_reason = "нога релея уже установлена (state.protocols['relay_leg'])"
+            continue
+        if step.name == "wstunnel-server":
+            if _qx_installed(state, "p2p_wstunnel"):
+                step.skip_reason = "wstunnel server уже установлен (state.protocols['p2p_wstunnel'])"
+            continue
+        if step.name == "ufw-quiet":
+            meta = state.protocols.get("ufw") or {}
+            if meta.get("installed") and str(meta.get("profile") or "") == "quiet-exit":
+                step.skip_reason = "UFW quiet-exit уже применён (state.protocols['ufw'])"
+            continue
+        if step.name == "alert-quiet":
+            if unit_active("vds-alert-watch.timer"):
+                step.skip_reason = "alert-watch таймер уже установлен и активен"
+            continue
+
+    # pending-семантика (P1-4): шаг в plan.steps без pubkey/prefix не попал либо
+    # не должен выполняться без входов релея — выше он уже помечен warning'ом;
+    # здесь только фиксируем pending в плане (повторный init дозавершает).
+    plan.pending = list(dict.fromkeys(pending))
+    return plan
+
+
+def preflight_quiet_exit(plan: InitPlan, relay_ip: str, state_path: str | None = None) -> None:
+    """Preflight quiet-exit: root, IP/порты шагов, awg-порт (SPEC §2)."""
+    if os.geteuid() != 0:
+        plan.errors.append("Требуется root (запустите через sudo).")
+        return
+    if not Path(os.environ.get("INSTALL_DIR", "/opt/my-vds")).is_dir():
+        plan.warnings.append(
+            "INSTALL_DIR не найден — сначала установите пакет (bash install.sh)."
+        )
+    _preflight_ports(plan, state_path)
+    del relay_ip  # allowlist валидируется в ufw.build_plan; здесь только root/порты
+
+
+def run_quiet_exit_init(
+    relay_ip: str | None,
+    relay_pubkey: str | None,
+    ws_domain: str | None,
+    email: str | None,
+    ws_prefix_file: str | None,
+    no_direct_awg: bool,
+    apply: bool = False,
+    state_path: str | None = None,
+    lock_path: str | None = None,
+) -> int:
+    """`gateway init --profile quiet-exit`. 2 — fail-fast ввода (SPEC §2);
+    1 — ошибка шага; 0 — успех (в т.ч. dry-run)."""
+    import ipaddress
+
+    # Fail-fast ввода (SPEC §2): профиль + --protocols с прямыми транспортами — exit 2.
+    if relay_ip is None:
+        console.print(
+            "[error][init-qx] --relay-ip обязателен для --profile quiet-exit "
+            "(allowlist 51900/udp+9443/tcp открывается только с него).[/error]"
+        )
+        return 2
+    try:
+        addr = ipaddress.ip_address(relay_ip.strip())
+    except ValueError as exc:
+        console.print(f"[error][init-qx] --relay-ip: некорректный IP {relay_ip!r} ({exc}).[/error]")
+        return 2
+    if addr.version != 4:
+        console.print(
+            f"[error][init-qx] --relay-ip {relay_ip!r} не IPv4 (P1-6: allowlist v4-only).[/error]"
+        )
+        return 2
+    relay_ip = relay_ip.strip()
+
+    plan = build_quiet_exit_plan(
+        relay_ip, relay_pubkey, ws_domain, email, no_direct_awg,
+        state_path=state_path, ws_prefix_file=ws_prefix_file,
+    )
+    for err in plan.errors:
+        console.print(f"[error][init-qx] {err}[/error]")
+    if plan.errors:
+        return 1
+
+    preflight_quiet_exit(plan, relay_ip, state_path=state_path)
+    if plan.errors:
+        console.print("[error][init-qx] Preflight выявил блокеры — ничего не установлено:[/error]")
+        for err in plan.errors:
+            console.print(f"  [error]- {err}[/error]")
+        return 1
+    for warn in plan.warnings:
+        console.print(f"[warning][init-qx] {warn}[/warning]")
+
+    console.print(
+        f"\n[bold][init-qx] План quiet-exit ({'apply' if apply else 'dry-run'}):[/bold]"
+    )
+    for step in plan.steps:
+        if step.skip_reason:
+            console.print(f"  [info]- SKIP {step.title}: {step.skip_reason}[/info]")
+        else:
+            console.print(f"  [change]- {step.title}[/change]")
+    if not apply:
+        console.print(
+            "\n[info][init-qx] Dry-run: мутаций не выполнено. Для установки — --apply. "
+            "После проверки OOB-1 (ssh 10.9.0.1) публичный SSH закрывается отдельно: "
+            "`sudo vds system ufw harden --close-public-ssh --apply` (Фаза 2, IQ-3).[/info]"
+        )
+        return 0
+
+    # Исполнение шагов через CLI-подпроцессы (fail-fast, идемпотентно).
+    from src.core.lock import FileLock
+    from src.core.shell import ShellResult  # noqa: F401 — сигнатура шагов единая
+
+    executed: list[Step] = []
+    for step in plan.steps:
+        if step.skip_reason:
+            continue
+        console.print(f"\n[info][init-qx] Шаг: {step.title}[/info]")
+        result = run_list(step.command, timeout=600)
+        if not result.ok:
+            tail = "\n".join((result.output or "").splitlines()[-20:])
+            if tail:
+                console.print(f"[error][init-qx] Вывод шага (хвост):[/error]\n{tail}")
+            console.print(
+                f"[error][init-qx] Шаг '{step.title}' упал (код {result.returncode}). "
+                f"Докатить вручную: {' '.join(step.command)}[/error]"
+            )
+            for done in executed:
+                console.print(
+                    f"  [warning]откат выполненного: {_QX_ROLLBACK.get(done.name, '?')}[/warning]"
+                )
+            return 1
+        executed.append(step)
+        console.print(f"[success][init-qx] Шаг готов: {step.title}[/success]")
+
+    # state.protocols['quiet_exit'] — аддитивно, под FileLock (P2/конвенция №3).
+    state = load_state(state_path)
+    qx = dict(state.protocols.get(QUIET_EXIT_STATE_KEY) or {})
+    relay_ips = [str(ip) for ip in (qx.get("relay_ips") or []) if str(ip) != relay_ip]
+    relay_ips.append(relay_ip)  # P1-8: смена RELAY_IP — аддитивная правка списка
+    still_pending = [
+        p for p in plan.pending
+        if not (p == "exit-leg" and relay_pubkey) and not (
+            p == "wstunnel-server" and relay_pubkey and ws_domain
+            and (ws_prefix_file is not None or Path(QUIET_EXIT_WSTUNNEL_PREFIX_DEFAULT).is_file())
+        )
+    ]
+    qx.update({
+        "installed": True,
+        "relay_ips": relay_ips,
+        "oob_ssh_only": bool(qx.get("oob_ssh_only")),
+        "pending": still_pending,
+        "ws_domain": ws_domain or "",
+        "no_direct_awg": bool(no_direct_awg),
+    })
+    state.protocols[QUIET_EXIT_STATE_KEY] = qx
+    try:
+        from src.gateway.store import save_state as _save
+
+        with FileLock(lock_path or "/var/run/vds.lock"):
+            _save(state, state_path)
+    except (StoreError, OSError) as exc:
+        console.print(f"[error][init-qx] шаги выполнены, но state не сохранён: {exc}[/error]")
+        return 1
+
+    if still_pending:
+        console.print(
+            f"[warning][init-qx] PENDING шаги: {', '.join(still_pending)} — повторный "
+            "`init --profile quiet-exit --relay-ip <ip> --relay-pubkey <pub> --apply` дозавершит.[/warning]"
+        )
+    console.print(
+        "\n[success][init-qx] quiet-exit: базовый контур готов (awg0 OOB-1 + "
+        f"UFW allowlist {relay_ip}). Фаза 2 (закрыть публичный SSH) — ПОСЛЕ "
+        "живого OOB-1: `sudo vds system ufw harden --close-public-ssh --apply`.[/success]"
+    )
+    return 0
+
+
+_QX_ROLLBACK = {
+    "awg-quiet": "vds amneziawg remove --apply",
+    "awg-oob-client": "vds amneziawg remove-client oob-laptop --apply",
+    "acme-ws": "certbot delete --cert-name <ws-домен>",
+    "exit-leg": "vds relay exit-leg remove --apply",
+    "wstunnel-server": "systemctl stop vds-wstunnel-server  # + wstunnel nft/wg-ws0 откат",
+    "ufw-quiet": "vds system ufw harden --undo --apply",
+    "alert-quiet": "sudo vds alert remove --apply",
+}
+
+
 def run_init(
     protocols: str = DEFAULT_PROTOCOLS,
     domain: str | None = None,
@@ -618,8 +972,37 @@ def run_init(
     demo_clients: bool = False,
     require_domain: bool = False,
     state_path: str | None = None,
+    profile: str | None = None,
+    relay_ip: str | None = None,
+    relay_pubkey: str | None = None,
+    ws_domain: str | None = None,
+    ws_prefix_file: str | None = None,
 ) -> int:
-    """Точка входа `vds gateway init`. 0 — успех (в т.ч. dry-run / «нечего делать»)."""
+    """Точка входа `vds gateway init`. 0 — успех (в т.ч. dry-run / «нечего делать»).
+
+    profile="quiet-exit" (SPEC-20261124) — relay-only развёртывание; вместе с
+    --protocols, содержащим прямые транспорты, — fail-fast exit 2.
+    """
+    if profile == QUIET_EXIT_PROFILE:
+        requested = [p.strip().lower() for p in (protocols or "").split(",") if p.strip()]
+        forbidden = [p for p in requested if p in QUIET_EXIT_FORBIDDEN_PROTOCOLS]
+        if forbidden:
+            console.print(
+                f"[error][init-qx] --profile quiet-exit несовместим с --protocols "
+                f"{','.join(forbidden)}: профиль relay-only (SPEC-20261124 §2), "
+                "прямые транспорты (Reality/Hy2/XHTTP/CDN/obfs/hop/awg) на exit запрещены.[/error]"
+            )
+            return 2
+        return run_quiet_exit_init(
+            relay_ip=relay_ip,
+            relay_pubkey=relay_pubkey,
+            ws_domain=ws_domain,
+            email=email,
+            ws_prefix_file=ws_prefix_file,
+            no_direct_awg=False,
+            apply=apply,
+            state_path=state_path,
+        )
     try:
         proto_list = parse_protocols(protocols)
     except ValueError as exc:

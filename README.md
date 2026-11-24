@@ -156,6 +156,9 @@ vds wireguard install        # Установить WireGuard VPN
 vds server-setup             # Мастер первичной настройки (легаси — для файрвола используйте ufw harden)
 vds cleanup                  # Очистка системы (логи, кэши, Docker)
 vds system ufw harden --profile gateway       # UFW hardening (dry-run; --apply применить; hop 20000-20500 → 20000:20500)
+vds system ufw harden --profile quiet-exit --apply   # тихий exit (SPEC-20261124): 0 публичных TCP; 51825/udp + allowlist релея (51900/udp, 9443/tcp); слушатели 443/8443/2053 → ERROR
+vds system ufw harden --profile quiet-exit --no-direct-awg --yes-i-have-vnc --apply   # закрыть и 51825/udp (P1-7; без VNC-подтверждения — abort)
+vds system ufw harden --profile quiet-exit --close-public-ssh --apply   # Фаза 2 (IQ-3): закрыть публичный SSH; preflight awg0 UP + fresh handshake oob-laptop ≤3 мин + sshd; иначе abort exit 1
 vds system ufw ssh-port --to 49222 --apply    # двухфазный перенос SSH (22 закрывает --finalize; при сбое Фазы A демон поднимается авто)
 vds system ufw status                         # сводка UFW + pending-перенос
 vds system ufw lock-443 --reason "RU-PROBE-SUSPECT" --apply   # изоляция 443 (TTL 48h; AWG/CDN/ssh живы)
@@ -177,6 +180,13 @@ vds gateway init                     # Идемпотентное развёрт
 vds gateway init --apply             # Установить reality + hysteria2 + healthcheck-таймер
 vds gateway init --apply --protocols reality,hysteria2,obfs,hop,xhttp,cdn,awg \
     --domain vpn.example.ru --email admin@example.ru --demo-clients  # всё сразу
+
+vds gateway init --profile quiet-exit --relay-ip <RELAY_IP> [--relay-pubkey <awg1-pub>] \
+    [--ws-domain ws.example.ru --acme-email admin@example.ru] --apply
+                                     # тихий exit (SPEC-20261124): awg0 OOB-1 + клиент oob-laptop + UFW allowlist релея +
+                                     # ACME-окно 80/tcp (30-с, pre/post-hook) + нога релея/wstunnel (pending без --relay-pubkey, дозавершается повторным init);
+                                     # НЕ ставит xray/hysteria2/zerotier/coturn/healthcheck/probe-таймеры;
+                                     # --protocols с прямыми транспортами вместе с профилем — fail-fast exit 2
 
 vds gateway status                  # Состояние gateway: state.json, клиенты, протоколы
 vds gateway links                   # Share-links клиентов (--protocol xray|hysteria2|amneziawg)
@@ -273,6 +283,8 @@ vds amneziawg remove-client <name>  # Удалить клиента (dry-run; --
 vds amneziawg remove --apply        # Удалить сервис (пакеты PPA — вручную)
 
 vds acme issue --domain vpn.example.ru --email admin@example.ru   # LE (HTTP-01) + deploy-hook
+vds acme issue --domain ws.example.ru --email admin@example.ru --window-80  # quiet-exit: 80/tcp открывается ДО certbot, закрывается в finally + renewal-hooks pre/open + post/close (SPEC P1-5)
+vds acme check-80-window           # fail-safe чек: 80/tcp должен быть закрыт вне окна (WARN + exit 1 при нарушении; stale-маркер /run/vds-acme-80-opened подчищается)
 
 vds relay init --exit <exit-ip> --domain relay.asvpersonal.ru --sni <RU_SNI>
                                     # RU-relay (ADR-007): dry-run план; --apply развёртывает

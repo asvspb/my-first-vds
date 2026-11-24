@@ -221,6 +221,15 @@ obfs:
    `.bak-pre-le`), рестарт.
 3. `vds hysteria2 add-client NAME` — ссылка БЕЗ `insecure=1`, sni=домен.
 
+Окно 80/tcp (SPEC-20261124 quiet-exit, P1-5): `acme issue --window-80` —
+80/tcp открывается ДО certbot (standalone биндит :80 сам) и закрывается в
+finally; renewal-hooks `pre/vds-acme-80-open.sh` + `post/vds-acme-80-close.sh`
+(маркер `/run/vds-acme-80-opened`, post выполняется certbot всегда,
+tolerant exit 0) обслуживают штатный certbot.timer renew; периодический
+fail-safe чек — `vds acme check-80-window` (80 открыт вне окна → WARN +
+exit 1). В UFW-профиле `quiet-exit` правило `_PROTOCOL_RULES["acme"]`
+игнорируется — 80/tcp автоматически не открывается (закрытие TECHDEBT P39).
+
 ### 2.3.4. host и sni в ссылке — разные поля (GR-10, 2026-11-13)
 
 `hysteria2://` позволяет указать адрес подключения (`host`) отдельно от имени

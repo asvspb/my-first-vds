@@ -5,7 +5,10 @@
 > Дополняет [VPN-PROTOCOLS.md](VPN-PROTOCOLS.md) (протоколы) и
 > [CENSORSHIP-ROADMAP.md](CENSORSHIP-ROADMAP.md) (план) — здесь именно
 > *паттерны применения* и когда какой брать. Обновлён: 2026-11-16
-> (добавлены: радиомолчание AWG в простое — И44, см. [VPN-PROTOCOLS](VPN-PROTOCOLS.md) §2.5).
+> (добавлены: радиомолчание AWG в простое — И44, см. [VPN-PROTOCOLS](VPN-PROTOCOLS.md) §2.5).; 2026-11-24 — профиль «тихий exit»
+> (SPEC-20261124-quiet-exit: 0 публичных TCP, минимум сигнатурного трафика
+> наружу — паттерн «невидимый узел», реализация в src/system/ufw.py +
+> `gateway init --profile quiet-exit`, см. SERVER-BASELINE §14).
 
 ## 0. Контекст угроз (что именно наблюдали)
 

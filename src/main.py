@@ -634,10 +634,34 @@ def gateway_init(
         "--require-domain",
         help="Строгий режим: DNS не подтверждён → exit 1 вместо skip с warning",
     ),
+    profile: Optional[str] = typer.Option(
+        None,
+        "--profile",
+        help="Профиль развёртывания: quiet-exit (SPEC-20261124) — relay-only exit",
+    ),
+    relay_ip: Optional[str] = typer.Option(
+        None, "--relay-ip",
+        help="quiet-exit: IPv4 релея — allowlist 51900/udp + 9443/tcp (обязателен)",
+    ),
+    relay_pubkey: Optional[str] = typer.Option(
+        None, "--relay-pubkey",
+        help="quiet-exit: публичный ключ awg1 релея (без него exit-leg/wstunnel — pending)",
+    ),
+    ws_domain: Optional[str] = typer.Option(
+        None, "--ws-domain", help="quiet-exit: домен сертификата wstunnel (ws.<domain>)"
+    ),
+    ws_prefix_file: Optional[str] = typer.Option(
+        None, "--ws-prefix-file",
+        help="quiet-exit: prefix-файл релея для wstunnel server (/etc/vds/wstunnel-client.env)",
+    ),
 ):
     """Идемпотентное развёртывание gateway с нуля (SPEC-20261114):
     reality + hysteria2 (+obfs/hop/xhttp/cdn/awg) + healthcheck-таймер.
-    Dry-run по умолчанию: план + проверки портов/DNS без мутаций."""
+    Dry-run по умолчанию: план + проверки портов/DNS без мутаций.
+
+    Профиль quiet-exit (SPEC-20261124): awg0 OOB-1 + UFW allowlist релея +
+    ACME-окно 80/tcp + нога релея/wstunnel (pending без --relay-pubkey);
+    прямые транспорты с --profile quiet-exit — fail-fast exit 2."""
     from src.gateway.init import run_init
 
     raise typer.Exit(
@@ -651,6 +675,11 @@ def gateway_init(
             apply=apply,
             demo_clients=demo_clients,
             require_domain=require_domain,
+            profile=profile,
+            relay_ip=relay_ip,
+            relay_pubkey=relay_pubkey,
+            ws_domain=ws_domain,
+            ws_prefix_file=ws_prefix_file,
         )
     )
 
@@ -1707,10 +1736,25 @@ def acme_issue(
     domain: str = typer.Option(..., "--domain", help="Домен, резолвящийся в публичный IP сервера"),
     email: str = typer.Option(..., "--email", help="Email для аккаунта Let's Encrypt"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Показать план без изменений"),
+    window_80: bool = typer.Option(
+        False, "--window-80",
+        help="quiet-exit (SPEC-20261124 P1-5): 80/tcp открывается ДО certbot и закрывается в finally + renewal-hooks pre/open post/close",
+    ),
 ):
     """Выпустить LE-сертификат на домен (HTTP-01, порт 80) + deploy-hook"""
     from src.acme.install import run_issue
-    raise typer.Exit(run_issue(domain=domain, email=email, dry_run=dry_run))
+    raise typer.Exit(run_issue(domain=domain, email=email, dry_run=dry_run, window_80=window_80))
+
+
+@acme_app.command("check-80-window")
+def acme_check_80_window():
+    """Fail-safe чек окна ACME (P1-5): 80/tcp должен быть закрыт вне окна.
+    [warning] + exit 1, если правило открыто без маркера /run/vds-acme-80-opened;
+    stale-маркер без правила — подчищается. Read-only по ufw.
+
+    Пример: sudo vds acme check-80-window"""
+    from src.acme.window_hook import run_check_window
+    raise typer.Exit(run_check_window())
 
 
 @zerotier_app.command("install")
@@ -1836,7 +1880,7 @@ def ufw_harden(
     profile: str = typer.Option(
         "gateway",
         "--profile",
-        help="Профиль: gateway | relay | exit-cascade (SPEC-20261116 §3)",
+        help="Профиль: gateway | relay | exit-cascade | quiet-exit (SPEC-20261124)",
     ),
     allow_from: Optional[str] = typer.Option(
         None, "--allow-from", help="IP релея для exit-cascade: 443 открывается только с него"
@@ -1848,6 +1892,18 @@ def ufw_harden(
         "--force",
         help="Обход guard'а активного lock-443 (SPEC §9.C; событие пишется в журнал лока)",
     ),
+    no_direct_awg: bool = typer.Option(
+        False, "--no-direct-awg",
+        help="quiet-exit: не открывать 51825/udp (P1-7; требует --yes-i-have-vnc)",
+    ),
+    yes_i_have_vnc: bool = typer.Option(
+        False, "--yes-i-have-vnc",
+        help="quiet-exit: подтверждение VNC-пути для --no-direct-awg (иначе abort)",
+    ),
+    close_public_ssh: bool = typer.Option(
+        False, "--close-public-ssh",
+        help="quiet-exit Фаза 2 (IQ-3): закрыть публичный SSH; preflight awg0+handshake oob-laptop ≤3 мин; деструктивно — только с --apply",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Machine-readable вывод (v1: не реализован, plan печатается текстом)"),
 ):
     """Идемпотентный харднинг UFW (SPEC-20261116): deny in / allow out,
@@ -1858,22 +1914,57 @@ def ufw_harden(
     Guard: при активном lock-443 — отказ (SPEC §9.C), обход только --force.
     Откат: --undo --apply. Dry-run по умолчанию.
 
+    quiet-exit (SPEC-20261124): слушатели 443/8443/2053 → ERROR «нарушение
+    quiet-exit», план НЕ применяется; 80/tcp автоматически НЕ открывается
+    (закрытие TECHDEBT P39); Фаза 1 держит публичный SSH limit (warning),
+    Фаза 2: `--close-public-ssh --apply` после живого OOB-1.
+
     Примеры:
       sudo vds system ufw harden --profile gateway            # dry-run, план
       sudo vds system ufw harden --profile gateway --apply    # применить
       sudo vds system ufw harden --profile exit-cascade --allow-from 203.0.113.10 --apply
       sudo vds system ufw harden --profile relay --apply      # asv1/релей
-      sudo vds system ufw harden --profile gateway --undo --apply  # откат
-      sudo vds system ufw harden --profile gateway --force --apply # при активном lock-443
+      sudo vds system ufw harden --profile quiet-exit --apply # тихий exit (Фаза 1)
+      sudo vds system ufw harden --close-public-ssh --apply   # Фаза 2 (после OOB-1!)
     """
     from src.system.ufw import HardeningOpts, UfwError, run_harden
 
     if json_output:
         from src.core.logger import console
         console.print("[warning][ufw] --json в v1 не реализован — план печатается текстом.[/warning]")
+    if no_direct_awg and not yes_i_have_vnc:
+        from src.core.logger import console
+        console.print(
+            "[error][ufw] --no-direct-awg закрывает OOB-1: подтверждение "
+            "--yes-i-have-vnc обязательно (SPEC P1-7).[/error]"
+        )
+        raise typer.Exit(2)
+    if close_public_ssh and (undo or profile != "quiet-exit"):
+        from src.core.logger import console
+        console.print(
+            "[error][ufw] --close-public-ssh — отдельная операция Фазы 2; "
+            "используйте `harden --profile quiet-exit --close-public-ssh [--apply]` "
+            "без --undo.[/error]"
+        )
+        raise typer.Exit(2)
+    if close_public_ssh:
+        from src.system.ufw import UfwError as _UfwError, run_close_public_ssh
+
+        try:
+            code = run_close_public_ssh(apply=apply)
+        except _UfwError as exc:
+            from src.core.logger import console
+            console.print(f"[error][ufw] {exc}[/error]")
+            raise typer.Exit(1)
+        raise typer.Exit(code)
     try:
         code = run_harden(
-            profile, apply=apply, undo=undo, opts=HardeningOpts(allow_from=allow_from),
+            profile, apply=apply, undo=undo,
+            opts=HardeningOpts(
+                allow_from=allow_from,
+                no_direct_awg=no_direct_awg,
+                yes_i_have_vnc=yes_i_have_vnc,
+            ),
             force=force,
         )
     except UfwError as exc:
