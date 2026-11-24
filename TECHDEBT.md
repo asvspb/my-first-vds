@@ -775,3 +775,24 @@ github-зеркала) в доке оставлены как неидентиф�
 RFC 5737 / `.fixtures.invalid` по всему остатку + решение по bench-скрипту
 (параметризовать домен через env). Поверхностный аудит: `grep -rE`
 по операторским маркерам перед закрытием.
+
+## P37 — внешний reachability-мониторинг asv2: 2 vantage points + матрица корреляции (2026-11-24, открыт; DECISION Q1-INC)
+
+**Факт.** INCIDENT-20261124-asv2-tcp-blackhole: per-source ingress-фильтрация
+TCP на транзите к asv2 не видна ни изнутри узла (alert-watch структурно слеп —
+egress и AWG-ноги живы), ни с одного внешнего вантажа (релей может попасть
+в ту же или «чистую» ветку фильтра). Отдельный от vpn-guard v1.1 контур:
+SPEC-20261120-vpn-guard-v1.1.md НЕ меняется (инвариант I-2/ADR-014 — ноль
+AF_INET/AF_INET6 в демоне — сохраняется).
+
+**Действие.** Двухточечный внешний контур: (1) редкий TCP-connect с RU-релея до
+asv2:443 (1 коннект раз в 5–10 мин, без агрессивных ретраев); (2) независимый
+внешний TCP-чекер из другой AS (вне РФ и вне AS ptr.network) → webhook/TG, без
+секретов и доступа к серверу. Матрица корреляции с vds-alert-watch (3 точки):
+ext-EU OK + relay FAIL → ТСПУ/per-source edge; ext-EU FAIL + heartbeat OK →
+ingress-блок хостера; оба FAIL → хост/egress упал. Триггер алерта ≤ 15 мин.
+Позже (не v1.1): vpn guard может пассивно читать локальный артефакт
+vpn monitor/scout (S3) без своих сокетов. Проверка: синтетический per-source
+blackhole — ext-EU зелёный, алерт ≤ 15 мин, RestrictAddressFamilies в
+vpn-guard.service не изменился. Источник: docs/team/reports/
+INCIDENT-20261124-asv2-tcp-blackhole.md §5/§7 (Q1-INC).
