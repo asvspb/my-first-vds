@@ -160,7 +160,7 @@ vds cleanup                  # Очистка системы (логи, кэши
 vds system ufw harden --profile gateway       # UFW hardening (dry-run; --apply применить; hop 20000-20500 → 20000:20500)
 vds system ufw harden --profile quiet-exit --apply   # тихий exit (SPEC-20261124): 0 публичных TCP; 51825/udp + allowlist релея (51900/udp, 9443/tcp); слушатели 443/8443/2053 → ERROR
 vds system ufw harden --profile quiet-exit --no-direct-awg --yes-i-have-vnc --apply   # закрыть и 51825/udp (P1-7; без VNC-подтверждения — abort)
-vds system ufw harden --profile quiet-exit --close-public-ssh --apply   # Фаза 2 (IQ-3): закрыть публичный SSH; preflight awg0 UP + fresh handshake oob-laptop ≤3 мин + sshd; иначе abort exit 1
+vds system ufw harden --profile quiet-exit --close-public-ssh --apply   # Фаза 2 (IQ-3): закрыть публичный SSH; preflight awg0 UP + fresh handshake oob-laptop ≤3 мин + sshd; иначе abort exit 1 (preflight: fresh handshake + sshd + UFW OOB-1)
 vds system ufw ssh-port --to 49222 --apply    # двухфазный перенос SSH (22 закрывает --finalize; при сбое Фазы A демон поднимается авто)
 vds system ufw status                         # сводка UFW + pending-перенос
 vds system ufw lock-443 --reason "RU-PROBE-SUSPECT" --apply   # изоляция 443 (TTL 48h; AWG/CDN/ssh живы)

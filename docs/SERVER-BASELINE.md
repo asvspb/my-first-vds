@@ -684,7 +684,7 @@ RU-резолвер = DNS-спуфинг/заглушка → битый IP в n
 allowlist RELAY_IP; 51825/udp (awg0) сохраняется как OOB-1 (SSH → 10.9.0.1) и
 резерв на случай падения единственного релея (пересмотр после P30). ACME
 wstunnel: HTTP-01 с открытием 80/tcp на 30 с в pre/post-hook (потом → DNS-01).
-Публичный SSH 49222 — закрыть после проверки OOB-1. Проверка: nmap извне =
+Публичный SSH 49222 — закрыть после проверки OOB-1; `--close-public-ssh` (QX-Q2) требует 3 preflight: fresh handshake oob-laptop ≤ 3 мин, sshd listener, UFW-правило OOB-1 в snapshot — иначе abort. Проверка: nmap извне =
 0 open TCP; `relay carrier status` — оба носителя зелёные; ssh 10.9.0.1 OK.
 Комбайн (Hy2/XHTTP/direct-Reality/CDN) на exit — снят (Q2-PRI, dormant-код,
 клиентские профили → `vpn profile archive`).

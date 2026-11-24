@@ -186,8 +186,10 @@ def test_run_harden_forbidden_listener_exit_1(monkeypatch, tmp_path) -> None:
 
 
 def _wire_close(monkeypatch, tmp_path, handshake: str, awg0_up: bool, ssh_ok: bool = True):
+    # OOB-1 правило в статусе — Preflight 3 (QX-Q2) требует его для Фазы 2
     fake = FakeUfw(
-        rules=["limit 22/tcp"], active=True,
+        rules=["limit 22/tcp",
+               "allow in on awg0 to 10.9.0.1 port 22 proto tcp"], active=True,
         ss_lines=[] if not ssh_ok else ["LISTEN 0 0 0.0.0.0:22 0.0.0.0:*"],
     )
     _wire(fake, monkeypatch)
@@ -266,7 +268,8 @@ def test_close_public_ssh_applies_and_records_state(monkeypatch, tmp_path) -> No
     )
     assert code == 0
     assert any(c[:3] == ["ufw", "delete", "limit"] for c in fake.calls)
-    assert fake.rules == []  # limit 22/tcp удалён
+    assert "limit 22/tcp" not in fake.rules  # публичный limit удалён
+    assert any("in on awg0" in r for r in fake.rules)  # OOB-1 остаётся
     from src.gateway.store import load_state
 
     qx = load_state(str(tmp_path / "state.json")).protocols["quiet_exit"]
@@ -278,3 +281,17 @@ def test_handshake_seconds_parsing() -> None:
     assert ufw._handshake_seconds("40 seconds", 0) == 40
     assert ufw._handshake_seconds("2 hours, 5 minutes", 0) == 7500
     assert ufw._handshake_seconds("1 day, 3 hours", 0) == 97200
+
+
+def test_close_public_ssh_aborts_without_oob_ufw_rule(monkeypatch, tmp_path) -> None:
+    """QX-Q2 Preflight 3: свежий awg0 handshake ЕСТЬ, но UFW-правила OOB-1
+    нет → exit 1, ни одного ufw delete (реальный lockout)."""
+    fake, _ = _wire_close(monkeypatch, tmp_path, "40 seconds", awg0_up=True)
+    # убираем OOB-правило из статус-текста (Фаза 1 не применялась)
+    fake.rules = [r for r in fake.rules if "in on awg0" not in r]
+    code = ufw.run_close_public_ssh(
+        apply=True, state_path=str(tmp_path / "state.json"),
+        lock_path=str(tmp_path / "vds.lock"),
+    )
+    assert code == 1
+    assert not any(c[:3] == ["ufw", "delete", "limit"] for c in fake.calls)

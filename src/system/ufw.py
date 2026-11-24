@@ -1171,6 +1171,22 @@ def _peer_block_bounds_quiet(text: str, name: str) -> Optional[tuple[int, int]]:
     return None
 
 
+def _oob_ufw_rule_present(listener_port: int) -> bool:
+    """Preflight 3 (QX-Q2): правило OOB-1 есть в текущем ufw snapshot.
+
+    Проверка по raw-тексту `ufw status`: interface-правила вида
+    ``allow in on awg0 to 10.9.0.1 port N proto tcp`` канонизатором
+    snapshot-парсера не обрабатываются (см. комментарий в plan Фазы 1).
+    """
+    res = run_list(["ufw", "status", "verbose"], timeout=10)
+    text = res.stdout
+    return (
+        "in on awg0" in text
+        and "to 10.9.0.1" in text
+        and f"port {listener_port}" in text
+    )
+
+
 def run_close_public_ssh(
     apply: bool = False,
     state_path: Optional[str] = None,
@@ -1210,6 +1226,17 @@ def run_close_public_ssh(
         console.print(
             f"[error][ufw-qx] sshd не слушает порт {listener_port} — отказ "
             "(проверьте sshd, затем повторите).[/error]"
+        )
+        return 1
+    # Preflight 3 (QX-Q2): UFW-правило OOB-1 реально присутствует в snapshot.
+    # Свежий handshake + живой sshd бесполезны, если правила in on awg0 нет:
+    # default deny incoming отрежет SSH и через 10.9.0.1 (реальный lockout).
+    if not _oob_ufw_rule_present(listener_port):
+        console.print(
+            "[error][ufw-qx] UFW-правило OOB-1 (allow in on awg0 to 10.9.0.1 "
+            f"port {listener_port} proto tcp) отсутствует — закрытие публичного "
+            "SSH отрежет вход и через awg0. Сначала примените Фазу 1: "
+            "harden --profile quiet-exit --apply, затем повторите.[/error]"
         )
         return 1
 
