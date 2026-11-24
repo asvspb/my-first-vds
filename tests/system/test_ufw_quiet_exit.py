@@ -86,7 +86,7 @@ def test_build_plan_rules_present() -> None:
     st = _quiet_state()
     plan = ufw.build_plan("quiet-exit", st, _snap(), ufw.HardeningOpts())
     specs = [str(p.meta.get("spec")) for p in plan if p.kind == "rule" and not p.meta.get("delete")]
-    assert "in on awg0 to 10.9.0.1 port 22 proto tcp" in specs  # OOB-1
+    assert "in on awg0 proto tcp from any to 10.9.0.1 port 22" in specs  # OOB-1 (живой синтаксис ufw, ES-1 2026-11-25)
     assert f"from {RELAY_IP} to any port 51900 proto udp" in specs
     assert f"from {RELAY_IP} to any port 9443 proto tcp" in specs
     assert "51825/udp" in specs
@@ -189,7 +189,7 @@ def _wire_close(monkeypatch, tmp_path, handshake: str, awg0_up: bool, ssh_ok: bo
     # OOB-1 правило в статусе — Preflight 3 (QX-Q2) требует его для Фазы 2
     fake = FakeUfw(
         rules=["limit 22/tcp",
-               "allow in on awg0 to 10.9.0.1 port 22 proto tcp"], active=True,
+               "allow in on awg0 proto tcp from any to 10.9.0.1 port 22"], active=True,
         ss_lines=[] if not ssh_ok else ["LISTEN 0 0 0.0.0.0:22 0.0.0.0:*"],
     )
     _wire(fake, monkeypatch)

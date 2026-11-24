@@ -696,3 +696,8 @@ P1-4); прямые транспорты с профилем — fail-fast exit 
 fresh-handshake oob-laptop ≤3 мин (P1-3); окно 80/tcp — `acme issue
 --window-80` + renewal-hooks pre/open + post/close + периодический чек
 `vds acme check-80-window` (P1-5).
+
+Примечание (2026-11-25, живой деплой ES-1): синтаксис OOB-1-правила в реальном
+ufw — `allow in on awg0 proto tcp from any to 10.9.0.1 port <ssh>` (форма
+«in on awg0 to ADDR port N proto tcp» ufw-парсером не принимается); Preflight 3
+`--close-public-ssh` проверяет правило по маркерам raw `ufw status verbose`.

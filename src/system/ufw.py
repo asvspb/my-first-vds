@@ -558,9 +558,12 @@ def build_plan(
         # OOB-1: allow in on awg0 to 10.9.0.1 port <ssh> (v4-only, P1-6).
         # Детекция дубля через snapshot-парсер для interface-правил ненадёжна —
         # ufw сам идемпотентен на apply («Skipping adding»).
+        # Синтаксис ufw (проверен на живом ES-1 2026-11-25): форма
+        # "in on awg0 to ADDR port N proto tcp" не парсится — нужен порядок
+        # "in on IFACE proto tcp from any to ADDR port N".
         oob_spec = (
-            f"in on {QUIET_EXIT_AWG_IFACE} to 10.9.0.1 port "
-            f"{final_ssh_port(state)} proto tcp"
+            f"in on {QUIET_EXIT_AWG_IFACE} proto tcp from any to 10.9.0.1 "
+            f"port {final_ssh_port(state)}"
         )
         plan.append(PlanItem(
             "rule", f"ufw allow {oob_spec} (OOB-1)", "add",
@@ -1180,10 +1183,13 @@ def _oob_ufw_rule_present(listener_port: int) -> bool:
     """
     res = run_list(["ufw", "status", "verbose"], timeout=10)
     text = res.stdout
+    # ufw рендерит interface-правило как "on awg0" в колонке INTERFACE +
+    # назначение 10.9.0.1 <port>/tcp (формат зависит от версии — проверяем
+    # по ключевым маркерам, а не по точной строке плана).
     return (
-        "in on awg0" in text
-        and "to 10.9.0.1" in text
-        and f"port {listener_port}" in text
+        "on awg0" in text
+        and "10.9.0.1" in text
+        and (f"{listener_port}/tcp" in text or f"port {listener_port}" in text)
     )
 
 
