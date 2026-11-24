@@ -749,7 +749,7 @@ tests/logs/test_report.py.
 verdict clean/quiet при findings == [] и валидном coverage. НЕ менять молча
 внутри P31.
 
-## P35 — ubuntuInstaller: 3 pre-existing падения tests/guard/test_export.py (2026-11-24, открыт)
+## P35 — ubuntuInstaller: 3 pre-existing падения tests/guard/test_export.py (2026-11-24, открыт; ЗАКРЫТ 2026-11-25)
 
 **Факт.** На чистом HEAD ubuntuInstaller `ce5a314` (до WP-QR5) прогон
 `pytest -q` даёт 3 failed в `tests/guard/test_export.py`:
@@ -758,9 +758,14 @@ verdict clean/quiet при findings == [] и валидном coverage. НЕ м�
 новые тесты и не привнесли регрессий — падает тот же набор из трёх).
 Воспроизведено кодером WP-QR5 stash-проверкой — регрессия не из QR-цикла.
 
-**Действие.** Отдельный фикс-проход (не смешивать с QR-деплоем в паузе после
-G6): диагностика root cause + фикс + регтест в ubuntuInstaller; прогон полного
-`pytest -q` до нуля падений.
+**Действие.** ~~Отдельный фикс-проход~~ **ВЫПОЛНЕН 2026-11-25 в WP-QX-3.**
+Root cause: фикстура `finding()` в test_export.py шила захардкоженную дату
+`2026-11-16T…Z` в `window.last` — вне окна `--since 7d` при прогоне позже
+2026-11-18 → export возвращал 0 findings. Тест зависел от настенного времени.
+Фикс: окно фикстуры — относительное «сейчас» (UTC, детерминированный штамп
+без гонки за границей секунды); latent-тест `test_export_trims_oldest_…`
+(тоже с захардкоженным штампом) переведён на сравнение с фиксированным
+expected. `pytest -q` — полный прогон без падений.
 
 ## P36 — ubuntuInstaller: остаточные реальные значения вне qrgen-фикстур (2026-11-24, открыт)
 
