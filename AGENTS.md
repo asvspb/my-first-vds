@@ -162,7 +162,7 @@ install.sh, preinstall.sh, local-init.sh, myhelp.sh
 `docs/GROWTH-POINTS.md` — точки роста схем/протоколов (вход для intake);
 `docs/SERVER-BASELINE.md` — настройки ОС/сервера: авто vs вручную, чеклист восстановления;
 `docs/SPLIT-TRANSPORTS.md` — системный split: AWG и аналоги (Reality/Hy2/XHTTP/CDN);
-`docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…016
+`docs/MIGRATE-VDS.md` — перенос сервера; `docs/adr/` — ADR-001…018; ADR-017 (сменяемый exit, DECISION Q4-PRI) и ADR-018 (Smart Failover v2.0) — DRAFT-плейсхолдеры, решения в TECHDEBT P38
 (ADR-016 — p2p link: несколько L4-ортогональных носителей между двумя узлами,
 **принят G2 2026-11-20**, реализация — по SPEC; §4 — инварианты I-1…I-5 + I-2a
 (nft `wg-ws0`/MSS-clamp, старт policy-юнита из state); селектор переключает

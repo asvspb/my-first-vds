@@ -957,6 +957,28 @@ maneuver→carriers). Все закрыты + интеграционные мо�
 - Формальный признак в guard-скриптах (_check_vpn_active): ZT/WG остаются
   валидными признаками «VPN активен», но не обязательными
 
+## 2026-11-24 (вечер): мандат min-risk принят архлидом → WP-MR-0…6; WP-MR-0 выполнен
+
+- **Мандат:** [PROMPT-20261124-min-risk-priorities](reports/PROMPT-20261124-min-risk-priorities-arch-lead.md)
+  → вердикт архлида (Q1-PRI…Q6-PRI, WP-MR-0…6, два расхождения сняты:
+  **A2 = client-only** (И44+И45+И51, XHTTP/xmux — из боевых окон), на asv2
+  операции, требующие SSH, не ставятся).
+- **WP-MR-0 ✅ (дамп G6 снят):** окно закрыто **24.11 15:24 MSK**; демон
+  перезапущен **24.11 19:21:57 MSK** (после дедлайна, graceful, NRestarts=0)
+  — конфликт дат 15:24 vs 01.12 разрешён в пользу 15:24; findings.jsonl
+  персистентен (29 findings 16–24.11; в окне 28: G-06×13, G-07×7, G-09×3,
+  G-12×5; high×20) — дамп `~/g6-dump-20261124/` (вне git). Демон не тронут.
+- **Принятый порядок:** 1. ES-1 «тихий exit» (0 публичных TCP; Q1-PRI) +
+  DR-репетиция ≤15 мин ∥ P37-внешняя часть (dead-man-switch + чек asv2:443)
+  ∥ runbook Q2-INC → 2. P30 + 2-й RU-релей (2-й vantage) + И51-аудит релея →
+  3. §6 инцидента → Q4-INC ретест Android → судьба asv2 → 4. ACCEPT-G6 +
+  P35-фикс + архивация снятых профилей (vpn profile archive) → 5. A2 →
+  6. guard v1.1 → B → 7. ADR-017 (P38) + пилоты И48/И52 на почасовых нодах.
+- **KPI min-risk:** SERVER-BASELINE §12–14 (триаж/OOB, таблица KPI Q5-PRI,
+  профиль «тихий exit»). Доклад: [INCIDENT-20261124](reports/INCIDENT-20261124-asv2-tcp-blackhole.md),
+  [ORCH-RESPONSE](reports/ORCH-RESPONSE-20261124-gemini-strategy-review.md),
+  [PROMPT min-risk](reports/PROMPT-20261124-min-risk-priorities-arch-lead.md).
+
 ## Завершённые циклы
 
 ### Gateway MVP (фазы 0–2) — ЗАВЕРШЁН 2026-11-09

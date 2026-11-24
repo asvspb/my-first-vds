@@ -84,7 +84,7 @@ vds/
 │   ├── CENSORSHIP-ROADMAP.md
 │   ├── CENSORSHIP-PATTERNS.md
 │   ├── MIGRATE-VDS.md       # Перенос на другой сервер
-│   ├── adr/                 # ADR-001…ADR-014
+│   ├── adr/                 # ADR-001…ADR-016 + DRAFT ADR-017/018 (плейсхолдеры)
 │   └── team/
 └── src/
     ├── main.py         # Точка входа CLI (typer + questionary)

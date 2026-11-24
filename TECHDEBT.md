@@ -786,9 +786,12 @@ SPEC-20261120-vpn-guard-v1.1.md НЕ меняется (инвариант I-2/AD
 AF_INET/AF_INET6 в демоне — сохраняется).
 
 **Действие.** Двухточечный внешний контур: (1) редкий TCP-connect с RU-релея до
-asv2:443 (1 коннект раз в 5–10 мин, без агрессивных ретраев); (2) независимый
-внешний TCP-чекер из другой AS (вне РФ и вне AS ptr.network) → webhook/TG, без
-секретов и доступа к серверу. Матрица корреляции с vds-alert-watch (3 точки):
+asv2:443 (1 коннект раз в 5–10 мин, без агрессивных ретраев); (2) вторая точка — RU-релей №2 (P30) или внешний чекер с фиксированным IP в
+UFW allowlist :9443; (3) исходящий dead-man-switch (Healthchecks HTTPS-push с
+exit и релея — 0 входящих портов). В целевой модели «тихий exit» (Q1-PRI)
+проба :443 бессмысленна — таргеты: wstunnel:9443/tcp + awg1 data-plane;
+на asv2 до перевода в тихий exit внешний чекер :443 работает как диагностика
+инцидента. Матрица корреляции с vds-alert-watch (3 точки):
 ext-EU OK + relay FAIL → ТСПУ/per-source edge; ext-EU FAIL + heartbeat OK →
 ingress-блок хостера; оба FAIL → хост/egress упал. Триггер алерта ≤ 15 мин.
 Позже (не v1.1): vpn guard может пассивно читать локальный артефакт
@@ -797,7 +800,7 @@ blackhole — ext-EU зелёный, алерт ≤ 15 мин, RestrictAddressFa
 vpn-guard.service не изменился. Источник: docs/team/reports/
 INCIDENT-20261124-asv2-tcp-blackhole.md §5/§7 (Q1-INC).
 
-## P38 — селектор носителей релея: расширение до failover между exit-узлами (2026-11-24, открыт; ревью-2 Gemini, рубеж 1)
+## P38 — селектор носителей релея: failover exit-A ↔ exit-B → ADR-017 (2026-11-24, открыт; DECISION Q4-PRI)
 
 **Факт.** ADR-016/P25: селектор на релее переключает носители awg1↔wg-ws0,
 но оба ведут на один exit (asv2) — инцидент 24.11 показал SPOF «один exit /
@@ -807,6 +810,11 @@ INCIDENT-20261124-asv2-tcp-blackhole.md §5/§7 (Q1-INC).
 select state (/var/lib/vds/p2p-carriers.json) и `vds relay carrier switch`
 третьим измерением — target-exit (exit-A/exit-B), общий lock с maneuver P25.
 Клиенты на релейных профилях переезд exit не видят. Цель: смена exit ≤ 15 мин.
-Предпосылки: обкатка ES-1 (11_vds-deploy), репетиция перенацеливания awg1/wg-ws0,
-после стабилизации — код-цикл (SPEC по ADR-016-отклонению, G2 → окна).
+**ADR-017** «Сменяемый exit / multi-exit failover first-class» (НЕ минорная правка
+ADR-016 — меняется внешний IP клиентов, нужна модель антифлаппинга: switch на
+exit-B только после отказа ОБОИХ носителей exit-A, ручной возврат или cooldown
+≥ 60 мин; подсети 10.13/10.14; формат exits[] в p2p-carriers.json; клиентский
+Smart Failover v2.0 → ADR-018+). Двухфазно: Фаза 1 = ручной DR asv2→ES-1 без
+кода; Фаза 2 = ADR-017+SPEC после ≥ 1 успешной DR-репетиции. Не проверено:
+RAM/CPU LandVPS под 4 туннельных интерфейса.
 Источник: ORCH-RESPONSE-20261124-gemini-strategy-review.md §6.
