@@ -776,7 +776,7 @@ RFC 5737 / `.fixtures.invalid` по всему остатку + решение �
 (параметризовать домен через env). Поверхностный аудит: `grep -rE`
 по операторским маркерам перед закрытием.
 
-## P37 — внешний reachability-мониторинг asv2: 2 vantage points + матрица корреляции (2026-11-24, открыт; DECISION Q1-INC)
+## P37 — внешний reachability-мониторинг asv2: 2 vantage points + матрица корреляции (2026-11-24, открыт; DECISION Q1-INC; SPEC-20261124-quiet-exit §5 — DMS Healthchecks push с gate на живых ногах, WP-QX-4)
 
 **Факт.** INCIDENT-20261124-asv2-tcp-blackhole: per-source ingress-фильтрация
 TCP на транзите к asv2 не видна ни изнутри узла (alert-watch структурно слеп —

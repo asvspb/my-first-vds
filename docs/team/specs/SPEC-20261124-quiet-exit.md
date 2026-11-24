@@ -32,12 +32,12 @@ T+00: бэкапы 0600 (awg1.conf, wg-ws0, wstunnel-client.env, relay-maneuver.
 T+02: awg1.conf Endpoint/PublicKey/обфускация от ES-1:awg2 (атомарно, .bak-pre-dr) → restart vds-relay-exit **и vds-relay-policy** (table 100!) → очистка failed_ports.
 T+05: DNS ws.<domain> → ES1_IP (TTL 60–300 заранее) → wstunnel-client.env + PublicKey wg-ws0 → restart wstunnel-client + wg-ws0.
 T+08: валидация 6/6: fwmark/table 100; ping -I awg1 10.11.0.1 + ipify==ES1_IP; wstunnel switch + ipify==ES1_IP + возврат на awg; carrier status зелёный; maneuver.timer вернуть + tick --apply exit 0; клиент-тест: ноут+Android на релейных профилях 0 правок → ipify==ES1_IP.
-Откат: восстановить .bak-pre-dr → restart exit+policy+wstunnel-client → вернуть таймеры → ipify==ASV2_IP.
+Откат: восстановить .bak-pre-dr → restart exit+policy+wstunnel-client → вернуть таймеры → ipify==ASV2_IP. Критерий отката ≤ 5 мин — по awg-carrier; сходимость wstunnel после отката может занять до TTL DNS и провалом не считается.
 
 ## 4. Q-S3 Клиент (ubuntuInstaller): vpn start = relay-only
-`vpn start` default scheme "awg"→"relay" (cli.py:1224 — фактическое изменение дефолта).
+`vpn start` default scheme "awg"→"relay" (vpnm/cli.py:1256–1257, `def start(scheme=typer.Argument("awg"...)` — фактическое изменение дефолта).
 Прямые ветки без `--allow-direct` → fail-closed exit 2 (сообщение про min-risk); с флагом: awg = OOB-резерв (WARNING), reality/xhttp = только если не archived.
-`vpn reset` — без изменений. rank.py BASE_SCORES: relay+awg=92 > relay+reality=86 > direct+awg=80 > direct-reality=60 > hy2/xhttp=55 > cdn=50; archived — вне кандидатов scout.
+`vpn reset` — без изменений. rank.py BASE_SCORES: сегодня direct+awg=90, direct+reality=88, direct+hy2=85, relay+awg=82, xhttp=75, cdn=65 → ЦЕЛЕВЫЕ: relay+awg=92 > relay+reality=86 > direct+awg=80 > direct-reality=60 > hy2/xhttp=55 > cdn=50; archived — вне кандидатов. Правку делает ТОЛЬКО WP-QX-3 (guard v1.1 не трогает rank.py); docstring rank.py (таблица verbatim) синхронизировать.
 Оператор после cutover: vpn sync (STALE) → vpn profile archive <name> --reason "min-risk-cutover" --apply.
 **Очередь: WP-QX-3 ПОСЛЕ живого ES-1 + ACCEPT-G6, ДО guard v1.1** (можно в одном деплойном окне с клиентским бандлом).
 
@@ -57,3 +57,37 @@ Doc delta: README, AGENTS, DEPLOY, DEPLOY-RU-RELAY, SERVER-BASELINE, doc-sync.js
 ## 9. Находки сверки с кодом (новые дефекты)
 - vpnm/cli.py:1224 — фактический дефолт vpn start = "awg" (direct).
 - src/system/ufw.py:361 — _PROTOCOL_RULES["acme"]=("tcp","80"): профиль gateway **авто-открывает 80/tcp в мир** при установленном ACME. → TECHDEBT P39.
+
+
+## 10. G2-правки (вердикт APPROVE-with-notes, 2026-11-24; обязательны кодеру)
+
+### P0-1. Карта файлов WP-QX-1/4 (без неё WP не выдаётся)
+- `src/system/ufw.py`: `"quiet-exit"` в `build_plan()` (валидация ~:446) + ветка в `profile_service_specs()` (~:365), игнорирующая `_PROTOCOL_RULES` (кроме amneziawg) + per-relay_ip allowlist; подавление `_PROTOCOL_RULES["acme"]` = закрытие P39.
+- `src/gateway/init.py`: механизм профиля (сейчас профиля нет — только parse_protocols; параметр `profile` в build_plan/run_init).
+- `src/acme/install.py` (или `src/acme/window_hook.py`): pre/post-hook + try/finally первичной выдачи.
+- `src/dms/` (paths.py, env.py, gate.py, cli.py — по образцу src/alert/) + `systemd/vds-dms-*.{service,timer}.tpl`.
+- Тесты: tests/system/test_ufw_quiet_exit.py, tests/gateway/test_init_quiet_exit.py, tests/dms/.
+
+### P0-2. Состав наблюдения на quiet-exit + nft-совместимость
+Не ставятся также: vds-gateway-health.timer, probe-watch/probe-rucidr, logs-детекторы на {443,8443,2053}; путь lock-443 на quiet-exit инертен (нет TCP-портов). UFW-план обязан учитывать существующие nft-таблицы vds_relay / vds_relay_wstun (ADR-016 I-2a) — без конфликтов.
+
+### P1-3. Preflight --close-public-ssh: fresh handshake
+Серверное доказательство живого OOB-1: `awg show awg0` latest-handshake пира oob-laptop ≤ 3 мин; без него exit 1. VNC-путь (OOB-2) указывается в плане до apply. AC WP-QX-1 дополнить.
+
+### P1-4. Pending --relay-pubkey
+exit-leg и wstunnel-server defer'ятся; UFW allowlist и awg0 ставятся сразу; повторный `init --profile quiet-exit --relay-pubkey … --apply` дозавершает (skip-логика по state, конвенция №7). В state: pending-шаги помечены.
+
+### P1-5. ACME fail-safe
+Post-hook может упасть → 80/tcp останется открытым навсегда. AC: падение post-hook → правило закрывается при следующем периодическом чеке (WARN/алерт: 80/tcp должен быть закрыт вне окна); маркер /run/vds-acme-80-opened идемпотентен в pre и post; порядок зафиксирован: UFW-окно открывается ДО вызова certbot (standalone биндит 80 сам), закрытие в finally.
+
+### P1-6. IPv6
+UFW IPV6=yes сохраняется; default deny действует на v6; allowlist — v4-only (RELAY_IP = A-запись). IPv6-OOB (PRE-7) — отдельное явное правило, вне скоупа этого цикла.
+
+### P1-7. --no-direct-awg
+Закрывает 51825/udp → OOB-1 умирает, единственный fallback — VNC. Preflight требует `--yes-i-have-vnc`, иначе abort. До P30/IPv6-OOB флаг не рекомендован.
+
+### P1-8. Смена RELAY_IP (P30)
+= правка state.protocols["quiet_exit"].relay_ips (аддитивно, FileLock) + re-harden `--profile quiet-exit --apply`; старое allowlist-правило удаляется. DMS-гат ловит период мёртвой ноги (/fail).
+
+### P2 (принято)
+cli.py: строка дефолта 1256–1257 (исправлено выше); BASE_SCORES «сегодня→целевое» (исправлено выше); откат ≤5 мин по awg-carrier (исправлено выше); DMS_PING_URL на реле = осознанный трейд-офф (утечка деградирует мониторинг релея, exit не затронут); FileLock на все мутации state; `--close-public-ssh` = деструктивная → явное подтверждение; DMS-юнит sandbox: RestrictAddressFamilies ВКЛЮЧАЕТ AF_INET (исходящий HTTPS — в отличие от alert-watch), env 0600, маска URL в status --json, шаблоны в systemd/; preflight WP-QX-2 сверяет живые имена юнитов на реле.
