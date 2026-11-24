@@ -818,3 +818,17 @@ Smart Failover v2.0 → ADR-018+). Двухфазно: Фаза 1 = ручной
 кода; Фаза 2 = ADR-017+SPEC после ≥ 1 успешной DR-репетиции. Не проверено:
 RAM/CPU LandVPS под 4 туннельных интерфейса.
 Источник: ORCH-RESPONSE-20261124-gemini-strategy-review.md §6.
+
+## P39 — ufw harden profile gateway авто-открывает 80/tcp в мир при установленном ACME (2026-11-24, открыт; находка SPEC-20261124-quiet-exit)
+
+**Факт.** `src/system/ufw.py:361` `_PROTOCOL_RULES["acme"] = ("tcp", "80")`:
+профиль gateway при `state.protocols.acme.installed=True` добавляет allow
+80/tcp на 0.0.0.0/0 — вопреки замыслу «порт только на время HTTP-01».
+На «тихом exit» профиль quiet-exit обязан игнорировать это правило
+(SPEC-20261124-quiet-exit §2.2), но баг живёт и на существующих узлах
+(asv2: 80/tcp открыт в мир прямо сейчас — видно в UFW-снапшоте инцидента).
+
+**Действие.** WP-QX-1: профиль quiet-exit игнорирует acme-правило; отдельная
+малая правка для gateway/exit-профилей — acme-порт только на 30 с в
+pre/post-hook (маркер /run/vds-acme-80-opened) или `--close-acme` после
+выдачи. Проверка: build_plan при installed acme не содержит 0.0.0.0/0 → 80.
