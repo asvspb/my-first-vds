@@ -52,11 +52,12 @@ DEFAULT_SNI = "www.google.com"
 DEFAULT_HOP_RANGE = "20000-20500"
 
 # quiet-exit профиль (SPEC-20261124-quiet-exit §2, §10 P0-2/P1-4):
-# relay-only exit — прямые транспорты (Reality/Hy2/XHTTP/CDN/obfs/hop)
-# на этом узле запрещены; awg-ветка --protocols тоже не используется
-# (awg ставится шагом профиля).
+# relay-only exit — витринные транспорты (Reality/Hy2/XHTTP/CDN/obfs/hop)
+# на этом узле запрещены. awg НЕ в списке: awg0 (51825/udp, OOB-1) входит
+# в состав профиля и ставится шагом профиля; явный --protocols awg допустим
+# (специфицирует то же, что профиль ставит сам).
 QUIET_EXIT_PROFILE = "quiet-exit"
-QUIET_EXIT_FORBIDDEN_PROTOCOLS = ("reality", "hysteria2", "obfs", "hop", "xhttp", "cdn", "awg")
+QUIET_EXIT_FORBIDDEN_PROTOCOLS = ("reality", "hysteria2", "obfs", "hop", "xhttp", "cdn")
 QUIET_EXIT_STATE_KEY = "quiet_exit"
 QUIET_EXIT_OOB_CLIENT = "oob-laptop"
 # Prefix-file для `wstunnel server` — артефакт РЕЛЕЯ (ADR-016): передаётся
@@ -990,7 +991,7 @@ def run_init(
             console.print(
                 f"[error][init-qx] --profile quiet-exit несовместим с --protocols "
                 f"{','.join(forbidden)}: профиль relay-only (SPEC-20261124 §2), "
-                "прямые транспорты (Reality/Hy2/XHTTP/CDN/obfs/hop/awg) на exit запрещены.[/error]"
+                "витринные транспорты (Reality/Hy2/XHTTP/CDN/obfs/hop) на exit запрещены — exit за релеем без публичного TCP (SPEC-20261124 §2).[/error]"
             )
             return 2
         return run_quiet_exit_init(

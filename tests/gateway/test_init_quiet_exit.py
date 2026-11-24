@@ -59,12 +59,19 @@ def recorded(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
 
 class TestQuietExitFailFast:
     def test_forbidden_protocols_exit_2(self, state_path: str) -> None:
-        """AC WP-QX-1: --profile quiet-exit + reality/hysteria2/... → exit 2."""
-        for proto in ("reality", "hysteria2", "xhttp", "cdn", "obfs", "hop", "awg"):
+        """AC WP-QX-1: --profile quiet-exit + reality/hysteria2/... → exit 2.
+        awg НЕ forbidden: awg0 (51825 OOB-1) входит в состав профиля
+        (исправление живого деплоя ES-1 2026-11-25: awg был ошибочно запрещён)."""
+        for proto in ("reality", "hysteria2", "xhttp", "cdn", "obfs", "hop"):
             assert run_init(
                 protocols=proto, profile=QUIET_EXIT_PROFILE, relay_ip=RELAY_IP,
                 state_path=state_path,
             ) == 2
+        # awg допустим (состав профиля)
+        assert run_init(
+            protocols="awg", profile=QUIET_EXIT_PROFILE, relay_ip=RELAY_IP,
+            state_path=state_path,
+        ) != 2
         # даже валидный --relay-ip не спасает
         assert run_init(
             protocols="reality,hysteria2", profile=QUIET_EXIT_PROFILE,
