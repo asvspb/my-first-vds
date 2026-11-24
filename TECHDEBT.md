@@ -796,3 +796,17 @@ vpn monitor/scout (S3) без своих сокетов. Проверка: си�
 blackhole — ext-EU зелёный, алерт ≤ 15 мин, RestrictAddressFamilies в
 vpn-guard.service не изменился. Источник: docs/team/reports/
 INCIDENT-20261124-asv2-tcp-blackhole.md §5/§7 (Q1-INC).
+
+## P38 — селектор носителей релея: расширение до failover между exit-узлами (2026-11-24, открыт; ревью-2 Gemini, рубеж 1)
+
+**Факт.** ADR-016/P25: селектор на релее переключает носители awg1↔wg-ws0,
+но оба ведут на один exit (asv2) — инцидент 24.11 показал SPOF «один exit /
+один хостер» (И46/И47).
+
+**Действие.** После ввода DR-exit (кандидат ES-1, Эстония): расширить carrier
+select state (/var/lib/vds/p2p-carriers.json) и `vds relay carrier switch`
+третьим измерением — target-exit (exit-A/exit-B), общий lock с maneuver P25.
+Клиенты на релейных профилях переезд exit не видят. Цель: смена exit ≤ 15 мин.
+Предпосылки: обкатка ES-1 (11_vds-deploy), репетиция перенацеливания awg1/wg-ws0,
+после стабилизации — код-цикл (SPEC по ADR-016-отклонению, G2 → окна).
+Источник: ORCH-RESPONSE-20261124-gemini-strategy-review.md §6.
