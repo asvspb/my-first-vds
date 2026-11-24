@@ -184,9 +184,10 @@ vds gateway init --apply --protocols reality,hysteria2,obfs,hop,xhttp,cdn,awg \
     --domain vpn.example.ru --email admin@example.ru --demo-clients  # всё сразу
 
 vds gateway init --profile quiet-exit --relay-ip <RELAY_IP> [--relay-pubkey <awg1-pub>] \
-    [--ws-domain ws.example.ru --acme-email admin@example.ru] --apply
+    [--relay-ws-pubkey <wg-ws0-pub>] [--ws-domain ws.example.ru --acme-email admin@example.ru] --apply
                                      # тихий exit (SPEC-20261124): awg0 OOB-1 + клиент oob-laptop + UFW allowlist релея +
-                                     # ACME-окно 80/tcp (30-с, pre/post-hook) + нога релея/wstunnel (pending без --relay-pubkey, дозавершается повторным init);
+                                     # ACME-окно 80/tcp (30-с, pre/post-hook) + нога релея (--relay-pubkey = ключ awg1, только exit-leg)
+                                     # и wstunnel (--relay-ws-pubkey = ключ wg-ws0, QX-DR-2 — подстановка awg1 запрещена, без ключей pending, дозавершается повторным init);
                                      # НЕ ставит xray/hysteria2/zerotier/coturn/healthcheck/probe-таймеры;
                                      # --protocols с прямыми транспортами вместе с профилем — fail-fast exit 2
 

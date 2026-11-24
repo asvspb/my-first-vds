@@ -5,8 +5,8 @@
 
 ## 1. Что сделано (WP-QX-0/1/2 фаза 1 + WP-QX-4)
 
-- **ES-1 куплен владельцем и деплоится**: `es1.asvpersonal.ru` → 89.169.15.x/24,
-  EE, hip.ee/IB Systems, Ubuntu 24.04.5, KVM (PRE-1 ✅), трассы чистые без
+- **ES-1 куплен владельцем и деплоится**: `<ES1_DOMAIN>` → `<ES1_SUBNET>`,
+  EE, hoster-EE, Ubuntu 24.04.5, KVM (PRE-1 ✅), трассы чистые без
   rt.ru/ttk/msk-ix (PRE-5 ✅), путь с ноутбука и релея подтверждён tcpdump
   (PRE-6 ✅), **диск 10G вместо заявленных 20G** (PRE-2 ⚠️ — вопрос хостеру),
   политика замен IP (PRE-4) — запрос владельца хостеру.
@@ -15,7 +15,7 @@
 - **Фаза 1 на ES-1 применена вживую**: awg0 (51825) + oob-laptop + awg2
   (10.11.0.0/30, пул 51900) + UFW quiet-exit (0 публичных TCP; 51900/udp и
   9443/tcp — allowlist RELAY_IP; OOB-1 правило) + LE-сертификат
-  `es1.asvpersonal.ru` (HTTP-01 через 30-с hook) + wstunnel server (v11.1.0,
+  `<ES1_DOMAIN>` (HTTP-01 через 30-с hook) + wstunnel server (v11.1.0,
   sha256 сверён с пиннингом).
 - **OOB-1 работает вживую**: `ssh root@10.9.0.1` с ноутбука через
   интерфейс `oob` (AllowedIPs 10.9.0.1/32).
@@ -31,7 +31,7 @@
 | `03ac0ce` | `awg` ошибочно в QUIET_EXIT_FORBIDDEN_PROTOCOLS — awg0 (OOB-1) и есть состав профиля; живой init на ES-1 упёрся в fail-fast |
 | `7b5e98f` | ufw не парсит форму `in on awg0 to ADDR port N proto tcp` — живой синтаксис `in on awg0 proto tcp from any to ADDR port N` (SPEC §14 дополнен) |
 | `a93f525` | многословные rule-спеки одним argv-аргументом ufw не парсит («profile matching») → `spec.split()` всегда |
-| (ubuntuInstaller `ddb22bc`, запушен) | `vpn start`/`reset` печатают текущий внешний IP (директива владельца); endpoint-домены wstunnel-клиента релея перенацелены на `es1.asvpersonal.ru:9443` |
+| (ubuntuInstaller `ddb22bc`, запушен) | `vpn start`/`reset` печатают текущий внешний IP (директива владельца); endpoint-домены wstunnel-клиента релея перенацелены на `<ES1_DOMAIN>:9443` |
 
 ## 3. Открытый дефект для WP-QX-3 (клиент, ubuntuInstaller) — нужен вердикт
 

@@ -644,13 +644,17 @@ def build_quiet_exit_plan(
     no_direct_awg: bool,
     state_path: str | None = None,
     ws_prefix_file: str | None = None,
+    relay_ws_pubkey: str | None = None,
 ) -> InitPlan:
-    """План `gateway init --profile quiet-exit` (SPEC §2, §10 P1-4).
+    """План `gateway init --profile quiet-exit` (SPEC §2, §10 P1-4; QX-DR-2).
 
     Ставится: amneziawg (awg0 + oob-laptop) + ufw quiet-exit + alert.
-    ПЕРЕДАЁТСЯ НА РЕЛЕЙ (relay_ip): exit-leg (awg2) + wstunnel server — при
-    отсутствии --relay-pubkey / ws-ключей шаги помечаются PENDING и
-    дозавершаются повторным init (skip-логика по state).
+    ПЕРЕДАЁТСЯ НА РЕЛЕЙ (relay_ip): exit-leg (awg2, ключ awg1 — --relay-pubkey)
+    + wstunnel server (wg-ws0 — отдельный --relay-ws-pubkey / env
+    VDS_RELAY_WS_PUBKEY); при отсутствии ключей шаги помечаются PENDING и
+    дозавершаются повторным init (skip-логика по state). Подстановка ключа
+    awg1 в wstunnel-server запрещена (QX-DR-2: awg1 10.11.0.0/30 и
+    wg-ws0 10.12.0.0/30 — независимые пары ключей, ADR-016).
     НЕ ставится (P0-2): xray, hysteria2, zerotier, coturn,
     vds-gateway-health.timer, probe-watch/probe-rucidr.
     """
@@ -717,13 +721,13 @@ def build_quiet_exit_plan(
              _cli(ufw_args))
     )
 
-    # wstunnel server: требует pubkey релея + prefix-файл от релея (ADR-016);
-    # без них — pending с готовой командой.
-    if relay_pubkey and ws_domain:
+    # wstunnel server: требует ОТДЕЛЬНЫЙ pubkey wg-ws0 релея (QX-DR-2, не awg1)
+    # + prefix-файл от релея (ADR-016); без них — pending с готовой командой.
+    if relay_ws_pubkey and ws_domain:
         plan.steps.append(
             Step("wstunnel-server", f"wstunnel server wg-ws0 (9443/tcp) для {ws_domain}",
                  _cli(["relay", "wstunnel", "server", "--relay-ip", relay_ip,
-                       "--relay-public-key", relay_pubkey, "--domain", ws_domain,
+                       "--relay-public-key", relay_ws_pubkey, "--domain", ws_domain,
                        "--prefix-file", ws_prefix_file or QUIET_EXIT_WSTUNNEL_PREFIX_DEFAULT,
                        apply_args]))
         )
@@ -745,7 +749,8 @@ def build_quiet_exit_plan(
         if "wstunnel-server" not in pending:
             pending.append("wstunnel-server")
         plan.warnings.append(
-            "wstunnel-server: нужен --relay-pubkey и --ws-domain — шаг отложен (P1-4)."
+            "wstunnel-server: нужен --relay-ws-pubkey (ключ wg-ws0 релея, НЕ awg1 "
+            "— QX-DR-2) и --ws-domain — шаг отложен (P1-4)."
         )
 
     plan.steps.append(
@@ -824,6 +829,7 @@ def run_quiet_exit_init(
     apply: bool = False,
     state_path: str | None = None,
     lock_path: str | None = None,
+    relay_ws_pubkey: str | None = None,
 ) -> int:
     """`gateway init --profile quiet-exit`. 2 — fail-fast ввода (SPEC §2);
     1 — ошибка шага; 0 — успех (в т.ч. dry-run)."""
@@ -851,6 +857,7 @@ def run_quiet_exit_init(
     plan = build_quiet_exit_plan(
         relay_ip, relay_pubkey, ws_domain, email, no_direct_awg,
         state_path=state_path, ws_prefix_file=ws_prefix_file,
+        relay_ws_pubkey=relay_ws_pubkey,
     )
     for err in plan.errors:
         console.print(f"[error][init-qx] {err}[/error]")
@@ -916,7 +923,7 @@ def run_quiet_exit_init(
     still_pending = [
         p for p in plan.pending
         if not (p == "exit-leg" and relay_pubkey) and not (
-            p == "wstunnel-server" and relay_pubkey and ws_domain
+            p == "wstunnel-server" and relay_ws_pubkey and ws_domain
             and (ws_prefix_file is not None or Path(QUIET_EXIT_WSTUNNEL_PREFIX_DEFAULT).is_file())
         )
     ]
@@ -941,7 +948,8 @@ def run_quiet_exit_init(
     if still_pending:
         console.print(
             f"[warning][init-qx] PENDING шаги: {', '.join(still_pending)} — повторный "
-            "`init --profile quiet-exit --relay-ip <ip> --relay-pubkey <pub> --apply` дозавершит.[/warning]"
+            "`init --profile quiet-exit --relay-ip <ip> --relay-pubkey <pub-awg1> "
+            "[--relay-ws-pubkey <pub-wg-ws0>] --apply` дозавершит.[/warning]"
         )
     console.print(
         "\n[success][init-qx] quiet-exit: базовый контур готов (awg0 OOB-1 + "
@@ -978,6 +986,7 @@ def run_init(
     relay_pubkey: str | None = None,
     ws_domain: str | None = None,
     ws_prefix_file: str | None = None,
+    relay_ws_pubkey: str | None = None,
 ) -> int:
     """Точка входа `vds gateway init`. 0 — успех (в т.ч. dry-run / «нечего делать»).
 
@@ -1003,6 +1012,7 @@ def run_init(
             no_direct_awg=False,
             apply=apply,
             state_path=state_path,
+            relay_ws_pubkey=relay_ws_pubkey,
         )
     try:
         proto_list = parse_protocols(protocols)

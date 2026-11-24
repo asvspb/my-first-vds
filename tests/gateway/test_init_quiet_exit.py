@@ -20,6 +20,8 @@ from src.gateway.store import GatewayState, save_state
 
 RELAY_IP = "203.0.113.10"  # RFC 5737 TEST-NET
 RELAY_PUBKEY = "FIXTUREPWAWGRELAYPUBKEYBASE64PLACEHOLDERVALUE00000="
+# QX-DR-2: отдельный (фиктивный) публичный ключ wg-ws0 релея
+RELAY_WS_PUBKEY = "FIXTUREPWWS0RELAYPUBKEYBASE64PLACEHOLDERVALUE000000000="
 
 
 @pytest.fixture()
@@ -134,6 +136,30 @@ class TestQuietExitPlan:
         leg_step = next(s for s in plan.steps if s.name == "exit-leg")
         assert "--relay-ip" in leg_step.command and RELAY_IP in leg_step.command
         assert "--public-key" in leg_step.command
+
+    def test_ws_pubkey_split_from_awg1(self, state_path: str) -> None:
+        """QX-DR-2: wstunnel-server получает --relay-ws-pubkey (wg-ws0),
+        exit-leg — --public-key (awg1); подстановка awg1 в wstunnel запрещена."""
+        plan = build_quiet_exit_plan(
+            RELAY_IP, RELAY_PUBKEY, "ws.example.ru", None, False,
+            state_path=state_path, ws_prefix_file="/tmp/nonexistent-prefix.env",
+            relay_ws_pubkey=RELAY_WS_PUBKEY,
+        )
+        leg = next(s for s in plan.steps if s.name == "exit-leg")
+        ws = next(s for s in plan.steps if s.name == "wstunnel-server")
+        assert "--public-key" in leg.command and RELAY_PUBKEY in leg.command
+        assert "--relay-public-key" in ws.command
+        assert RELAY_WS_PUBKEY in ws.command
+        assert RELAY_PUBKEY not in ws.command  # ключ awg1 в wg-ws0 не утекает
+
+    def test_wstunnel_pending_without_ws_pubkey(self, state_path: str) -> None:
+        """QX-DR-2: только --relay-pubkey НЕ дозавершает wstunnel-server."""
+        plan = build_quiet_exit_plan(
+            RELAY_IP, RELAY_PUBKEY, "ws.example.ru", None, False, state_path=state_path
+        )
+        assert not any(s.name == "wstunnel-server" for s in plan.steps)
+        assert "wstunnel-server" in plan.pending
+        assert any("--relay-ws-pubkey" in w for w in plan.warnings)
 
     def test_acme_ws_window_80(self, state_path: str) -> None:
         plan = build_quiet_exit_plan(

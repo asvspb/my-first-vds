@@ -653,7 +653,13 @@ def gateway_init(
     ),
     relay_pubkey: Optional[str] = typer.Option(
         None, "--relay-pubkey",
-        help="quiet-exit: публичный ключ awg1 релея (без него exit-leg/wstunnel — pending)",
+        help="quiet-exit: публичный ключ awg1 релея — только для exit-leg awg2 "
+             "(без него exit-leg — pending; для wstunnel нужен ОТДЕЛЬНЫЙ --relay-ws-pubkey)",
+    ),
+    relay_ws_pubkey: Optional[str] = typer.Option(
+        None, "--relay-ws-pubkey", envvar="VDS_RELAY_WS_PUBKEY",
+        help="quiet-exit: публичный ключ wg-ws0 релея для wstunnel server "
+             "(носитель №2, ADR-016; НЕ ключ awg1 — QX-DR-2; без него wstunnel — pending)",
     ),
     ws_domain: Optional[str] = typer.Option(
         None, "--ws-domain", help="quiet-exit: домен сертификата wstunnel (ws.<domain>)"
@@ -668,7 +674,8 @@ def gateway_init(
     Dry-run по умолчанию: план + проверки портов/DNS без мутаций.
 
     Профиль quiet-exit (SPEC-20261124): awg0 OOB-1 + UFW allowlist релея +
-    ACME-окно 80/tcp + нога релея/wstunnel (pending без --relay-pubkey);
+    ACME-окно 80/tcp + нога релея (ключ awg1: --relay-pubkey) / wstunnel
+    (ключ wg-ws0: --relay-ws-pubkey) — pending без своих ключей;
     прямые транспорты с --profile quiet-exit — fail-fast exit 2."""
     from src.gateway.init import run_init
 
@@ -688,6 +695,7 @@ def gateway_init(
             relay_pubkey=relay_pubkey,
             ws_domain=ws_domain,
             ws_prefix_file=ws_prefix_file,
+            relay_ws_pubkey=relay_ws_pubkey,
         )
     )
 

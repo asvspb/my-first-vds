@@ -560,6 +560,24 @@ nft-политика релея пишется атомарно после `nft 
 свежей установке.
 живая приёмка — WP-P2P-6; DNS `ws.<domain>` → IP exit делает владелец (OQ-2).
 
+## DR-Cutover: разводка ключей awg1 vs wg-ws0 (QX-DR-2, APPROVED 2026-11-25)
+
+При DR-перенацеливании релея на новый exit (SPEC-20261124-quiet-exit §3) у релея
+**два независимых публичных ключа** — не перепутать (ADR-016: awg1 10.11.0.0/30
+и wg-ws0 10.12.0.0/30 — разные пары ключей):
+
+| Шаг на exit | Флаг | Ключ релея | Источник на релее |
+|---|---|---|---|
+| `vds relay exit-leg install --public-key <key>` | `--public-key` | **awg1** (носитель №1, awg2) | `awg show awg1` / pubkey-файл awg1 |
+| `vds relay wstunnel server --relay-public-key <key>` | `--relay-public-key` | **wg-ws0** (носитель №2) | вывод `vds relay wstunnel init` |
+
+В `gateway init --profile quiet-exit` то же разделение: `--relay-pubkey` =
+ключ awg1 (только exit-leg), `--relay-ws-pubkey` / env `VDS_RELAY_WS_PUBKEY` =
+ключ wg-ws0 (только wstunnel-server). Подстановка ключа awg1 в шаг wstunnel
+**запрещена** — init уводит wstunnel-server в pending, а не молча подставляет
+(дефект из живого DR ES-1 2026-11-25, исправлен в src/gateway/init.py; на ES-1
+конф wg-ws0 поправлен вручную вживую).
+
 ## Откат (демонтаж)
 
 ```bash
