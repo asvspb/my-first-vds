@@ -701,3 +701,8 @@ fresh-handshake oob-laptop ≤3 мин (P1-3); окно 80/tcp — `acme issue
 ufw — `allow in on awg0 proto tcp from any to 10.9.0.1 port <ssh>` (форма
 «in on awg0 to ADDR port N proto tcp» ufw-парсером не принимается); Preflight 3
 `--close-public-ssh` проверяет правило по маркерам raw `ufw status verbose`.
+
+Правило исполнения ufw (2026-11-25, ES-1): rule-спеки ВСЕГДА разбиваются по
+пробелам в argv (`["ufw", action] + spec.split()`) — многословные спеки
+(in on IFACE proto tcp from any to ADDR port N) одним аргументом ufw
+парсить не умеет (ищет «profile matching»).

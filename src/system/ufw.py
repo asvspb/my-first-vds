@@ -162,10 +162,10 @@ class PlanItem:
             spec = self.meta["spec"]
             src = self.meta.get("src", "any")
             action = self.meta["action"]
-            if spec.startswith("from "):
-                toks = ["ufw", action] + spec.split()
-            else:
-                toks = ["ufw", action, spec]
+            # Живой ufw (ES-1 2026-11-25): многословные спеки (in on IFACE …
+            # to ADDR port N) одним аргументом не парсятся — ufw ищет
+            # «profile matching». Всегда сплитим по пробелам.
+            toks = ["ufw", action] + spec.split()
             if src != "any" and not spec.startswith("from "):
                 toks = toks + ["from", src]
             return toks
