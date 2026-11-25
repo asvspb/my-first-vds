@@ -979,6 +979,21 @@ maneuver→carriers). Все закрыты + интеграционные мо�
   [ORCH-RESPONSE](reports/ORCH-RESPONSE-20261124-gemini-strategy-review.md),
   [PROMPT min-risk](reports/PROMPT-20261124-min-risk-priorities-arch-lead.md).
 
+## 2026-11-25: ES-1 Фаза 2 принята архлидом; ACCEPT-G6 — вердикт ждёт владельца
+
+- **Готовность к ACCEPT-G6 (шаг 4 принятого порядка):** дамп G6 снят
+  (WP-MR-0, `~/g6-dump-20261124/`, окно 17.11→24.11 15:24 MSK, 28 findings
+  в окне, демон не тронут); **P35 ЗАКРЫТ** (time-dependent фикстура
+  guard-export, ubuntuInstaller `07f9ffa`, полный прогон без падений);
+  WP-QX-3 APPROVE архлида (ревью 25.11, включая P2-фиксы egress/L3-матча).
+- **ACCEPT-G6 = формальный вердикт владельца, пока НЕ зафиксирован** —
+  STATUS.md записывает только готовность. После вердикта: pipx-деплой
+  ubuntuInstaller на ноутбук + живая приёмка `vpn start relay` (fast-path /
+  rebuild / fail-closed L3+data-plane), затем архивация снятых профилей.
+- **ES-1 Фаза 2 ПРИНЯТО (ревью 25.11):** внешний nmap top-1000 = 0 open TCP,
+  `quiet_exit.oob_ssh_only=True`, OOB-1/OOB-2 подтверждены (KPI
+  SERVER-BASELINE §13 «тихий exit» выполнен вживую).
+
 ## Завершённые циклы
 
 ### Gateway MVP (фазы 0–2) — ЗАВЕРШЁН 2026-11-09
